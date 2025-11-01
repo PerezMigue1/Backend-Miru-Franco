@@ -10,7 +10,7 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Configura CORS interno (aunque Vercel ya lo hará por headers)
+// Configura CORS
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -21,6 +21,7 @@ app.use(morgan('dev'));
 
 // Rutas
 app.use('/api/users', require('./routes/userRoutes'));
+app.use('/api/recuperar-password', require('./routes/recuperarPasswordRoutes'));
 
 mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
@@ -35,11 +36,3 @@ app.get('/', (req, res) => {
 });
 
 module.exports = app;
-
-// Iniciar servidor (solo en desarrollo local)
-const port = process.env.PORT || 3001;
-if (require.main === module) {
-    app.listen(port, () => {
-        console.log(`🚀 Servidor corriendo en http://localhost:${port}`);
-    });
-}
