@@ -6,7 +6,11 @@
 - ✅ Express con Node.js
 - ✅ MongoDB con Mongoose
 - ✅ CORS configurado para producción
-- ✅ Rutas de API de usuarios
+- ✅ Rutas de API de usuarios completas
+- ✅ Autenticación JWT (login, registro)
+- ✅ Recuperación de contraseña (3 pasos)
+- ✅ CRUD completo de usuarios
+- ✅ Perfil de usuario
 - ✅ Middleware de errores
 - ✅ Variables de entorno configuradas
 - ✅ `vercel.json` optimizado
@@ -27,12 +31,18 @@
 
 1. Ve a: https://vercel.com/miru-franco/backend-miru-franco
 2. Haz clic en **"Settings"** → **"Environment Variables"**
-3. Haz clic en **"Add New"**
-4. Completa los campos:
+3. **Agrega las siguientes variables:**
+
+   **Variable 1:**
    - **Key:** `MONGODB_URI`
    - **Value:** `mongodb+srv://miru:mildred30%3E@mirufranco.rsucbbc.mongodb.net/mirufranco?retryWrites=true&w=majority&appName=MiruFranco`
-5. Selecciona **todos los entornos:** ☑️ Production ☑️ Preview ☑️ Development
-6. Haz clic en **"Save"**
+   
+   **Variable 2:**
+   - **Key:** `JWT_SECRET`
+   - **Value:** `miru_secret_key_2024_change_in_production` (o genera uno más seguro)
+
+4. Selecciona **todos los entornos:** ☑️ Production ☑️ Preview ☑️ Development
+5. Haz clic en **"Save"**
 
 ### 📍 Paso 2: Redesplegar la Aplicación
 
