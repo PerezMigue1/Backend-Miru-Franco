@@ -35,7 +35,7 @@
 
    **Variable 1:**
    - **Key:** `MONGODB_URI`
-   - **Value:** `mongodb+srv://miru:mildred30%3E@mirufranco.rsucbbc.mongodb.net/mirufranco?retryWrites=true&w=majority&appName=MiruFranco`
+   - **Value:** `mongodb+srv://miru:mildred30@mirufranco.rsucbbc.mongodb.net/estetica-miru-franco?retryWrites=true&w=majority&appName=MiruFranco`
    
    **Variable 2:**
    - **Key:** `JWT_SECRET`

@@ -5,11 +5,12 @@
 ### 1. MONGODB_URI (CRÍTICO)
 ```
 Key: MONGODB_URI
-Value: mongodb+srv://miru:mildred30%3E@mirufranco.rsucbbc.mongodb.net/mirufranco?retryWrites=true&w=majority&appName=MiruFranco
+Value: mongodb+srv://miru:mildred30@mirufranco.rsucbbc.mongodb.net/estetica-miru-franco?retryWrites=true&w=majority&appName=MiruFranco
 ```
-**⚠️ Importante:** El carácter `>` debe codificarse como `%3E`
 
 **Descripción:** Connection string de MongoDB Atlas. Sin esto, el backend NO funcionará.
+
+**⚠️ Nota:** Base de datos: `estetica-miru-franco`
 
 ---
 
@@ -168,16 +169,16 @@ Después de agregar las variables y redesplegar, verifica en los logs:
 
 **Mínimo necesario para funcionar:**
 ```
-MONGODB_URI=mongodb+srv://miru:mildred30%3E@mirufranco.rsucbbc.mongodb.net/mirufranco?retryWrites=true&w=majority&appName=MiruFranco
+MONGODB_URI=mongodb+srv://miru:mildred30@mirufranco.rsucbbc.mongodb.net/estetica-miru-franco?retryWrites=true&w=majority&appName=MiruFranco
 JWT_SECRET=[tu_secreto_aleatorio_largo]
 ```
 
 **Configuración completa recomendada:**
 ```
-MONGODB_URI=mongodb+srv://miru:mildred30%3E@mirufranco.rsucbbc.mongodb.net/mirufranco?retryWrites=true&w=majority&appName=MiruFranco
+MONGODB_URI=mongodb+srv://miru:mildred30@mirufranco.rsucbbc.mongodb.net/estetica-miru-franco?retryWrites=true&w=majority&appName=MiruFranco
 JWT_SECRET=[tu_secreto_aleatorio_largo]
 NODE_ENV=production
-FRONTEND_URL=https://tu-frontend.vercel.app
+FRONTEND_URL=https://miru-franco.vercel.app
 API_URL=https://backend-miru-franco.vercel.app
 ```
 

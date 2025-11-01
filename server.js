@@ -20,10 +20,7 @@ app.use(cors({
 app.use(morgan('dev'));
 
 // Rutas
-// En Vercel, api/index.js se monta en /api, así que usamos /users
-// En local, usamos /api/users
-const isVercel = process.env.VERCEL || process.env.VERCEL_ENV;
-app.use(isVercel ? '/users' : '/api/users', require('./routes/userRoutes'));
+app.use('/api/users', require('./routes/userRoutes'));
 
 mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
