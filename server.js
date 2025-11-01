@@ -14,12 +14,7 @@ connectDB();
 // Middlewares
 // Configurar CORS para permitir solicitudes desde el frontend
 const corsOptions = {
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://miru-franco.vercel.app',
-    'https://miru-franco-web.vercel.app'
-  ],
+  origin: '*', // Permitir todos los orígenes (Vercel maneja CORS)
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -61,10 +56,10 @@ app.use((err, req, res, next) => {
 });
 
 // Solo iniciar servidor si no estamos en un entorno de Vercel
+const port = process.env.PORT || 3001;
 if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+  app.listen(port, () => {
+    console.log(`🚀 Servidor corriendo en http://localhost:${port}`);
   });
 }
 

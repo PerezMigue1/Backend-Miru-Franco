@@ -28,6 +28,9 @@ Thumbs.db
 dist/
 build/
 
+# Ejemplos y documentación
+ejemplo/
+
 # Cobertura de tests
 coverage/
 

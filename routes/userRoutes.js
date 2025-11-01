@@ -1,21 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const userController = require('../controllers/userController');
+const usuarioController = require('../controllers/userController');
 
-// GET /api/users
-router.get('/', userController.getAllUsers);
+// CRUD básico
+router.get('/', usuarioController.obtenerUsuarios);
+router.get('/:id', usuarioController.obtenerUsuarioPorId);
+router.post('/', usuarioController.crearUsuario);
+router.put('/:id', usuarioController.actualizarUsuario);
+router.delete('/:id', usuarioController.eliminarUsuario);
 
-// GET /api/users/:id
-router.get('/:id', userController.getUserById);
+// Autenticación
+router.post('/login', usuarioController.loginUsuario);
 
-// POST /api/users
-router.post('/', userController.createUser);
+// Recuperación de contraseña
+router.post('/pregunta-seguridad', usuarioController.obtenerPreguntaSeguridad);
+router.post('/verificar-respuesta', usuarioController.validarRespuestaSeguridad);
+router.post('/cambiar-password', usuarioController.cambiarPassword);
 
-// PUT /api/users/:id
-router.put('/:id', userController.updateUser);
-
-// DELETE /api/users/:id
-router.delete('/:id', userController.deleteUser);
+// Perfil de usuario
+router.get('/:id/perfil', usuarioController.obtenerPerfilUsuario);
+router.put('/:id/perfil', usuarioController.actualizarPerfilUsuario);
+router.put('/:id/cambiar-password', usuarioController.cambiarPasswordDesdePerfil);
 
 module.exports = router;
-
