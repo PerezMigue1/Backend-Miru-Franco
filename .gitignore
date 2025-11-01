@@ -30,6 +30,9 @@ build/
 
 # Ejemplos y documentación
 ejemplo/
+ejemplos/
+image.png
+*.png
 
 # Cobertura de tests
 coverage/
