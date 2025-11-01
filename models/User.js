@@ -9,6 +9,20 @@ const DireccionSchema = new mongoose.Schema({
   referencia: { type: String }
 });
 
+// Esquema para pregunta de seguridad
+const PreguntaSeguridadSchema = new mongoose.Schema({
+  pregunta: {
+    type: String,
+    required: [true, 'La pregunta es requerida'],
+    trim: true
+  },
+  respuesta: {
+    type: String,
+    required: [true, 'La respuesta es requerida'],
+    trim: true
+  }
+});
+
 // Esquema para el perfil capilar
 const PerfilCapilarSchema = new mongoose.Schema({
   tipoCabello: { 
@@ -51,10 +65,9 @@ const UsuarioSchema = new mongoose.Schema({
     type: Date, 
     required: [true, 'La fecha de nacimiento es requerida']
   },
-  preguntaSeguridad: { 
-    type: String, 
-    required: [true, 'La pregunta de seguridad es requerida'],
-    trim: true
+  preguntaSeguridad: {
+    type: PreguntaSeguridadSchema,
+    required: [true, 'La pregunta de seguridad es requerida']
   },
   direccion: { 
     type: DireccionSchema, 

@@ -7,10 +7,20 @@ const crypto = require('crypto');
 exports.obtenerUsuarios = async (req, res) => {
   try {
     const usuarios = await Usuario.find({ activo: true }).select('-password -resetPasswordToken');
+    
+    // Ocultar respuesta de preguntaSeguridad
+    const usuariosSinRespuesta = usuarios.map(usuario => {
+      const usuarioObj = usuario.toObject();
+      if (usuarioObj.preguntaSeguridad && usuarioObj.preguntaSeguridad.respuesta) {
+        delete usuarioObj.preguntaSeguridad.respuesta;
+      }
+      return usuarioObj;
+    });
+    
     res.json({
       success: true,
-      count: usuarios.length,
-      data: usuarios
+      count: usuariosSinRespuesta.length,
+      data: usuariosSinRespuesta
     });
   } catch (error) {
     console.error('❌ Error al obtener usuarios:', error);
@@ -40,6 +50,14 @@ exports.crearUsuario = async (req, res) => {
       });
     }
 
+    // Validar estructura de preguntaSeguridad
+    if (!preguntaSeguridad.pregunta || !preguntaSeguridad.respuesta) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'preguntaSeguridad debe contener pregunta y respuesta' 
+      });
+    }
+
     // Verificar si el email ya existe
     const existe = await Usuario.findOne({ email });
     if (existe) {
@@ -52,6 +70,9 @@ exports.crearUsuario = async (req, res) => {
     // Hashear la contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Hashear la respuesta de seguridad
+    const respuestaHasheada = await bcrypt.hash(preguntaSeguridad.respuesta.trim(), 10);
+
     // Crear nuevo usuario
     const nuevoUsuario = new Usuario({
       nombre,
@@ -59,7 +80,10 @@ exports.crearUsuario = async (req, res) => {
       telefono,
       password: hashedPassword,
       fechaNacimiento,
-      preguntaSeguridad,
+      preguntaSeguridad: {
+        pregunta: preguntaSeguridad.pregunta.trim(),
+        respuesta: respuestaHasheada
+      },
       direccion,
       perfilCapilar,
       aceptaAvisoPrivacidad,
@@ -187,9 +211,15 @@ exports.obtenerUsuarioPorId = async (req, res) => {
       });
     }
     
+    // Ocultar respuesta de preguntaSeguridad
+    const usuarioObj = usuario.toObject();
+    if (usuarioObj.preguntaSeguridad && usuarioObj.preguntaSeguridad.respuesta) {
+      delete usuarioObj.preguntaSeguridad.respuesta;
+    }
+    
     res.status(200).json({
       success: true,
-      data: usuario
+      data: usuarioObj
     });
   } catch (error) {
     console.error('❌ Error al obtener usuario:', error);
@@ -306,7 +336,7 @@ exports.obtenerPreguntaSeguridad = async (req, res) => {
 
     res.json({ 
       success: true,
-      pregunta: usuario.preguntaSeguridad 
+      pregunta: usuario.preguntaSeguridad.pregunta 
     });
 
   } catch (error) {
@@ -331,11 +361,10 @@ exports.validarRespuestaSeguridad = async (req, res) => {
       });
     }
 
-    // Comparar respuestas (case insensitive)
-    const respuestaCorrecta = usuario.preguntaSeguridad.toLowerCase().trim();
-    const respuestaUsuario = respuesta.toLowerCase().trim();
+    // Verificar respuesta usando bcrypt (comparar hash)
+    const respuestaValida = await bcrypt.compare(respuesta.trim(), usuario.preguntaSeguridad.respuesta);
 
-    if (respuestaCorrecta !== respuestaUsuario) {
+    if (!respuestaValida) {
       return res.status(401).json({
         success: false,
         message: 'Respuesta incorrecta'
@@ -475,9 +504,15 @@ exports.obtenerPerfilUsuario = async (req, res) => {
       });
     }
     
+    // Ocultar respuesta de preguntaSeguridad
+    const usuarioObj = usuario.toObject();
+    if (usuarioObj.preguntaSeguridad && usuarioObj.preguntaSeguridad.respuesta) {
+      delete usuarioObj.preguntaSeguridad.respuesta;
+    }
+    
     res.json({
       success: true,
-      data: usuario
+      data: usuarioObj
     });
   } catch (error) {
     console.error('❌ Error al obtener perfil:', error);
