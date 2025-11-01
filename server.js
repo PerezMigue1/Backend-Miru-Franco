@@ -19,8 +19,15 @@ app.use(cors({
 
 app.use(morgan('dev'));
 
+// Determinar prefijo de API según el entorno
+// En Vercel con api/, ya tenemos /api, así que usamos /users
+// En local, usamos /api/users
+const isVercel = process.env.VERCEL || process.env.VERCEL_ENV;
+const usersPath = isVercel ? '/users' : '/api/users';
+const rootPath = isVercel ? '/api' : '/';
+
 // Rutas
-app.use('/api/users', require('./routes/userRoutes'));
+app.use(usersPath, require('./routes/userRoutes'));
 
 mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
@@ -30,7 +37,7 @@ mongoose.connect(process.env.MONGODB_URI, {
     .catch(err => console.error("❌ Error al conectar MongoDB:", err));
 
 // Ruta root
-app.get('/', (req, res) => {
+app.get(rootPath, (req, res) => {
     res.send({ mensaje: 'API funcionando' });
 });
 
