@@ -1,15 +1,18 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const cors = require('cors');
 const morgan = require('morgan');
 require('dotenv').config();
 
-// Importar configuración de base de datos
-const connectDB = require('./config/database');
-
 const app = express();
 
 // Conectar a MongoDB
-connectDB();
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+  .then(() => console.log("✅ MongoDB conectado"))
+  .catch(err => console.error("❌ Error al conectar MongoDB:", err));
 
 // Middlewares
 // Configurar CORS para permitir solicitudes desde el frontend
