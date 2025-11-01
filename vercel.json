@@ -2,14 +2,22 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/index.js",
+      "src": "api/users.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
-      "src": "/(.*)",
-      "dest": "api/index.js"
+      "src": "/api/users",
+      "dest": "api/users.js"
+    },
+    {
+      "src": "/api/users/(.*)",
+      "dest": "api/users.js"
+    },
+    {
+      "src": "/",
+      "dest": "api/users.js"
     }
   ],
   "headers": [
