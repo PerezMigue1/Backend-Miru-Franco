@@ -12,7 +12,20 @@ const app = express();
 connectDB();
 
 // Middlewares
-app.use(cors());
+// Configurar CORS para permitir solicitudes desde el frontend
+const corsOptions = {
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://miru-franco.vercel.app',
+    'https://miru-franco-web.vercel.app'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
