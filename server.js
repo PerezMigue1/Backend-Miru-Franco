@@ -22,6 +22,7 @@ app.use(morgan('dev'));
 // Rutas
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/recuperar-password', require('./routes/recuperarPasswordRoutes'));
+app.use('/api/pregunta-seguridad', require('./routes/preguntaSeguridadRoutes'));
 
 mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
