@@ -53,34 +53,50 @@ const UsuarioSchema = new mongoose.Schema({
   },
   telefono: { 
     type: String, 
-    required: [true, 'El teléfono es requerido'],
+    required: function() { return !this.googleId; }, // Requerido solo si no es usuario de Google
     trim: true
   },
   password: { 
     type: String, 
-    required: [true, 'La contraseña es requerida'],
-    minlength: [6, 'La contraseña debe tener al menos 6 caracteres']
+    required: function() { return !this.googleId; }, // Requerido solo si no es usuario de Google
+    validate: {
+      validator: function(v) {
+        // Si es usuario de Google, no validar
+        if (this.googleId) return true;
+        // Si no es usuario de Google, debe tener al menos 6 caracteres
+        return !v || v.length >= 6;
+      },
+      message: 'La contraseña debe tener al menos 6 caracteres'
+    }
   },
   fechaNacimiento: { 
     type: Date, 
-    required: [true, 'La fecha de nacimiento es requerida']
+    required: function() { return !this.googleId; } // Requerido solo si no es usuario de Google
   },
   preguntaSeguridad: {
     type: PreguntaSeguridadSchema,
-    required: [true, 'La pregunta de seguridad es requerida']
+    required: function() { return !this.googleId; } // Requerido solo si no es usuario de Google
   },
   direccion: { 
     type: DireccionSchema, 
-    required: true 
+    required: function() { return !this.googleId; } // Requerido solo si no es usuario de Google
   },
   perfilCapilar: { 
     type: PerfilCapilarSchema, 
-    required: true 
+    required: function() { return !this.googleId; } // Requerido solo si no es usuario de Google
+  },
+  googleId: {
+    type: String,
+    unique: true,
+    sparse: true // Permite múltiples documentos sin googleId
+  },
+  foto: {
+    type: String
   },
   aceptaAvisoPrivacidad: { 
     type: Boolean, 
-    required: [true, 'Debes aceptar el aviso de privacidad'],
-    default: false
+    required: function() { return !this.googleId; }, // Requerido solo si no es usuario de Google
+    default: function() { return !!this.googleId; } // True por defecto para usuarios de Google
   },
   recibePromociones: { 
     type: Boolean, 
