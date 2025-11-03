@@ -1,6 +1,7 @@
 const PreguntaSeguridad = require('../models/PreguntaSeguridad');
+// const jwt = require('jsonwebtoken'); // opcional si emites token para reset
 
-// ✅ Obtener todas las preguntas de seguridad
+// ✅ Obtener todas las preguntas de seguridad (catálogo y asignadas)
 exports.obtenerPreguntas = async (req, res) => {
   try {
     const preguntas = await PreguntaSeguridad.find().sort({ _id: -1 });
@@ -58,7 +59,7 @@ exports.obtenerPorId = async (req, res) => {
 // ✅ Crear nueva pregunta de seguridad
 exports.crearPregunta = async (req, res) => {
   try {
-    const { pregunta } = req.body;
+    const { pregunta, email, respuesta } = req.body;
 
     if (!pregunta || !pregunta.trim()) {
       return res.status(400).json({ 
@@ -68,8 +69,13 @@ exports.crearPregunta = async (req, res) => {
     }
 
     const nuevaPregunta = new PreguntaSeguridad({
-      pregunta: pregunta.trim()
+      pregunta: pregunta.trim(),
+      email: email ? String(email).toLowerCase().trim() : null
     });
+
+    if (respuesta) {
+      await nuevaPregunta.setRespuesta(respuesta);
+    }
 
     await nuevaPregunta.save();
 
@@ -92,7 +98,7 @@ exports.crearPregunta = async (req, res) => {
 exports.actualizarPregunta = async (req, res) => {
   try {
     const { id } = req.params;
-    const { pregunta } = req.body;
+    const { pregunta, respuesta, email } = req.body;
 
     // Verificar si el ID es válido para MongoDB
     if (!id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -109,18 +115,22 @@ exports.actualizarPregunta = async (req, res) => {
       });
     }
 
-    const preguntaActualizada = await PreguntaSeguridad.findByIdAndUpdate(
-      id,
-      { pregunta: pregunta.trim() },
-      { new: true, runValidators: true }
-    );
-
+    const preguntaActualizada = await PreguntaSeguridad.findById(id);
     if (!preguntaActualizada) {
       return res.status(404).json({ 
         success: false,
         message: 'Pregunta no encontrada' 
       });
     }
+
+    preguntaActualizada.pregunta = pregunta.trim();
+    if (typeof email === 'string') {
+      preguntaActualizada.email = email.toLowerCase().trim();
+    }
+    if (respuesta) {
+      await preguntaActualizada.setRespuesta(respuesta);
+    }
+    await preguntaActualizada.save();
 
     res.json({
       success: true,
@@ -170,5 +180,56 @@ exports.eliminarPregunta = async (req, res) => {
       success: false,
       message: 'Error en el servidor' 
     });
+  }
+};
+
+// ✅ Obtener la pregunta asignada a un usuario por email
+// GET /api/pregunta-seguridad?email=...
+exports.obtenerPreguntaPorEmail = async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'email es requerido' });
+    }
+    const registro = await PreguntaSeguridad.findOne({ email: String(email).toLowerCase().trim() }).lean();
+    if (!registro) {
+      return res.status(404).json({ success: false, message: 'No existe pregunta para este email' });
+    }
+    return res.json({ success: true, data: [{ _id: registro._id, pregunta: registro.pregunta }] });
+  } catch (error) {
+    console.error('❌ Error al obtener pregunta por email:', error);
+    return res.status(500).json({ success: false, message: 'Error en el servidor' });
+  }
+};
+
+// ✅ Verificar respuesta de seguridad
+// POST /api/pregunta-seguridad/verificar  { email, answers: { "<texto_pregunta>": "respuesta" } }
+exports.verificarRespuesta = async (req, res) => {
+  try {
+    const { email, answers } = req.body || {};
+    if (!email || !answers || typeof answers !== 'object') {
+      return res.status(400).json({ success: false, message: 'email y answers son requeridos' });
+    }
+    const registro = await PreguntaSeguridad.findOne({ email: String(email).toLowerCase().trim() });
+    if (!registro) {
+      return res.status(404).json({ success: false, message: 'No existe pregunta para este email' });
+    }
+    const keys = Object.keys(answers);
+    if (keys.length === 0) return res.status(400).json({ success: false, message: 'answers vacío' });
+    const preguntaTexto = keys[0];
+    const respuestaPlano = String(answers[preguntaTexto] ?? '').trim();
+    if (!respuestaPlano) return res.status(400).json({ success: false, message: 'Respuesta vacía' });
+    if (preguntaTexto !== registro.pregunta) {
+      return res.status(400).json({ success: false, message: 'Pregunta no coincide' });
+    }
+    const ok = await registro.verificarRespuesta(respuestaPlano);
+    if (!ok) return res.status(401).json({ success: false, message: 'Respuesta incorrecta' });
+
+    // Opcional: emitir token corto para flujo de reset password
+    // const token = jwt.sign({ email: registro.email }, process.env.JWT_SECRET, { expiresIn: '15m' });
+    return res.json({ success: true /*, token*/ });
+  } catch (error) {
+    console.error('❌ Error al verificar respuesta:', error);
+    return res.status(500).json({ success: false, message: 'Error en el servidor' });
   }
 };
