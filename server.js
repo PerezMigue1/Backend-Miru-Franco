@@ -43,7 +43,6 @@ app.use(passport.session());
 // Rutas
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/usuarios', require('./routes/userRoutes'));
-app.use('/api/recuperar-password', require('./routes/recuperarPasswordRoutes'));
 app.use('/api/pregunta-seguridad', require('./routes/preguntaSeguridadRoutes'));
 
 mongoose.connect(process.env.MONGODB_URI, {
