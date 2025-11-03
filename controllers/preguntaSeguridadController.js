@@ -1,4 +1,8 @@
 const PreguntaSeguridad = require('../models/PreguntaSeguridad');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+// Modelo dinamico para la coleccion de usuarios (usa esquema laxo)
+const Usuario = mongoose.models.Usuario || mongoose.model('Usuario', new mongoose.Schema({}, { strict: false }), 'usuarios');
 // const jwt = require('jsonwebtoken'); // opcional si emites token para reset
 
 // ✅ Obtener todas las preguntas de seguridad (catálogo y asignadas)
@@ -183,7 +187,7 @@ exports.eliminarPregunta = async (req, res) => {
   }
 };
 
-// ✅ Obtener la pregunta asignada a un usuario por email
+// ✅ Obtener la pregunta asignada a un usuario por email (lee desde la coleccion usuarios)
 // GET /api/pregunta-seguridad?email=...
 exports.obtenerPreguntaPorEmail = async (req, res) => {
   try {
@@ -191,18 +195,18 @@ exports.obtenerPreguntaPorEmail = async (req, res) => {
     if (!email) {
       return res.status(400).json({ success: false, message: 'email es requerido' });
     }
-    const registro = await PreguntaSeguridad.findOne({ email: String(email).toLowerCase().trim() }).lean();
-    if (!registro) {
+    const user = await Usuario.findOne({ email: String(email).toLowerCase().trim() }).lean();
+    if (!user || !user.preguntaSeguridad || !user.preguntaSeguridad.pregunta) {
       return res.status(404).json({ success: false, message: 'No existe pregunta para este email' });
     }
-    return res.json({ success: true, data: [{ _id: registro._id, pregunta: registro.pregunta }] });
+    return res.json({ success: true, data: [{ _id: user.preguntaSeguridad._id || user._id, pregunta: user.preguntaSeguridad.pregunta }] });
   } catch (error) {
     console.error('❌ Error al obtener pregunta por email:', error);
     return res.status(500).json({ success: false, message: 'Error en el servidor' });
   }
 };
 
-// ✅ Verificar respuesta de seguridad
+// ✅ Verificar respuesta de seguridad (contra hash almacenado en usuarios.preguntaSeguridad.respuesta)
 // POST /api/pregunta-seguridad/verificar  { email, answers: { "<texto_pregunta>": "respuesta" } }
 exports.verificarRespuesta = async (req, res) => {
   try {
@@ -210,8 +214,8 @@ exports.verificarRespuesta = async (req, res) => {
     if (!email || !answers || typeof answers !== 'object') {
       return res.status(400).json({ success: false, message: 'email y answers son requeridos' });
     }
-    const registro = await PreguntaSeguridad.findOne({ email: String(email).toLowerCase().trim() });
-    if (!registro) {
+    const user = await Usuario.findOne({ email: String(email).toLowerCase().trim() });
+    if (!user || !user.preguntaSeguridad || !user.preguntaSeguridad.pregunta || !user.preguntaSeguridad.respuesta) {
       return res.status(404).json({ success: false, message: 'No existe pregunta para este email' });
     }
     const keys = Object.keys(answers);
@@ -219,14 +223,14 @@ exports.verificarRespuesta = async (req, res) => {
     const preguntaTexto = keys[0];
     const respuestaPlano = String(answers[preguntaTexto] ?? '').trim();
     if (!respuestaPlano) return res.status(400).json({ success: false, message: 'Respuesta vacía' });
-    if (preguntaTexto !== registro.pregunta) {
+    if (preguntaTexto !== user.preguntaSeguridad.pregunta) {
       return res.status(400).json({ success: false, message: 'Pregunta no coincide' });
     }
-    const ok = await registro.verificarRespuesta(respuestaPlano);
+    const ok = await bcrypt.compare(respuestaPlano, user.preguntaSeguridad.respuesta);
     if (!ok) return res.status(401).json({ success: false, message: 'Respuesta incorrecta' });
 
     // Opcional: emitir token corto para flujo de reset password
-    // const token = jwt.sign({ email: registro.email }, process.env.JWT_SECRET, { expiresIn: '15m' });
+    // const token = jwt.sign({ email: user.email }, process.env.JWT_SECRET, { expiresIn: '15m' });
     return res.json({ success: true /*, token*/ });
   } catch (error) {
     console.error('❌ Error al verificar respuesta:', error);
