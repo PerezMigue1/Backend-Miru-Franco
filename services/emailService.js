@@ -2,6 +2,12 @@ const { mg, DOMAIN } = require('../config/mailgun');
 const { generarLinkVerificacion } = require('../utils/emailVerification');
 
 async function enviarEmailVerificacion(email, token) {
+  // Verificar que Mailgun esté configurado
+  if (!mg || !DOMAIN) {
+    console.error('Mailgun no está configurado. Variables de entorno faltantes.');
+    throw new Error('Servicio de email no disponible. Por favor contacta al administrador.');
+  }
+
   const verificationLink = generarLinkVerificacion(token, email);
   
   const data = {

@@ -35,6 +35,7 @@ passport.use(new GoogleStrategy({
           perfilCapilar: null, // Se puede completar después
           aceptaAvisoPrivacidad: true, // True por defecto para usuarios de Google
           recibePromociones: false,
+          emailVerificado: true, // Los emails de Google ya están verificados
           activo: true
         });
         
@@ -43,6 +44,8 @@ passport.use(new GoogleStrategy({
         // Actualizar Google ID y foto si no existen
         if (!usuario.googleId) {
           usuario.googleId = profile.id;
+          // Si el usuario se registró con email/password y ahora usa Google, verificar email
+          usuario.emailVerificado = true;
         }
         if (!usuario.foto && profile.photos[0]?.value) {
           usuario.foto = profile.photos[0].value;

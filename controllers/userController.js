@@ -172,8 +172,8 @@ exports.loginUsuario = async (req, res) => {
       });
     }
 
-    // Verificar si el email está verificado
-    if (!usuario.emailVerificado) {
+    // Verificar si el email está verificado (excepto para usuarios de Google)
+    if (!usuario.emailVerificado && !usuario.googleId) {
       return res.status(403).json({
         success: false,
         message: 'Por favor verifica tu correo electrónico antes de iniciar sesión',
