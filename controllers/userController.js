@@ -2,8 +2,6 @@ const Usuario = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { generarTokenVerificacion } = require('../utils/emailVerification');
-const { enviarEmailVerificacion } = require('../services/emailService');
 
 // ✅ Obtener todos los usuarios
 exports.obtenerUsuarios = async (req, res) => {
@@ -61,18 +59,13 @@ exports.crearUsuario = async (req, res) => {
     }
 
     // Verificar si el email ya existe
-    const existe = await Usuario.findOne({ email: email.toLowerCase() });
+    const existe = await Usuario.findOne({ email });
     if (existe) {
       return res.status(400).json({ 
         success: false,
         message: 'El email ya está registrado' 
       });
     }
-
-    // Generar token de verificación
-    const tokenVerificacion = generarTokenVerificacion();
-    const fechaExpiracion = new Date();
-    fechaExpiracion.setHours(fechaExpiracion.getHours() + 24); // Expira en 24 horas
 
     // Hashear la contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -95,34 +88,22 @@ exports.crearUsuario = async (req, res) => {
       perfilCapilar,
       aceptaAvisoPrivacidad,
       recibePromociones: recibePromociones || false,
-      emailVerificado: false,
-      emailVerificacionToken: tokenVerificacion,
-      emailVerificacionExpira: fechaExpiracion,
       activo: true
     });
 
     await nuevoUsuario.save();
 
-    // Enviar email de verificación
-    let emailEnviado = false;
-    try {
-      await enviarEmailVerificacion(email, tokenVerificacion);
-      emailEnviado = true;
-    } catch (emailError) {
-      console.error('Error enviando email de verificación:', emailError);
-      // No fallar el registro si el email falla, pero loguear el error
-      emailEnviado = false;
-    }
-
-    const mensaje = emailEnviado 
-      ? 'Registro exitoso. Por favor verifica tu correo electrónico para activar tu cuenta.'
-      : 'Registro exitoso. No se pudo enviar el email de verificación. Puedes solicitar un nuevo email de verificación desde la página de login.';
+    // Crear token JWT
+    const token = jwt.sign(
+      { id: nuevoUsuario._id, email: nuevoUsuario.email },
+      process.env.JWT_SECRET || 'tu_secreto_temporal',
+      { expiresIn: '1d' }
+    );
 
     res.status(201).json({
       success: true,
-      message: mensaje,
-      emailEnviado: emailEnviado,
-      requiereVerificacion: true,
+      message: 'Usuario creado correctamente',
+      token,
       usuario: {
         _id: nuevoUsuario._id,
         nombre: nuevoUsuario.nombre,
@@ -181,15 +162,6 @@ exports.loginUsuario = async (req, res) => {
       });
     }
 
-    // Verificar si el email está verificado (excepto para usuarios de Google)
-    if (!usuario.emailVerificado && !usuario.googleId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Por favor verifica tu correo electrónico antes de iniciar sesión. Si no recibiste el email, puedes solicitar uno nuevo.',
-        requiereVerificacion: true,
-        puedeReenviar: true
-      });
-    }
 
     // Generar token JWT
     const token = jwt.sign(
@@ -590,117 +562,3 @@ exports.actualizarPerfilUsuario = async (req, res) => {
   }
 };
 
-// ✅ Verificar email
-exports.verificarEmail = async (req, res) => {
-  try {
-    const { token, email } = req.query;
-
-    if (!token || !email) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Token y email son requeridos' 
-      });
-    }
-
-    const usuario = await Usuario.findOne({ 
-      email: email.toLowerCase(),
-      emailVerificacionToken: token
-    });
-
-    if (!usuario) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Token de verificación inválido' 
-      });
-    }
-
-    // Verificar si el token expiró
-    if (new Date() > usuario.emailVerificacionExpira) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'El token de verificación ha expirado. Solicita uno nuevo.' 
-      });
-    }
-
-    // Verificar el email
-    usuario.emailVerificado = true;
-    usuario.emailVerificacionToken = null;
-    usuario.emailVerificacionExpira = null;
-    await usuario.save();
-
-    res.json({
-      success: true,
-      message: 'Correo electrónico verificado exitosamente'
-    });
-  } catch (error) {
-    console.error('Error verificando email:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error al verificar el correo electrónico' 
-    });
-  }
-};
-
-// ✅ Reenviar email de verificación
-exports.reenviarEmailVerificacion = async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    const usuario = await Usuario.findOne({ email: email.toLowerCase() });
-
-    if (!usuario) {
-      // Por seguridad, no revelar si el email existe o no
-      return res.json({
-        success: true,
-        message: 'Si el correo existe, se enviará un nuevo email de verificación'
-      });
-    }
-
-    if (usuario.emailVerificado) {
-      return res.status(400).json({
-        success: false,
-        message: 'Este correo electrónico ya está verificado'
-      });
-    }
-
-    // Generar nuevo token
-    const tokenVerificacion = generarTokenVerificacion();
-    const fechaExpiracion = new Date();
-    fechaExpiracion.setHours(fechaExpiracion.getHours() + 24);
-
-    usuario.emailVerificacionToken = tokenVerificacion;
-    usuario.emailVerificacionExpira = fechaExpiracion;
-    await usuario.save();
-
-    // Enviar email
-    try {
-      await enviarEmailVerificacion(usuario.email, tokenVerificacion);
-      res.json({
-        success: true,
-        message: 'Se ha enviado un nuevo email de verificación. Por favor revisa tu bandeja de entrada y carpeta de spam.',
-        emailEnviado: true
-      });
-    } catch (emailError) {
-      console.error('Error enviando email:', emailError);
-      
-      // Verificar si es un problema de configuración o del servicio
-      const esErrorConfiguracion = emailError.message && 
-        emailError.message.includes('no disponible');
-      
-      res.status(500).json({
-        success: false,
-        message: esErrorConfiguracion 
-          ? 'El servicio de email no está disponible temporalmente. Por favor intenta más tarde o contacta al administrador.'
-          : 'Error al enviar el email de verificación. Por favor verifica que el email esté correcto y que esté autorizado en Mailgun.',
-        emailEnviado: false,
-        error: process.env.NODE_ENV === 'development' ? emailError.message : undefined
-      });
-    }
-  } catch (error) {
-    console.error('Error reenviando email:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al procesar la solicitud'
-    });
-  }
-};

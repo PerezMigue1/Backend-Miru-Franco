@@ -104,18 +104,6 @@ const UsuarioSchema = new mongoose.Schema({
   },
   resetPasswordToken: { type: String, default: null },
   resetPasswordExpires: { type: Date, default: null },
-  emailVerificado: { 
-    type: Boolean, 
-    default: false 
-  },
-  emailVerificacionToken: { 
-    type: String, 
-    default: null 
-  },
-  emailVerificacionExpira: { 
-    type: Date, 
-    default: null 
-  },
   creadoEn: { type: Date, default: Date.now },
   actualizadoEn: { type: Date, default: Date.now },
   activo: { type: Boolean, default: true }

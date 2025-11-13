@@ -13,10 +13,6 @@ router.delete('/:id', usuarioController.eliminarUsuario);
 // Autenticación
 router.post('/login', usuarioController.loginUsuario);
 
-// Verificación de email
-router.get('/verificar-email', usuarioController.verificarEmail);
-router.post('/reenviar-verificacion', usuarioController.reenviarEmailVerificacion);
-
 // Recuperación de contraseña
 router.post('/pregunta-seguridad', usuarioController.obtenerPreguntaSeguridad);
 router.post('/verificar-respuesta', usuarioController.validarRespuestaSeguridad);
