@@ -104,16 +104,25 @@ exports.crearUsuario = async (req, res) => {
     await nuevoUsuario.save();
 
     // Enviar email de verificación
+    let emailEnviado = false;
     try {
       await enviarEmailVerificacion(email, tokenVerificacion);
+      emailEnviado = true;
     } catch (emailError) {
       console.error('Error enviando email de verificación:', emailError);
       // No fallar el registro si el email falla, pero loguear el error
+      emailEnviado = false;
     }
+
+    const mensaje = emailEnviado 
+      ? 'Registro exitoso. Por favor verifica tu correo electrónico para activar tu cuenta.'
+      : 'Registro exitoso. No se pudo enviar el email de verificación. Puedes solicitar un nuevo email de verificación desde la página de login.';
 
     res.status(201).json({
       success: true,
-      message: 'Registro exitoso. Por favor verifica tu correo electrónico para activar tu cuenta.',
+      message: mensaje,
+      emailEnviado: emailEnviado,
+      requiereVerificacion: true,
       usuario: {
         _id: nuevoUsuario._id,
         nombre: nuevoUsuario.nombre,
@@ -176,8 +185,9 @@ exports.loginUsuario = async (req, res) => {
     if (!usuario.emailVerificado && !usuario.googleId) {
       return res.status(403).json({
         success: false,
-        message: 'Por favor verifica tu correo electrónico antes de iniciar sesión',
-        requiereVerificacion: true
+        message: 'Por favor verifica tu correo electrónico antes de iniciar sesión. Si no recibiste el email, puedes solicitar uno nuevo.',
+        requiereVerificacion: true,
+        puedeReenviar: true
       });
     }
 
@@ -667,13 +677,23 @@ exports.reenviarEmailVerificacion = async (req, res) => {
       await enviarEmailVerificacion(usuario.email, tokenVerificacion);
       res.json({
         success: true,
-        message: 'Se ha enviado un nuevo email de verificación'
+        message: 'Se ha enviado un nuevo email de verificación. Por favor revisa tu bandeja de entrada y carpeta de spam.',
+        emailEnviado: true
       });
     } catch (emailError) {
       console.error('Error enviando email:', emailError);
+      
+      // Verificar si es un problema de configuración o del servicio
+      const esErrorConfiguracion = emailError.message && 
+        emailError.message.includes('no disponible');
+      
       res.status(500).json({
         success: false,
-        message: 'Error al enviar el email de verificación'
+        message: esErrorConfiguracion 
+          ? 'El servicio de email no está disponible temporalmente. Por favor intenta más tarde o contacta al administrador.'
+          : 'Error al enviar el email de verificación. Por favor verifica que el email esté correcto y que esté autorizado en Mailgun.',
+        emailEnviado: false,
+        error: process.env.NODE_ENV === 'development' ? emailError.message : undefined
       });
     }
   } catch (error) {
