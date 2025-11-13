@@ -8,11 +8,14 @@ let DOMAIN = null;
 if (process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN) {
   try {
     const mailgun = new Mailgun(formData);
+    // Configurar cliente con URL base de Mailgun (región EE.UU.)
     mg = mailgun.client({
       username: 'api',
       key: process.env.MAILGUN_API_KEY,
+      url: 'https://api.mailgun.net' // Base URL de Mailgun
     });
     DOMAIN = process.env.MAILGUN_DOMAIN;
+    console.log('✅ Mailgun configurado correctamente');
   } catch (error) {
     console.error('Error inicializando Mailgun:', error);
   }
