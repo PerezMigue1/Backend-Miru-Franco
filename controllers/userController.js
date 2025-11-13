@@ -2,6 +2,8 @@ const Usuario = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { generarTokenVerificacion } = require('../utils/emailVerification');
+const { enviarEmailVerificacion } = require('../services/emailService');
 
 // ✅ Obtener todos los usuarios
 exports.obtenerUsuarios = async (req, res) => {
@@ -59,13 +61,18 @@ exports.crearUsuario = async (req, res) => {
     }
 
     // Verificar si el email ya existe
-    const existe = await Usuario.findOne({ email });
+    const existe = await Usuario.findOne({ email: email.toLowerCase() });
     if (existe) {
       return res.status(400).json({ 
         success: false,
         message: 'El email ya está registrado' 
       });
     }
+
+    // Generar token de verificación
+    const tokenVerificacion = generarTokenVerificacion();
+    const fechaExpiracion = new Date();
+    fechaExpiracion.setHours(fechaExpiracion.getHours() + 24); // Expira en 24 horas
 
     // Hashear la contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -88,22 +95,25 @@ exports.crearUsuario = async (req, res) => {
       perfilCapilar,
       aceptaAvisoPrivacidad,
       recibePromociones: recibePromociones || false,
+      emailVerificado: false,
+      emailVerificacionToken: tokenVerificacion,
+      emailVerificacionExpira: fechaExpiracion,
       activo: true
     });
 
     await nuevoUsuario.save();
 
-    // Crear token JWT
-    const token = jwt.sign(
-      { id: nuevoUsuario._id, email: nuevoUsuario.email },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
-      { expiresIn: '1d' }
-    );
+    // Enviar email de verificación
+    try {
+      await enviarEmailVerificacion(email, tokenVerificacion);
+    } catch (emailError) {
+      console.error('Error enviando email de verificación:', emailError);
+      // No fallar el registro si el email falla, pero loguear el error
+    }
 
     res.status(201).json({
       success: true,
-      message: 'Usuario creado correctamente',
-      token,
+      message: 'Registro exitoso. Por favor verifica tu correo electrónico para activar tu cuenta.',
       usuario: {
         _id: nuevoUsuario._id,
         nombre: nuevoUsuario.nombre,
@@ -159,6 +169,15 @@ exports.loginUsuario = async (req, res) => {
       return res.status(401).json({ 
         success: false,
         message: 'Contraseña incorrecta' 
+      });
+    }
+
+    // Verificar si el email está verificado
+    if (!usuario.emailVerificado) {
+      return res.status(403).json({
+        success: false,
+        message: 'Por favor verifica tu correo electrónico antes de iniciar sesión',
+        requiereVerificacion: true
       });
     }
 
@@ -557,6 +576,111 @@ exports.actualizarPerfilUsuario = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Error en el servidor' 
+    });
+  }
+};
+
+// ✅ Verificar email
+exports.verificarEmail = async (req, res) => {
+  try {
+    const { token, email } = req.query;
+
+    if (!token || !email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Token y email son requeridos' 
+      });
+    }
+
+    const usuario = await Usuario.findOne({ 
+      email: email.toLowerCase(),
+      emailVerificacionToken: token
+    });
+
+    if (!usuario) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Token de verificación inválido' 
+      });
+    }
+
+    // Verificar si el token expiró
+    if (new Date() > usuario.emailVerificacionExpira) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'El token de verificación ha expirado. Solicita uno nuevo.' 
+      });
+    }
+
+    // Verificar el email
+    usuario.emailVerificado = true;
+    usuario.emailVerificacionToken = null;
+    usuario.emailVerificacionExpira = null;
+    await usuario.save();
+
+    res.json({
+      success: true,
+      message: 'Correo electrónico verificado exitosamente'
+    });
+  } catch (error) {
+    console.error('Error verificando email:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error al verificar el correo electrónico' 
+    });
+  }
+};
+
+// ✅ Reenviar email de verificación
+exports.reenviarEmailVerificacion = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const usuario = await Usuario.findOne({ email: email.toLowerCase() });
+
+    if (!usuario) {
+      // Por seguridad, no revelar si el email existe o no
+      return res.json({
+        success: true,
+        message: 'Si el correo existe, se enviará un nuevo email de verificación'
+      });
+    }
+
+    if (usuario.emailVerificado) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este correo electrónico ya está verificado'
+      });
+    }
+
+    // Generar nuevo token
+    const tokenVerificacion = generarTokenVerificacion();
+    const fechaExpiracion = new Date();
+    fechaExpiracion.setHours(fechaExpiracion.getHours() + 24);
+
+    usuario.emailVerificacionToken = tokenVerificacion;
+    usuario.emailVerificacionExpira = fechaExpiracion;
+    await usuario.save();
+
+    // Enviar email
+    try {
+      await enviarEmailVerificacion(usuario.email, tokenVerificacion);
+      res.json({
+        success: true,
+        message: 'Se ha enviado un nuevo email de verificación'
+      });
+    } catch (emailError) {
+      console.error('Error enviando email:', emailError);
+      res.status(500).json({
+        success: false,
+        message: 'Error al enviar el email de verificación'
+      });
+    }
+  } catch (error) {
+    console.error('Error reenviando email:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al procesar la solicitud'
     });
   }
 };
