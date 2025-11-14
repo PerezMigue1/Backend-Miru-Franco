@@ -1,6 +1,7 @@
 const express = require('express');
 const passport = require('passport');
 const jwt = require('jsonwebtoken');
+const usuarioController = require('../controllers/userController');
 const router = express.Router();
 
 // Ruta para iniciar autenticación con Google
@@ -82,6 +83,9 @@ router.get('/me',
     }
   }
 );
+
+// 🔹 Verificar si un correo ya está registrado (validación en tiempo real)
+router.post('/verificar-correo', usuarioController.verificarCorreoExistente);
 
 module.exports = router;
 

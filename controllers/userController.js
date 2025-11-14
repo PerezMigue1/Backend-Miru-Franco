@@ -701,3 +701,37 @@ exports.reenviarCodigo = async (req, res) => {
   }
 };
 
+// 🔹 Verificar si un correo ya está registrado (para validación en tiempo real)
+exports.verificarCorreoExistente = async (req, res) => {
+  try {
+    const { correo } = req.body;
+
+    if (!correo) {
+      return res.status(400).json({ 
+        existe: false,
+        message: 'Correo no proporcionado' 
+      });
+    }
+
+    const usuario = await Usuario.findOne({ email: correo.toLowerCase() });
+    
+    if (usuario) {
+      return res.status(200).json({ 
+        existe: true,
+        message: 'Este correo ya está registrado' 
+      });
+    }
+
+    return res.status(200).json({ 
+      existe: false,
+      message: 'Correo disponible' 
+    });
+  } catch (error) {
+    console.error('Error al verificar correo:', error);
+    return res.status(500).json({ 
+      existe: false,
+      message: 'Error al verificar el correo' 
+    });
+  }
+};
+
