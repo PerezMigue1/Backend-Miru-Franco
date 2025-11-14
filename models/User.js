@@ -49,7 +49,8 @@ const UsuarioSchema = new mongoose.Schema({
     unique: true,
     lowercase: true,
     trim: true,
-    match: [/^\S+@\S+\.\S+$/, 'Por favor ingresa un email válido']
+    match: [/^\S+@\S+\.\S+$/, 'Por favor ingresa un email válido'],
+    index: true
   },
   telefono: { 
     type: String, 
@@ -126,7 +127,7 @@ const UsuarioSchema = new mongoose.Schema({
 });
 
 // Índices para mejorar búsquedas
-UsuarioSchema.index({ email: 1 });
+// Nota: email ya tiene índice único definido en el schema
 UsuarioSchema.index({ activo: 1 });
 
 // Middleware pre-save para actualizar actualizadoEn
