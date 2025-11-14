@@ -104,6 +104,19 @@ const UsuarioSchema = new mongoose.Schema({
   },
   resetPasswordToken: { type: String, default: null },
   resetPasswordExpires: { type: Date, default: null },
+  // Campos para verificación OTP
+  codigoOTP: {
+    type: String,
+    default: null
+  },
+  otpExpira: {
+    type: Date,
+    default: null
+  },
+  confirmado: {
+    type: Boolean,
+    default: false
+  },
   creadoEn: { type: Date, default: Date.now },
   actualizadoEn: { type: Date, default: Date.now },
   activo: { type: Boolean, default: true }

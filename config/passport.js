@@ -35,6 +35,7 @@ passport.use(new GoogleStrategy({
           perfilCapilar: null, // Se puede completar después
           aceptaAvisoPrivacidad: true, // True por defecto para usuarios de Google
           recibePromociones: false,
+          confirmado: true, // Los usuarios de Google ya tienen email verificado
           activo: true
         });
         

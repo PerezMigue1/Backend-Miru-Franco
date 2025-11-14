@@ -2,6 +2,7 @@ const Usuario = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { sendOTPEmail } = require('../utils/sendEmail');
 
 // ✅ Obtener todos los usuarios
 exports.obtenerUsuarios = async (req, res) => {
@@ -59,7 +60,7 @@ exports.crearUsuario = async (req, res) => {
     }
 
     // Verificar si el email ya existe
-    const existe = await Usuario.findOne({ email });
+    const existe = await Usuario.findOne({ email: email.toLowerCase() });
     if (existe) {
       return res.status(400).json({ 
         success: false,
@@ -73,7 +74,13 @@ exports.crearUsuario = async (req, res) => {
     // Hashear la respuesta de seguridad
     const respuestaHasheada = await bcrypt.hash(preguntaSeguridad.respuesta.trim(), 10);
 
-    // Crear nuevo usuario
+    // Generar código OTP de 6 dígitos
+    const codigoOTP = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Calcular fecha de expiración (2 minutos desde ahora)
+    const otpExpira = new Date(Date.now() + 2 * 60 * 1000);
+
+    // Crear nuevo usuario con confirmado: false
     const nuevoUsuario = new Usuario({
       nombre,
       email: email.toLowerCase(),
@@ -88,28 +95,32 @@ exports.crearUsuario = async (req, res) => {
       perfilCapilar,
       aceptaAvisoPrivacidad,
       recibePromociones: recibePromociones || false,
+      codigoOTP,
+      otpExpira,
+      confirmado: false, // IMPORTANTE: La cuenta no está confirmada aún
       activo: true
     });
 
     await nuevoUsuario.save();
+    console.log('Usuario registrado:', email, 'OTP:', codigoOTP, 'Expira en 2 minutos');
 
-    // Crear token JWT
-    const token = jwt.sign(
-      { id: nuevoUsuario._id, email: nuevoUsuario.email },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
-      { expiresIn: '1d' }
-    );
-
-    res.status(201).json({
-      success: true,
-      message: 'Usuario creado correctamente',
-      token,
-      usuario: {
-        _id: nuevoUsuario._id,
-        nombre: nuevoUsuario.nombre,
-        email: nuevoUsuario.email
-      }
-    });
+    // Enviar correo con el código OTP
+    try {
+      await sendOTPEmail(email, codigoOTP);
+      
+      return res.status(201).json({ 
+        success: true,
+        message: 'Ingresa el código para activar tu cuenta. El código expira en 2 minutos.',
+        requiereVerificacion: true // Indicar al frontend que requiere verificación
+      });
+    } catch (err) {
+      console.error('Error al enviar correo de activación:', err);
+      // Aún así, el usuario fue creado, pero no se pudo enviar el correo
+      return res.status(500).json({
+        success: false,
+        message: 'Usuario registrado, pero no se pudo enviar el correo de activación. Contacta al soporte.'
+      });
+    }
 
   } catch (error) {
     console.error('❌ Error al crear usuario:', error);
@@ -162,6 +173,14 @@ exports.loginUsuario = async (req, res) => {
       });
     }
 
+    // VERIFICAR QUE LA CUENTA ESTÉ CONFIRMADA (excepto para usuarios de Google)
+    if (!usuario.confirmado && !usuario.googleId) {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Tu cuenta no está activada. Revisa tu correo para activar tu cuenta.',
+        requiereVerificacion: true // Indicar al frontend que requiere verificación
+      });
+    }
 
     // Generar token JWT
     const token = jwt.sign(
@@ -558,6 +577,126 @@ exports.actualizarPerfilUsuario = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Error en el servidor' 
+    });
+  }
+};
+
+// ✅ Verificar OTP
+exports.verificarOTP = async (req, res) => {
+  try {
+    const { email, codigo } = req.body;
+
+    if (!email || !codigo) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email y código son requeridos' 
+      });
+    }
+
+    const usuario = await Usuario.findOne({ email: email.toLowerCase() });
+    if (!usuario) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Usuario no encontrado.' 
+      });
+    }
+
+    // Verificar si hay código activo
+    if (!usuario.codigoOTP) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'No hay código activo. Solicita uno nuevo.' 
+      });
+    }
+
+    // Verificar si el código ha expirado (2 minutos)
+    if (usuario.otpExpira < new Date()) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Código expirado. El código OTP solo es válido por 2 minutos. Solicita uno nuevo.' 
+      });
+    }
+
+    // Verificar que el código coincida
+    if (usuario.codigoOTP !== codigo) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Código incorrecto.' 
+      });
+    }
+
+    // Código correcto: activar cuenta y limpiar código
+    usuario.codigoOTP = null;
+    usuario.otpExpira = null;
+    usuario.confirmado = true;
+    await usuario.save();
+
+    res.status(200).json({ 
+      success: true,
+      message: 'Código verificado correctamente. Cuenta activada.' 
+    });
+  } catch (error) {
+    console.error('Error al verificar el código:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error al verificar el código' 
+    });
+  }
+};
+
+// ✅ Reenviar código OTP
+exports.reenviarCodigo = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email es requerido' 
+      });
+    }
+
+    const usuario = await Usuario.findOne({ email: email.toLowerCase() });
+    if (!usuario) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Usuario no encontrado.' 
+      });
+    }
+
+    // Si ya está confirmado, no necesita código
+    if (usuario.confirmado) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este correo electrónico ya está activado.'
+      });
+    }
+
+    // Generar nuevo código OTP
+    const nuevoCodigo = Math.floor(100000 + Math.random() * 900000).toString();
+    usuario.codigoOTP = nuevoCodigo;
+    usuario.otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
+    await usuario.save();
+
+    // Enviar nuevo código por correo
+    try {
+      await sendOTPEmail(email, nuevoCodigo);
+      res.status(200).json({ 
+        success: true,
+        message: 'Nuevo código enviado al correo. Recuerda que el código expira en 2 minutos.' 
+      });
+    } catch (emailError) {
+      console.error('Error enviando correo:', emailError);
+      res.status(500).json({
+        success: false,
+        message: 'Error al enviar el correo. Por favor intenta más tarde.'
+      });
+    }
+  } catch (error) {
+    console.error('Error al reenviar código:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error al reenviar el código' 
     });
   }
 };
