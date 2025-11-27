@@ -20,12 +20,11 @@ async function bootstrap() {
     });
   });
   
-  // Versionado de API (opcional)
-  // Deshabilitado temporalmente para rutas sin versión
-  app.enableVersioning({
-    type: VersioningType.URI,
-    defaultVersion: '1',
-  });
+  // Versionado de API deshabilitado por ahora para simplificar las rutas
+  // app.enableVersioning({
+  //   type: VersioningType.URI,
+  //   defaultVersion: '1',
+  // });
   
   // Habilitar CORS
   app.enableCors({
