@@ -8,7 +8,7 @@ async function bootstrap() {
   
   // Prefijo global para todas las rutas
   app.setGlobalPrefix('api', {
-    exclude: ['/salud', '/'],
+    exclude: ['/salud', '/', '/v1'],
   });
   
   // Configurar ruta de health check (excluida del prefijo global)
@@ -21,6 +21,7 @@ async function bootstrap() {
   });
   
   // Versionado de API (opcional)
+  // Deshabilitado temporalmente para rutas sin versión
   app.enableVersioning({
     type: VersioningType.URI,
     defaultVersion: '1',
