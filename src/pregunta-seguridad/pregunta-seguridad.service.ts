@@ -7,15 +7,46 @@ export class PreguntaSeguridadService {
   constructor(private prisma: PrismaService) {}
 
   async obtenerPreguntas() {
-    // En Prisma, las preguntas están en la colección de preguntas_seguridad si existe
-    // Por ahora, las preguntas están embebidas en los usuarios
-    // Este endpoint podría necesitar una colección separada en el futuro
-    return {
-      success: true,
-      message: 'Funcionalidad en desarrollo - Las preguntas están embebidas en usuarios',
-      data: [],
-      count: 0,
-    };
+    try {
+      // Consultar todos los usuarios que tengan preguntas de seguridad
+      const usuarios = await this.prisma.usuario.findMany({
+        where: {
+          preguntaSeguridad: {
+            not: null,
+          },
+        },
+        select: {
+          preguntaSeguridad: true,
+        },
+      });
+
+      // Extraer preguntas únicas de los usuarios
+      const preguntasSet = new Set<string>();
+      usuarios.forEach((usuario) => {
+        const preguntaSeguridad = usuario.preguntaSeguridad as any;
+        if (preguntaSeguridad && preguntaSeguridad.pregunta) {
+          preguntasSet.add(preguntaSeguridad.pregunta);
+        }
+      });
+
+      // Convertir el Set a un array de objetos
+      const preguntas = Array.from(preguntasSet).map((pregunta, index) => ({
+        id: `pregunta-${index + 1}`,
+        pregunta: pregunta,
+      }));
+
+      return {
+        success: true,
+        message: preguntas.length > 0 
+          ? 'Preguntas de seguridad disponibles' 
+          : 'No hay preguntas de seguridad disponibles en la base de datos',
+        data: preguntas,
+        count: preguntas.length,
+      };
+    } catch (error) {
+      console.error('Error obteniendo preguntas de seguridad:', error);
+      throw new NotFoundException('Error al obtener las preguntas de seguridad');
+    }
   }
 
   async obtenerPorId(id: string) {
