@@ -14,6 +14,19 @@ async function bootstrap() {
       uptime: process.uptime(),
     });
   });
+
+  // Ruta raíz para evitar errores 404
+  app.use('/', (req, res) => {
+    res.json({
+      message: 'Miru Franco Backend API',
+      version: '1.0.0',
+      status: 'running',
+      endpoints: {
+        health: '/salud',
+        api: '/api',
+      },
+    });
+  });
   
   // Prefijo global para todas las rutas
   app.setGlobalPrefix('api', {
