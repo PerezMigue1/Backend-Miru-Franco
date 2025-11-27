@@ -30,7 +30,7 @@ async function bootstrap() {
   
   // Prefijo global para todas las rutas
   app.setGlobalPrefix('api', {
-    exclude: ['/salud'],
+    exclude: ['/salud', '/'],
   });
   
   // Versionado de API (opcional)
