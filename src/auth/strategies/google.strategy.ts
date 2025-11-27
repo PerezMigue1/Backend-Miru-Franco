@@ -39,57 +39,65 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     profile: any,
     done: VerifyCallback,
   ): Promise<any> {
-    const email = profile.emails[0].value.toLowerCase();
-    const { id, displayName, photos } = profile;
+    try {
+      const email = profile.emails[0].value.toLowerCase();
+      const { id, displayName, photos } = profile;
+      
+      console.log('🔍 Google OAuth - Validando usuario:', email);
 
-    let usuario = await this.prisma.usuario.findFirst({
-      where: {
-        OR: [
-          { email },
-          { googleId: id },
-        ],
-      },
-    });
-
-    if (!usuario) {
-      // Crear nuevo usuario con Google
-      usuario = await this.prisma.usuario.create({
-        data: {
-          nombre: displayName,
-          email,
-          googleId: id,
-          foto: photos[0]?.value || null,
-          telefono: null,
-          password: null,
-          fechaNacimiento: null,
-          preguntaSeguridad: null as any,
-          direccion: null as any,
-          perfilCapilar: null as any,
-          aceptaAvisoPrivacidad: true,
-          recibePromociones: false,
-          confirmado: true,
-          activo: true,
+      let usuario = await this.prisma.usuario.findFirst({
+        where: {
+          OR: [
+            { email },
+            { googleId: id },
+          ],
         },
       });
-    } else {
-      // Actualizar Google ID y foto si no existen
-      const updateData: any = {};
-      if (!usuario.googleId) {
-        updateData.googleId = id;
-        updateData.confirmado = true;
-      }
-      if (!usuario.foto && photos[0]?.value) {
-        updateData.foto = photos[0].value;
-      }
-      if (Object.keys(updateData).length > 0) {
-        usuario = await this.prisma.usuario.update({
-          where: { id: usuario.id },
-          data: updateData,
-        });
-      }
-    }
 
-    done(null, usuario);
+      if (!usuario) {
+        // Crear nuevo usuario con Google
+        usuario = await this.prisma.usuario.create({
+          data: {
+            nombre: displayName,
+            email,
+            googleId: id,
+            foto: photos[0]?.value || null,
+            telefono: null,
+            password: null,
+            fechaNacimiento: null,
+            preguntaSeguridad: null as any,
+            direccion: null as any,
+            perfilCapilar: null as any,
+            aceptaAvisoPrivacidad: true,
+            recibePromociones: false,
+            confirmado: true,
+            activo: true,
+          },
+        });
+      } else {
+        // Actualizar Google ID y foto si no existen
+        const updateData: any = {};
+        if (!usuario.googleId) {
+          updateData.googleId = id;
+          updateData.confirmado = true;
+        }
+        if (!usuario.foto && photos[0]?.value) {
+          updateData.foto = photos[0].value;
+        }
+        if (Object.keys(updateData).length > 0) {
+          usuario = await this.prisma.usuario.update({
+            where: { id: usuario.id },
+            data: updateData,
+          });
+        }
+      }
+
+      console.log('✅ Google OAuth - Usuario validado:', usuario.id);
+      done(null, usuario);
+    } catch (error) {
+      console.error('❌ Google OAuth - Error validando usuario:', error);
+      done(error, null);
+    }
   }
 }
 
