@@ -55,6 +55,9 @@ async function bootstrap() {
   console.log(`🚀 Servidor corriendo en el puerto ${port}`);
   console.log(`📝 API disponible en http://localhost:${port}/api`);
   console.log(`✅ Módulos cargados correctamente`);
+  console.log(`🔍 Prueba estas rutas:`);
+  console.log(`   - GET /api/auth/test (debería funcionar)`);
+  console.log(`   - GET /api/auth/google (OAuth)`);
 }
 
 bootstrap();

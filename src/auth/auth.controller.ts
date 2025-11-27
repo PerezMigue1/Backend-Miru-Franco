@@ -20,15 +20,23 @@ import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 export class AuthController {
   constructor(private readonly authService: AuthService) {
     console.log('✅ AuthController inicializado');
+    console.log('✅ Ruta /api/auth/google debería estar disponible');
   }
 
   @Get('google')
   @UseGuards(AuthGuard('google'))
-  async googleAuth(@Req() req) {
-    console.log('🔍 Google Auth endpoint llamado');
-    // Inicia la autenticación con Google - Passport redirige automáticamente
-    // Este código no debería ejecutarse normalmente
+  googleAuth(@Req() req) {
+    // Este método nunca debería ejecutarse porque Passport redirige automáticamente
+    // Pero lo dejamos aquí para que NestJS registre la ruta
+    console.log('🔍 Google Auth endpoint llamado - esto no debería ejecutarse');
     return { message: 'Redirigiendo a Google...' };
+  }
+  
+  // Ruta de prueba SIN guard para verificar que el controller funciona
+  @Get('test')
+  testAuth() {
+    console.log('✅ Ruta de prueba /api/auth/test funcionando');
+    return { message: 'Auth controller está funcionando correctamente', path: '/api/auth/test' };
   }
 
   @Get('google/callback')
