@@ -40,7 +40,6 @@ model Usuario {
   actualizadoEn         DateTime       @updatedAt
   activo                Boolean        @default(true)
 
-  @@index([email])
   @@index([activo])
   @@map("usuarios")
 }
