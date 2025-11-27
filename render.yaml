@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: backend-miru
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # Agregar estas variables en el dashboard de Render:
+      # - MONGODB_URI
+      # - JWT_SECRET
+      # - SENDGRID_API_KEY
+      # - SENDGRID_FROM_EMAIL
+      # - SENDGRID_FROM_NAME
+      # - GOOGLE_CLIENT_ID
+      # - GOOGLE_CLIENT_SECRET
+      # - BACKEND_URL
+      # - FRONTEND_URL
