@@ -8,7 +8,7 @@ async function bootstrap() {
   
   // Prefijo global para todas las rutas
   app.setGlobalPrefix('api', {
-    exclude: ['/salud', '/'],
+    exclude: ['/salud'],
   });
   
   // Configurar ruta de health check (excluida del prefijo global)
@@ -49,26 +49,6 @@ async function bootstrap() {
     }),
   );
 
-  // Ruta raíz (al final, después de todas las configuraciones)
-  // Solo responde si es exactamente '/' y no ha sido manejada por otra ruta
-  app.use((req, res, next) => {
-    const path = req.path || req.url || '';
-    // Solo responder si es exactamente la ruta raíz
-    if (path === '/' || path === '') {
-      return res.json({
-        message: 'Miru Franco Backend API',
-        version: '1.0.0',
-        status: 'running',
-        endpoints: {
-          health: '/salud',
-          api: '/api',
-          googleAuth: '/api/auth/google',
-        },
-      });
-    }
-    // Para cualquier otra ruta, pasar al siguiente middleware/controlador de NestJS
-    next();
-  });
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
