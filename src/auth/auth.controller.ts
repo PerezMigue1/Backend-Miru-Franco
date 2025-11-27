@@ -13,6 +13,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 
@@ -24,8 +25,8 @@ export class AuthController {
   }
 
   @Get('google')
-  @UseGuards(AuthGuard('google'))
-  googleAuth(@Req() req) {
+  @UseGuards(GoogleAuthGuard)
+  googleAuth() {
     // Este método nunca debería ejecutarse porque Passport redirige automáticamente
     // Pero lo dejamos aquí para que NestJS registre la ruta
     console.log('🔍 Google Auth endpoint llamado - esto no debería ejecutarse');
@@ -40,10 +41,12 @@ export class AuthController {
   }
 
   @Get('google/callback')
-  @UseGuards(AuthGuard('google'))
+  @UseGuards(GoogleAuthGuard)
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
+    console.log('🔍 Google OAuth callback recibido, usuario:', req.user?.email);
     const result = await this.authService.googleLogin(req.user);
     // Redirigir al frontend con una redirección HTTP real
+    console.log('🔍 Redirigiendo a:', result.redirect);
     res.redirect(result.redirect);
   }
 
