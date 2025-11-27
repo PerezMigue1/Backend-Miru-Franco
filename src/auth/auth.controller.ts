@@ -24,9 +24,11 @@ export class AuthController {
 
   @Get('google')
   @UseGuards(AuthGuard('google'))
-  async googleAuth() {
+  async googleAuth(@Req() req) {
     console.log('🔍 Google Auth endpoint llamado');
-    // Inicia la autenticación con Google
+    // Inicia la autenticación con Google - Passport redirige automáticamente
+    // Este código no debería ejecutarse normalmente
+    return { message: 'Redirigiendo a Google...' };
   }
 
   @Get('google/callback')
