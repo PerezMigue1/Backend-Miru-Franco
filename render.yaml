@@ -4,6 +4,7 @@ services:
     env: node
     buildCommand: npm install && npm run build
     startCommand: npm run start:prod
+    healthCheckPath: /api
     envVars:
       - key: NODE_ENV
         value: production
