@@ -53,8 +53,8 @@ async function bootstrap() {
   // Solo responde si es exactamente '/' y no ha sido manejada por otra ruta
   app.use((req, res, next) => {
     const path = req.path || req.url || '';
-    // Solo responder si es exactamente la ruta raíz
-    if (path === '/' || path === '') {
+    // Solo responder si es exactamente la ruta raíz, sin prefijo /api
+    if (path === '/' || path === '' || path === '/api') {
       return res.json({
         message: 'Miru Franco Backend API',
         version: '1.0.0',
@@ -62,6 +62,7 @@ async function bootstrap() {
         endpoints: {
           health: '/salud',
           api: '/api',
+          googleAuth: '/api/auth/google',
         },
       });
     }
