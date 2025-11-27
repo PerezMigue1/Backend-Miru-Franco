@@ -18,11 +18,14 @@ import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) {
+    console.log('✅ AuthController inicializado');
+  }
 
   @Get('google')
   @UseGuards(AuthGuard('google'))
   async googleAuth() {
+    console.log('🔍 Google Auth endpoint llamado');
     // Inicia la autenticación con Google
   }
 
