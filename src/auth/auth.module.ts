@@ -25,5 +25,9 @@ import { UsuariosModule } from '../usuarios/usuarios.module';
   providers: [AuthService, GoogleStrategy, JwtStrategy],
   exports: [AuthService],
 })
-export class AuthModule {}
+export class AuthModule {
+  constructor() {
+    console.log('✅ AuthModule inicializado');
+  }
+}
 
