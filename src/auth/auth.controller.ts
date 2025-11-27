@@ -43,11 +43,28 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(GoogleAuthGuard)
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
-    console.log('🔍 Google OAuth callback recibido, usuario:', req.user?.email);
-    const result = await this.authService.googleLogin(req.user);
-    // Redirigir al frontend con una redirección HTTP real
-    console.log('🔍 Redirigiendo a:', result.redirect);
-    res.redirect(result.redirect);
+    try {
+      console.log('🔍 Google OAuth callback recibido');
+      console.log('🔍 Usuario del request:', req.user ? { id: req.user.id, email: req.user.email } : 'NO HAY USUARIO');
+
+      if (!req.user) {
+        console.error('❌ Error: req.user es undefined en el callback');
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
+        return res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed&message=Usuario no autenticado`);
+      }
+
+      const result = await this.authService.googleLogin(req.user);
+      // Redirigir al frontend con una redirección HTTP real
+      console.log('🔍 Redirigiendo a:', result.redirect);
+      res.redirect(result.redirect);
+    } catch (error: any) {
+      console.error('❌ Error en googleAuthRedirect:', error);
+      console.error('❌ Stack:', error.stack);
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
+      res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed&message=${encodeURIComponent(error.message)}`);
+    }
   }
 
   @Post('verificar-correo')
