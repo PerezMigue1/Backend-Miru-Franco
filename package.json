@@ -14,7 +14,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "migrate:data": "ts-node scripts/migrate-mongodb-to-postgresql.ts"
   },
   "keywords": [
     "nestjs",

@@ -26,6 +26,14 @@ class DireccionDto {
 
   @IsString()
   @IsOptional()
+  ciudad?: string;
+
+  @IsString()
+  @IsOptional()
+  estado?: string;
+
+  @IsString()
+  @IsOptional()
   codigoPostal?: string;
 
   @IsString()
@@ -37,6 +45,18 @@ class PerfilCapilarDto {
   @IsString()
   @IsNotEmpty()
   tipoCabello: 'liso' | 'ondulado' | 'rizado';
+
+  @IsString()
+  @IsOptional()
+  colorNatural?: string;
+
+  @IsString()
+  @IsOptional()
+  colorActual?: string;
+
+  @IsString()
+  @IsOptional()
+  productosUsados?: string;
 
   @IsBoolean()
   @IsOptional()
