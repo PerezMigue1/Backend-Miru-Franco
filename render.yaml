@@ -3,7 +3,7 @@ services:
     name: backend-miru
     env: node
     buildCommand: npm install && npm run build
-    startCommand: cd /opt/render/project && npm run start:prod
+    startCommand: node dist/main.js
     healthCheckPath: /api
     envVars:
       - key: NODE_ENV
