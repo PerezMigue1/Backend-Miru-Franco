@@ -54,6 +54,7 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`🚀 Servidor corriendo en el puerto ${port}`);
   console.log(`📝 API disponible en http://localhost:${port}/api`);
+  console.log(`✅ Módulos cargados correctamente`);
 }
 
 bootstrap();
