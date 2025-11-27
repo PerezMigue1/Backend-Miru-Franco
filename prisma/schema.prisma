@@ -1,0 +1,46 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "mongodb"
+}
+
+enum TipoCabello {
+  liso
+  ondulado
+  rizado
+}
+
+model Usuario {
+  id                    String         @id @default(auto()) @map("_id") @db.ObjectId
+  nombre                String
+  email                 String         @unique @db.String
+  telefono              String?
+  password              String?
+  fechaNacimiento       DateTime?      @db.Date
+  preguntaSeguridad     Json?          // Embebido en MongoDB
+  direccion             Json?          // Embebido en MongoDB
+  perfilCapilar         Json?          // Embebido en MongoDB
+  googleId              String?        @unique
+  foto                  String?
+  aceptaAvisoPrivacidad Boolean        @default(false)
+  recibePromociones     Boolean        @default(false)
+  resetPasswordToken    String?
+  resetPasswordExpires  DateTime?      @db.Date
+  codigoOTP             String?
+  otpExpira             DateTime?      @db.Date
+  confirmado            Boolean        @default(false)
+  creadoEn              DateTime       @default(now())
+  actualizadoEn         DateTime       @updatedAt
+  activo                Boolean        @default(true)
+
+  @@index([email])
+  @@index([activo])
+  @@map("usuarios")
+}
+
