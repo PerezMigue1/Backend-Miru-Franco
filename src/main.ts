@@ -6,8 +6,19 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
+  // Configurar ruta de health check antes del prefijo global
+  app.use('/salud', (req, res) => {
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
+  });
+  
   // Prefijo global para todas las rutas
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', {
+    exclude: ['/salud'],
+  });
   
   // Versionado de API (opcional)
   app.enableVersioning({
