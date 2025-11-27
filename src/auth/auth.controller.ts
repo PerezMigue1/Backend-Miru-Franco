@@ -8,6 +8,8 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Version,
+  VERSION_NEUTRAL,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
@@ -17,7 +19,7 @@ import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 
-@Controller('auth')
+@Controller({ path: 'auth', version: VERSION_NEUTRAL })
 export class AuthController {
   constructor(private readonly authService: AuthService) {
     console.log('✅ AuthController inicializado');
