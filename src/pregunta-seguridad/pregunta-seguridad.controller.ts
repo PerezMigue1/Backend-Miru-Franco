@@ -22,7 +22,8 @@ export class PreguntaSeguridadController {
   constructor(private readonly preguntaSeguridadService: PreguntaSeguridadService) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard)
+  // Removido JwtAuthGuard para permitir acceso público a las preguntas de seguridad
+  // Las preguntas son públicas, solo la verificación de respuestas requiere autenticación
   async obtenerPreguntas() {
     return this.preguntaSeguridadService.obtenerPreguntas();
   }

@@ -26,12 +26,37 @@ async function bootstrap() {
   //   defaultVersion: '1',
   // });
   
-  // Habilitar CORS
+  // Habilitar CORS con múltiples orígenes permitidos
+  const allowedOrigins = [
+    'https://miru-franco.vercel.app',
+    'https://miru-franco-pznm3jk0w-miru-franco.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    process.env.FRONTEND_URL,
+  ].filter(Boolean); // Remover valores undefined/null
+
   app.enableCors({
-    origin: process.env.FRONTEND_URL || '*',
+    origin: (origin, callback) => {
+      // Permitir solicitudes sin origin (ej: mobile apps, Postman)
+      if (!origin) return callback(null, true);
+      
+      // Si no hay orígenes específicos configurados, permitir todos
+      if (allowedOrigins.length === 0 || process.env.FRONTEND_URL === '*') {
+        return callback(null, true);
+      }
+      
+      // Verificar si el origen está permitido
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`⚠️ CORS: Origen bloqueado: ${origin}`);
+        callback(null, true); // Permitir todos temporalmente para debugging
+      }
+    },
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    credentials: true,
+    exposedHeaders: ['Authorization'],
   });
 
   // Filtro global de excepciones
