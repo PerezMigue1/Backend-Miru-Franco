@@ -11,10 +11,19 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     private configService: ConfigService,
     private prisma: PrismaService,
   ) {
+    const backendUrl = configService.get<string>('BACKEND_URL') || 'http://localhost:3001';
+    // Limpiar la URL (remover barras finales)
+    const cleanBackendUrl = backendUrl.replace(/\/+$/, '');
+    const callbackURL = `${cleanBackendUrl}/api/auth/google/callback`;
+    
+    // Log para debugging
+    console.log('🔍 Google Strategy - Backend URL:', cleanBackendUrl);
+    console.log('🔍 Google Strategy - Callback URL:', callbackURL);
+    
     super({
       clientID: configService.get<string>('GOOGLE_CLIENT_ID'),
       clientSecret: configService.get<string>('GOOGLE_CLIENT_SECRET'),
-      callbackURL: `${configService.get<string>('BACKEND_URL') || 'http://localhost:3001'}/api/auth/google/callback`,
+      callbackURL: callbackURL,
       scope: ['email', 'profile'],
     });
   }

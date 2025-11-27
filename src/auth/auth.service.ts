@@ -21,9 +21,16 @@ export class AuthService {
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
     
+    // Limpiar la URL (remover barras finales)
+    const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
+    
+    // Log para debugging (remover en producción si es necesario)
+    console.log('🔍 Google OAuth - Frontend URL:', cleanFrontendUrl);
+    console.log('🔍 Google OAuth - Redirect URL:', `${cleanFrontendUrl}/auth/callback?token=${token}&success=true`);
+    
     // Redirigir al frontend con el token
     return { 
-      redirect: `${frontendUrl}/auth/callback?token=${token}&success=true`,
+      redirect: `${cleanFrontendUrl}/auth/callback?token=${token}&success=true`,
       token,
       user,
     };
