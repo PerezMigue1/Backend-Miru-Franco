@@ -4,11 +4,13 @@ import {
   Post,
   Body,
   Req,
+  Res,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -26,10 +28,10 @@ export class AuthController {
 
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  async googleAuthRedirect(@Req() req) {
+  async googleAuthRedirect(@Req() req, @Res() res: Response) {
     const result = await this.authService.googleLogin(req.user);
-    // Redirigir al frontend
-    return { url: result.redirect };
+    // Redirigir al frontend con una redirección HTTP real
+    res.redirect(result.redirect);
   }
 
   @Post('verificar-correo')
