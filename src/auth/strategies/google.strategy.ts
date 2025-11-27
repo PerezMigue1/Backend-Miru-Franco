@@ -55,7 +55,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       });
 
       if (!usuario) {
-        // Crear nuevo usuario con Google
+        // Crear nuevo usuario con Google (sin relaciones requeridas)
         usuario = await this.prisma.usuario.create({
           data: {
             nombre: displayName,
@@ -65,9 +65,6 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
             telefono: null,
             password: null,
             fechaNacimiento: null,
-            preguntaSeguridad: null as any,
-            direccion: null as any,
-            perfilCapilar: null as any,
             aceptaAvisoPrivacidad: true,
             recibePromociones: false,
             confirmado: true,

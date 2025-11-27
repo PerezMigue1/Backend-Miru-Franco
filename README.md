@@ -11,7 +11,7 @@ API REST completa para gestión de usuarios del sistema Miru Franco Beauty Saló
 - **Framework**: NestJS
 - **Lenguaje**: TypeScript
 - **ORM**: Prisma
-- **Base de Datos**: MongoDB
+- **Base de Datos**: PostgreSQL (Neon)
 - **Autenticación**: JWT, Passport.js (Google OAuth)
 - **Email**: SendGrid
 - **Deployment**: Render
@@ -21,7 +21,7 @@ API REST completa para gestión de usuarios del sistema Miru Franco Beauty Saló
 ### Requisitos Previos
 
 - Node.js (v18 o superior)
-- MongoDB (Atlas o local)
+- PostgreSQL (Neon o local)
 - Cuenta en SendGrid para envío de emails
 - (Opcional) Cuenta de Google Cloud para OAuth
 
@@ -43,8 +43,8 @@ npm install
 Crea un archivo `.env` en la raíz del proyecto:
 
 ```env
-# MongoDB
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database_name?retryWrites=true&w=majority
+# PostgreSQL (Neon)
+DATABASE_URL=postgresql://username:password@host/database?sslmode=require
 
 # JWT
 JWT_SECRET=tu_secreto_jwt_aqui
@@ -105,7 +105,7 @@ npm run start:prod
    ```
    NODE_ENV=production
    PORT=10000
-   MONGODB_URI=tu_connection_string
+   DATABASE_URL=tu_connection_string_postgresql
    JWT_SECRET=tu_secreto_jwt
    SENDGRID_API_KEY=tu_api_key
    SENDGRID_FROM_EMAIL=tu_email

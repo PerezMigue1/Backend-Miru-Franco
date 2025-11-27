@@ -8,31 +8,19 @@ export class PreguntaSeguridadService {
 
   async obtenerPreguntas() {
     try {
-      // Consultar todos los usuarios que tengan preguntas de seguridad
-      const usuarios = await this.prisma.usuario.findMany({
-        where: {
-          preguntaSeguridad: {
-            not: null,
-          },
-        },
+      // Consultar todas las preguntas de seguridad usando la relación
+      const preguntasSeguridad = await this.prisma.preguntaSeguridad.findMany({
         select: {
-          preguntaSeguridad: true,
+          id: true,
+          pregunta: true,
         },
+        distinct: ['pregunta'],
       });
 
-      // Extraer preguntas únicas de los usuarios
-      const preguntasSet = new Set<string>();
-      usuarios.forEach((usuario) => {
-        const preguntaSeguridad = usuario.preguntaSeguridad as any;
-        if (preguntaSeguridad && preguntaSeguridad.pregunta) {
-          preguntasSet.add(preguntaSeguridad.pregunta);
-        }
-      });
-
-      // Convertir el Set a un array de objetos
-      const preguntas = Array.from(preguntasSet).map((pregunta, index) => ({
-        id: `pregunta-${index + 1}`,
-        pregunta: pregunta,
+      // Convertir a formato esperado por el frontend
+      const preguntas = preguntasSeguridad.map((ps, index) => ({
+        id: ps.id || `pregunta-${index + 1}`,
+        pregunta: ps.pregunta,
       }));
 
       return {
@@ -85,19 +73,19 @@ export class PreguntaSeguridadService {
   async obtenerPreguntaPorEmail(email: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
+      include: { preguntaSeguridad: true },
     });
 
-    if (!usuario || !usuario.preguntaSeguridad || !(usuario.preguntaSeguridad as any).pregunta) {
+    if (!usuario || !usuario.preguntaSeguridad || !usuario.preguntaSeguridad.pregunta) {
       throw new NotFoundException('No existe pregunta para este email');
     }
 
-    const preguntaSeguridad = usuario.preguntaSeguridad as any;
     return {
       success: true,
       data: [
         {
           _id: usuario.id,
-          pregunta: preguntaSeguridad.pregunta,
+          pregunta: usuario.preguntaSeguridad.pregunta,
         },
       ],
     };
@@ -106,13 +94,14 @@ export class PreguntaSeguridadService {
   async verificarRespuesta(email: string, answers: Record<string, string>) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
+      include: { preguntaSeguridad: true },
     });
 
-    if (!usuario || !usuario.preguntaSeguridad || !(usuario.preguntaSeguridad as any).pregunta || !(usuario.preguntaSeguridad as any).respuesta) {
+    if (!usuario || !usuario.preguntaSeguridad || !usuario.preguntaSeguridad.pregunta || !usuario.preguntaSeguridad.respuesta) {
       throw new NotFoundException('No existe pregunta para este email');
     }
 
-    const preguntaSeguridad = usuario.preguntaSeguridad as any;
+    const preguntaSeguridad = usuario.preguntaSeguridad;
     const keys = Object.keys(answers);
     
     if (keys.length === 0) {

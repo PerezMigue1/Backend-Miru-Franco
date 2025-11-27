@@ -7,8 +7,8 @@ generator client {
 }
 
 datasource db {
-  provider = "mongodb"
-  url      = env("MONGODB_URI")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 enum TipoCabello {
@@ -18,29 +18,69 @@ enum TipoCabello {
 }
 
 model Usuario {
-  id                    String         @id @default(auto()) @map("_id") @db.ObjectId
+  id                    String         @id @default(uuid())
   nombre                String
-  email                 String         @unique @db.String
+  email                 String         @unique
   telefono              String?
   password              String?
-  fechaNacimiento       DateTime?      @db.Date
-  preguntaSeguridad     Json?          // Embebido en MongoDB
-  direccion             Json?          // Embebido en MongoDB
-  perfilCapilar         Json?          // Embebido en MongoDB
+  fechaNacimiento       DateTime?
   googleId              String?        @unique
   foto                  String?
   aceptaAvisoPrivacidad Boolean        @default(false)
   recibePromociones     Boolean        @default(false)
   resetPasswordToken    String?
-  resetPasswordExpires  DateTime?      @db.Date
+  resetPasswordExpires  DateTime?
   codigoOTP             String?
-  otpExpira             DateTime?      @db.Date
+  otpExpira             DateTime?
   confirmado            Boolean        @default(false)
-  creadoEn              DateTime       @default(now())
-  actualizadoEn         DateTime       @updatedAt
+  creadoEn              DateTime       @default(now()) @map("creado_en")
+  actualizadoEn         DateTime       @updatedAt @map("actualizado_en")
   activo                Boolean        @default(true)
 
+  // Relaciones
+  preguntaSeguridad     PreguntaSeguridad?
+  direccion             Direccion?
+  perfilCapilar         PerfilCapilar?
+
   @@index([activo])
+  @@index([email])
   @@map("usuarios")
+}
+
+model PreguntaSeguridad {
+  id        String   @id @default(uuid())
+  usuarioId String   @unique
+  pregunta  String
+  respuesta String   // Hasheada con bcrypt
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("preguntas_seguridad")
+}
+
+model Direccion {
+  id          String   @id @default(uuid())
+  usuarioId   String   @unique
+  calle       String?
+  numero      String?
+  colonia     String?
+  ciudad      String?
+  estado      String?
+  codigoPostal String? @map("codigo_postal")
+  usuario     Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("direcciones")
+}
+
+model PerfilCapilar {
+  id              String   @id @default(uuid())
+  usuarioId       String   @unique
+  tipoCabello     TipoCabello?
+  colorNatural    String?  @map("color_natural")
+  colorActual     String?  @map("color_actual")
+  productosUsados String?  @map("productos_usados")
+  alergias        String?
+  usuario         Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("perfiles_capilares")
 }
 

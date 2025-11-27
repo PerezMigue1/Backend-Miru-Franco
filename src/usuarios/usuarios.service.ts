@@ -39,7 +39,7 @@ export class UsuariosService {
     const codigoOTP = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
 
-    // Crear nuevo usuario (usando Json para campos embebidos en MongoDB)
+    // Crear nuevo usuario con relaciones (PostgreSQL)
     const nuevoUsuario = await this.prisma.usuario.create({
       data: {
         nombre,
@@ -48,17 +48,45 @@ export class UsuariosService {
         password: hashedPassword,
         fechaNacimiento: new Date(fechaNacimiento),
         preguntaSeguridad: {
-          pregunta: preguntaSeguridad.pregunta.trim(),
-          respuesta: respuestaHasheada,
-        } as any,
-        direccion: direccion as any,
-        perfilCapilar: perfilCapilar as any,
+          create: {
+            pregunta: preguntaSeguridad.pregunta.trim(),
+            respuesta: respuestaHasheada,
+          },
+        },
+        direccion: direccion
+          ? {
+              create: {
+                calle: direccion.calle,
+                numero: direccion.numero,
+                colonia: direccion.colonia,
+                ciudad: direccion.ciudad,
+                estado: direccion.estado,
+                codigoPostal: direccion.codigoPostal,
+              },
+            }
+          : undefined,
+        perfilCapilar: perfilCapilar
+          ? {
+              create: {
+                tipoCabello: perfilCapilar.tipoCabello as any,
+                colorNatural: perfilCapilar.colorNatural,
+                colorActual: perfilCapilar.colorActual,
+                productosUsados: perfilCapilar.productosUsados,
+                alergias: perfilCapilar.alergias,
+              },
+            }
+          : undefined,
         aceptaAvisoPrivacidad,
         recibePromociones: recibePromociones || false,
         codigoOTP,
         otpExpira,
         confirmado: false,
         activo: true,
+      },
+      include: {
+        preguntaSeguridad: true,
+        direccion: true,
+        perfilCapilar: true,
       },
     });
 
@@ -331,6 +359,7 @@ export class UsuariosService {
   async obtenerPreguntaSeguridad(email: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
+      include: { preguntaSeguridad: true },
     });
 
     if (!usuario) {
@@ -341,32 +370,34 @@ export class UsuariosService {
       throw new ForbiddenException('Usuario inactivo');
     }
 
-    const preguntaSeguridad = usuario.preguntaSeguridad as any;
-    if (!preguntaSeguridad || !preguntaSeguridad.pregunta) {
+    if (!usuario.preguntaSeguridad || !usuario.preguntaSeguridad.pregunta) {
       throw new NotFoundException('No se encontró pregunta de seguridad para este usuario');
     }
 
     return {
       success: true,
-      pregunta: preguntaSeguridad.pregunta,
+      pregunta: usuario.preguntaSeguridad.pregunta,
     };
   }
 
   async validarRespuestaSeguridad(email: string, respuesta: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
+      include: { preguntaSeguridad: true },
     });
 
     if (!usuario) {
       throw new NotFoundException('Correo no encontrado');
     }
 
-    const preguntaSeguridad = usuario.preguntaSeguridad as any;
-    if (!preguntaSeguridad || !preguntaSeguridad.respuesta) {
+    if (!usuario.preguntaSeguridad || !usuario.preguntaSeguridad.respuesta) {
       throw new NotFoundException('No se encontró respuesta de seguridad');
     }
 
-    const respuestaValida = await bcrypt.compare(respuesta.trim(), preguntaSeguridad.respuesta);
+    const respuestaValida = await bcrypt.compare(
+      respuesta.trim(),
+      usuario.preguntaSeguridad.respuesta,
+    );
     if (!respuestaValida) {
       throw new UnauthorizedException('Respuesta incorrecta');
     }
@@ -462,23 +493,16 @@ export class UsuariosService {
   async obtenerPerfilUsuario(id: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { id },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        telefono: true,
-        fechaNacimiento: true,
-        preguntaSeguridad: true,
+      include: {
+        preguntaSeguridad: {
+          select: {
+            id: true,
+            pregunta: true,
+            // No incluir respuesta por seguridad
+          },
+        },
         direccion: true,
         perfilCapilar: true,
-        googleId: true,
-        foto: true,
-        aceptaAvisoPrivacidad: true,
-        recibePromociones: true,
-        confirmado: true,
-        creadoEn: true,
-        actualizadoEn: true,
-        activo: true,
       },
     });
 
@@ -486,15 +510,9 @@ export class UsuariosService {
       throw new NotFoundException('Usuario no encontrado');
     }
 
-    // Ocultar respuesta de preguntaSeguridad
-    const usuarioObj = usuario as any;
-    if (usuarioObj.preguntaSeguridad && usuarioObj.preguntaSeguridad.respuesta) {
-      delete usuarioObj.preguntaSeguridad.respuesta;
-    }
-
     return {
       success: true,
-      data: usuarioObj,
+      data: usuario,
     };
   }
 

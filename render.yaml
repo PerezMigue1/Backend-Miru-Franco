@@ -11,7 +11,7 @@ services:
       - key: PORT
         value: 10000
       # Agregar estas variables en el dashboard de Render:
-      # - MONGODB_URI
+      # - DATABASE_URL (PostgreSQL/Neon connection string)
       # - JWT_SECRET
       # - SENDGRID_API_KEY
       # - SENDGRID_FROM_EMAIL
