@@ -2,6 +2,7 @@ services:
   - type: web
     name: backend-miru
     env: node
+    rootDir: .
     buildCommand: npm install && npm run build
     startCommand: npm run start:prod
     healthCheckPath: /api
