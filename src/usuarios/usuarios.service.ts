@@ -352,7 +352,12 @@ export class UsuariosService {
   async obtenerPreguntaSeguridad(email: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
-      include: { preguntaSeguridad: true },
+      select: {
+        id: true,
+        email: true,
+        activo: true,
+        preguntaSeguridad: true,
+      },
     });
 
     if (!usuario) {
