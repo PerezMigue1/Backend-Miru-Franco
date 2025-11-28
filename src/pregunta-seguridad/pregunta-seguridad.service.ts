@@ -105,6 +105,8 @@ export class PreguntaSeguridadService {
   }
 
   async obtenerPreguntaPorEmail(email: string) {
+    console.log('🔍 Obteniendo pregunta por email:', email);
+    
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
       select: {
@@ -113,9 +115,17 @@ export class PreguntaSeguridadService {
       },
     });
 
-    if (!usuario || !usuario.preguntaSeguridad) {
+    if (!usuario) {
+      console.error('❌ Usuario no encontrado para email:', email);
       throw new NotFoundException('No existe pregunta para este email');
     }
+
+    if (!usuario.preguntaSeguridad) {
+      console.error('❌ Usuario sin pregunta de seguridad:', email);
+      throw new NotFoundException('No existe pregunta para este email');
+    }
+
+    console.log('✅ Pregunta de seguridad encontrada:', usuario.preguntaSeguridad);
 
     return {
       success: true,
