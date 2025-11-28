@@ -40,6 +40,9 @@ export class UsuariosService {
     const otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
 
     // Crear nuevo usuario con campos embebidos
+    const preguntaGuardada = preguntaSeguridad.pregunta.trim();
+    console.log('💾 Guardando pregunta de seguridad para usuario:', email, 'Pregunta:', preguntaGuardada);
+    
     const nuevoUsuario = await this.prisma.usuario.create({
       data: {
         nombre,
@@ -48,7 +51,7 @@ export class UsuariosService {
         password: hashedPassword,
         fechaNacimiento: new Date(fechaNacimiento),
         // Pregunta de seguridad embebida
-        preguntaSeguridad: preguntaSeguridad.pregunta.trim(),
+        preguntaSeguridad: preguntaGuardada,
         respuestaSeguridad: respuestaHasheada,
         // Campos de dirección embebidos
         calle: direccion?.calle,
@@ -72,7 +75,8 @@ export class UsuariosService {
       },
     });
 
-    console.log('Usuario registrado:', email, 'OTP:', codigoOTP, 'Expira en 2 minutos');
+    console.log('✅ Usuario registrado:', email, 'OTP:', codigoOTP, 'Expira en 2 minutos');
+    console.log('✅ Pregunta de seguridad guardada:', nuevoUsuario.preguntaSeguridad);
 
     // Enviar correo con el código OTP
     try {

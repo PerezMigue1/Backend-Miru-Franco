@@ -55,7 +55,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       });
 
       if (!usuario) {
-        // Crear nuevo usuario con Google (sin relaciones requeridas)
+        // Crear nuevo usuario con Google (sin pregunta de seguridad)
+        console.log('🔍 Creando nuevo usuario de Google sin pregunta de seguridad:', email);
         usuario = await this.prisma.usuario.create({
           data: {
             nombre: displayName,
@@ -65,12 +66,15 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
             telefono: null,
             password: null,
             fechaNacimiento: null,
+            preguntaSeguridad: null, // Usuarios de Google NO tienen pregunta
+            respuestaSeguridad: null, // Usuarios de Google NO tienen respuesta
             aceptaAvisoPrivacidad: true,
             recibePromociones: false,
             confirmado: true,
             activo: true,
           },
         });
+        console.log('✅ Usuario de Google creado sin pregunta de seguridad:', usuario.id);
       } else {
         // Actualizar Google ID y foto si no existen
         const updateData: any = {};
