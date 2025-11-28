@@ -111,6 +111,7 @@ export class PreguntaSeguridadService {
       where: { email: email.toLowerCase() },
       select: {
         id: true,
+        googleId: true,
         preguntaSeguridad: true,
       },
     });
@@ -120,9 +121,15 @@ export class PreguntaSeguridadService {
       throw new NotFoundException('No existe pregunta para este email');
     }
 
+    // Si es un usuario de Google y no tiene pregunta de seguridad
+    if (usuario.googleId && !usuario.preguntaSeguridad) {
+      console.log('⚠️ Usuario de Google sin pregunta de seguridad:', email);
+      throw new NotFoundException('Este correo está asociado a una cuenta de Google. No se puede usar recuperación de contraseña por pregunta de seguridad.');
+    }
+
     if (!usuario.preguntaSeguridad) {
       console.error('❌ Usuario sin pregunta de seguridad:', email);
-      throw new NotFoundException('No existe pregunta para este email');
+      throw new NotFoundException('No existe pregunta para este email. Este correo puede estar asociado a una cuenta de Google.');
     }
 
     console.log('✅ Pregunta de seguridad encontrada:', usuario.preguntaSeguridad);

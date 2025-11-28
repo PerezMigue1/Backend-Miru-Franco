@@ -358,6 +358,7 @@ export class UsuariosService {
         id: true,
         email: true,
         activo: true,
+        googleId: true,
         preguntaSeguridad: true,
       },
     });
@@ -372,9 +373,15 @@ export class UsuariosService {
       throw new ForbiddenException('Usuario inactivo');
     }
 
+    // Si es un usuario de Google y no tiene pregunta de seguridad
+    if (usuario.googleId && !usuario.preguntaSeguridad) {
+      console.log('⚠️ Usuario de Google sin pregunta de seguridad:', email);
+      throw new NotFoundException('Este correo está asociado a una cuenta de Google. No se puede usar recuperación de contraseña por pregunta de seguridad. Usa "Continuar con Google" para iniciar sesión.');
+    }
+
     if (!usuario.preguntaSeguridad) {
       console.error('❌ Usuario sin pregunta de seguridad:', email);
-      throw new NotFoundException('No se encontró pregunta de seguridad para este usuario');
+      throw new NotFoundException('No se encontró pregunta de seguridad para este usuario. Este correo puede estar asociado a una cuenta de Google.');
     }
 
     console.log('✅ Pregunta de seguridad encontrada:', usuario.preguntaSeguridad);
