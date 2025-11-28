@@ -91,8 +91,11 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
 
       console.log('✅ Google OAuth - Usuario validado:', usuario.id);
       done(null, usuario);
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Google OAuth - Error validando usuario:', error);
+      console.error('❌ Error stack:', error.stack);
+      console.error('❌ Error code:', error.code);
+      console.error('❌ Error meta:', error.meta);
       done(error, null);
     }
   }

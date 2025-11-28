@@ -38,6 +38,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
     };
 
     console.error('Error:', exception);
+    if (exception instanceof Error) {
+      console.error('Error message:', exception.message);
+      console.error('Error stack:', exception.stack);
+    }
 
     response.status(status).json(errorResponse);
   }

@@ -49,6 +49,11 @@ export class AuthController {
 
       if (!req.user) {
         console.error('❌ Error: req.user es undefined en el callback');
+        console.error('❌ Request completo:', {
+          url: req.url,
+          method: req.method,
+          headers: req.headers,
+        });
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
         return res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed&message=Usuario no autenticado`);
