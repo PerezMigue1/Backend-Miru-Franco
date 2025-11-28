@@ -7,33 +7,67 @@ export class PreguntaSeguridadService {
   constructor(private prisma: PrismaService) {}
 
   async obtenerPreguntas() {
+    // Preguntas predefinidas hardcodeadas (fallback si la base de datos falla)
+    const preguntasPredefinidas = [
+      { id: 'pregunta-1', pregunta: '¿Cuál es el nombre de tu mascota favorita?' },
+      { id: 'pregunta-2', pregunta: '¿En qué ciudad naciste?' },
+      { id: 'pregunta-3', pregunta: '¿Cuál es el nombre de tu mejor amigo de la infancia?' },
+      { id: 'pregunta-4', pregunta: '¿Cuál es el nombre de tu primera escuela?' },
+      { id: 'pregunta-5', pregunta: '¿Cuál es el apellido de soltera de tu madre?' },
+      { id: 'pregunta-6', pregunta: '¿Cuál es tu comida favorita?' },
+      { id: 'pregunta-7', pregunta: '¿Cuál es el nombre de tu película favorita?' },
+      { id: 'pregunta-8', pregunta: '¿En qué calle creciste?' },
+    ];
+
     try {
-      // Consultar todas las preguntas de seguridad usando la relación
-      const preguntasSeguridad = await this.prisma.preguntaSeguridad.findMany({
+      // Consultar todas las preguntas DISPONIBLES (preguntas predefinidas, no las de usuarios)
+      const preguntasDisponibles = await this.prisma.preguntaDisponible.findMany({
+        where: {
+          activa: true,
+        },
         select: {
           id: true,
           pregunta: true,
         },
-        distinct: ['pregunta'],
+        orderBy: {
+          pregunta: 'asc',
+        },
       });
 
-      // Convertir a formato esperado por el frontend
-      const preguntas = preguntasSeguridad.map((ps, index) => ({
-        id: ps.id || `pregunta-${index + 1}`,
-        pregunta: ps.pregunta,
-      }));
+      // Si hay preguntas en la base de datos, usarlas
+      if (preguntasDisponibles.length > 0) {
+        const preguntas = preguntasDisponibles.map((p) => ({
+          id: p.id,
+          pregunta: p.pregunta,
+        }));
 
+        return {
+          success: true,
+          message: 'Preguntas de seguridad disponibles',
+          data: preguntas,
+          count: preguntas.length,
+        };
+      }
+
+      // Si no hay preguntas en la base de datos, devolver preguntas predefinidas hardcodeadas
+      console.log('⚠️ No hay preguntas en la base de datos, usando preguntas hardcodeadas');
       return {
         success: true,
-        message: preguntas.length > 0 
-          ? 'Preguntas de seguridad disponibles' 
-          : 'No hay preguntas de seguridad disponibles en la base de datos',
-        data: preguntas,
-        count: preguntas.length,
+        message: 'Preguntas de seguridad disponibles',
+        data: preguntasPredefinidas,
+        count: preguntasPredefinidas.length,
       };
-    } catch (error) {
-      console.error('Error obteniendo preguntas de seguridad:', error);
-      throw new NotFoundException('Error al obtener las preguntas de seguridad');
+    } catch (error: any) {
+      // Si hay error (tabla no existe, Prisma no regenerado, etc.), devolver preguntas hardcodeadas
+      console.error('⚠️ Error obteniendo preguntas de seguridad de la BD:', error.message);
+      console.log('✅ Usando preguntas predefinidas hardcodeadas como fallback');
+      
+      return {
+        success: true,
+        message: 'Preguntas de seguridad disponibles',
+        data: preguntasPredefinidas,
+        count: preguntasPredefinidas.length,
+      };
     }
   }
 
@@ -73,10 +107,13 @@ export class PreguntaSeguridadService {
   async obtenerPreguntaPorEmail(email: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
-      include: { preguntaSeguridad: true },
+      select: {
+        id: true,
+        preguntaSeguridad: true,
+      },
     });
 
-    if (!usuario || !usuario.preguntaSeguridad || !usuario.preguntaSeguridad.pregunta) {
+    if (!usuario || !usuario.preguntaSeguridad) {
       throw new NotFoundException('No existe pregunta para este email');
     }
 
@@ -85,7 +122,7 @@ export class PreguntaSeguridadService {
       data: [
         {
           _id: usuario.id,
-          pregunta: usuario.preguntaSeguridad.pregunta,
+          pregunta: usuario.preguntaSeguridad,
         },
       ],
     };
@@ -94,14 +131,17 @@ export class PreguntaSeguridadService {
   async verificarRespuesta(email: string, answers: Record<string, string>) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
-      include: { preguntaSeguridad: true },
+      select: {
+        id: true,
+        preguntaSeguridad: true,
+        respuestaSeguridad: true,
+      },
     });
 
-    if (!usuario || !usuario.preguntaSeguridad || !usuario.preguntaSeguridad.pregunta || !usuario.preguntaSeguridad.respuesta) {
+    if (!usuario || !usuario.preguntaSeguridad || !usuario.respuestaSeguridad) {
       throw new NotFoundException('No existe pregunta para este email');
     }
 
-    const preguntaSeguridad = usuario.preguntaSeguridad;
     const keys = Object.keys(answers);
     
     if (keys.length === 0) {
@@ -115,11 +155,11 @@ export class PreguntaSeguridadService {
       throw new BadRequestException('Respuesta vacía');
     }
 
-    if (preguntaTexto !== preguntaSeguridad.pregunta) {
+    if (preguntaTexto !== usuario.preguntaSeguridad) {
       throw new BadRequestException('Pregunta no coincide');
     }
 
-    const ok = await bcrypt.compare(respuestaPlano, preguntaSeguridad.respuesta);
+    const ok = await bcrypt.compare(respuestaPlano, usuario.respuestaSeguridad);
     if (!ok) {
       throw new BadRequestException('Respuesta incorrecta');
     }

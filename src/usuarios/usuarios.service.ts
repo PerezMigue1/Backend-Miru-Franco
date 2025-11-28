@@ -39,7 +39,7 @@ export class UsuariosService {
     const codigoOTP = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
 
-    // Crear nuevo usuario con relaciones (PostgreSQL)
+    // Crear nuevo usuario con campos embebidos
     const nuevoUsuario = await this.prisma.usuario.create({
       data: {
         nombre,
@@ -47,46 +47,28 @@ export class UsuariosService {
         telefono,
         password: hashedPassword,
         fechaNacimiento: new Date(fechaNacimiento),
-        preguntaSeguridad: {
-          create: {
-            pregunta: preguntaSeguridad.pregunta.trim(),
-            respuesta: respuestaHasheada,
-          },
-        },
-        direccion: direccion
-          ? {
-              create: {
-                calle: direccion.calle,
-                numero: direccion.numero,
-                colonia: direccion.colonia,
-                ciudad: direccion.ciudad,
-                estado: direccion.estado,
-                codigoPostal: direccion.codigoPostal,
-              },
-            }
-          : undefined,
-        perfilCapilar: perfilCapilar
-          ? {
-              create: {
-                tipoCabello: perfilCapilar.tipoCabello as any,
-                colorNatural: perfilCapilar.colorNatural,
-                colorActual: perfilCapilar.colorActual,
-                productosUsados: perfilCapilar.productosUsados,
-                alergias: perfilCapilar.alergias,
-              },
-            }
-          : undefined,
+        // Pregunta de seguridad embebida
+        preguntaSeguridad: preguntaSeguridad.pregunta.trim(),
+        respuestaSeguridad: respuestaHasheada,
+        // Campos de dirección embebidos
+        calle: direccion?.calle,
+        numero: direccion?.numero,
+        colonia: direccion?.colonia,
+        ciudad: direccion?.ciudad,
+        estado: direccion?.estado,
+        codigoPostal: direccion?.codigoPostal,
+        // Campos de perfil capilar embebidos
+        tipoCabello: perfilCapilar?.tipoCabello as any,
+        colorNatural: perfilCapilar?.colorNatural,
+        colorActual: perfilCapilar?.colorActual,
+        productosUsados: perfilCapilar?.productosUsados,
+        alergias: perfilCapilar?.alergias,
         aceptaAvisoPrivacidad,
         recibePromociones: recibePromociones || false,
         codigoOTP,
         otpExpira,
         confirmado: false,
         activo: true,
-      },
-      include: {
-        preguntaSeguridad: true,
-        direccion: true,
-        perfilCapilar: true,
       },
     });
 
@@ -253,8 +235,19 @@ export class UsuariosService {
         telefono: true,
         fechaNacimiento: true,
         preguntaSeguridad: true,
-        direccion: true,
-        perfilCapilar: true,
+        // Campos de dirección embebidos
+        calle: true,
+        numero: true,
+        colonia: true,
+        ciudad: true,
+        estado: true,
+        codigoPostal: true,
+        // Campos de perfil capilar embebidos
+        tipoCabello: true,
+        colorNatural: true,
+        colorActual: true,
+        productosUsados: true,
+        alergias: true,
         googleId: true,
         foto: true,
         aceptaAvisoPrivacidad: true,
@@ -266,19 +259,12 @@ export class UsuariosService {
       },
     });
 
-    // Ocultar respuesta de preguntaSeguridad
-    const usuariosSinRespuesta = usuarios.map(usuario => {
-      const usuarioObj = usuario as any;
-      if (usuarioObj.preguntaSeguridad && usuarioObj.preguntaSeguridad.respuesta) {
-        delete usuarioObj.preguntaSeguridad.respuesta;
-      }
-      return usuarioObj;
-    });
+    // Las respuestas ya no se incluyen en el select, no hay nada que ocultar
 
     return {
       success: true,
-      count: usuariosSinRespuesta.length,
-      data: usuariosSinRespuesta,
+      count: usuarios.length,
+      data: usuarios,
     };
   }
 
@@ -292,8 +278,19 @@ export class UsuariosService {
         telefono: true,
         fechaNacimiento: true,
         preguntaSeguridad: true,
-        direccion: true,
-        perfilCapilar: true,
+        // Campos de dirección embebidos
+        calle: true,
+        numero: true,
+        colonia: true,
+        ciudad: true,
+        estado: true,
+        codigoPostal: true,
+        // Campos de perfil capilar embebidos
+        tipoCabello: true,
+        colorNatural: true,
+        colorActual: true,
+        productosUsados: true,
+        alergias: true,
         googleId: true,
         foto: true,
         aceptaAvisoPrivacidad: true,
@@ -309,15 +306,11 @@ export class UsuariosService {
       throw new NotFoundException('Usuario no encontrado');
     }
 
-    // Ocultar respuesta de preguntaSeguridad
-    const usuarioObj = usuario as any;
-    if (usuarioObj.preguntaSeguridad && usuarioObj.preguntaSeguridad.respuesta) {
-      delete usuarioObj.preguntaSeguridad.respuesta;
-    }
+    // Las respuestas ya no se incluyen en el select, no hay nada que ocultar
 
     return {
       success: true,
-      data: usuarioObj,
+      data: usuario,
     };
   }
 
@@ -370,33 +363,37 @@ export class UsuariosService {
       throw new ForbiddenException('Usuario inactivo');
     }
 
-    if (!usuario.preguntaSeguridad || !usuario.preguntaSeguridad.pregunta) {
+    if (!usuario.preguntaSeguridad) {
       throw new NotFoundException('No se encontró pregunta de seguridad para este usuario');
     }
 
     return {
       success: true,
-      pregunta: usuario.preguntaSeguridad.pregunta,
+      pregunta: usuario.preguntaSeguridad,
     };
   }
 
   async validarRespuestaSeguridad(email: string, respuesta: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
-      include: { preguntaSeguridad: true },
+      select: {
+        id: true,
+        email: true,
+        respuestaSeguridad: true,
+      },
     });
 
     if (!usuario) {
       throw new NotFoundException('Correo no encontrado');
     }
 
-    if (!usuario.preguntaSeguridad || !usuario.preguntaSeguridad.respuesta) {
+    if (!usuario.respuestaSeguridad) {
       throw new NotFoundException('No se encontró respuesta de seguridad');
     }
 
     const respuestaValida = await bcrypt.compare(
       respuesta.trim(),
-      usuario.preguntaSeguridad.respuesta,
+      usuario.respuestaSeguridad,
     );
     if (!respuestaValida) {
       throw new UnauthorizedException('Respuesta incorrecta');
@@ -493,16 +490,35 @@ export class UsuariosService {
   async obtenerPerfilUsuario(id: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { id },
-      include: {
-        preguntaSeguridad: {
-          select: {
-            id: true,
-            pregunta: true,
-            // No incluir respuesta por seguridad
-          },
-        },
-        direccion: true,
-        perfilCapilar: true,
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        telefono: true,
+        fechaNacimiento: true,
+        googleId: true,
+        foto: true,
+        aceptaAvisoPrivacidad: true,
+        recibePromociones: true,
+        confirmado: true,
+        creadoEn: true,
+        actualizadoEn: true,
+        activo: true,
+        // Campos de dirección embebidos
+        calle: true,
+        numero: true,
+        colonia: true,
+        ciudad: true,
+        estado: true,
+        codigoPostal: true,
+        // Campos de perfil capilar embebidos
+        tipoCabello: true,
+        colorNatural: true,
+        colorActual: true,
+        productosUsados: true,
+        alergias: true,
+        // Pregunta de seguridad (sin respuesta)
+        preguntaSeguridad: true,
       },
     });
 
@@ -517,14 +533,41 @@ export class UsuariosService {
   }
 
   async actualizarPerfilUsuario(id: string, updateData: any) {
-    const camposPermitidos = ['nombre', 'telefono', 'fechaNacimiento', 'direccion', 'perfilCapilar', 'recibePromociones'];
+    const camposPermitidos = [
+      'nombre', 'telefono', 'fechaNacimiento', 'recibePromociones',
+      // Campos de dirección embebidos
+      'calle', 'numero', 'colonia', 'ciudad', 'estado', 'codigoPostal',
+      // Campos de perfil capilar embebidos
+      'tipoCabello', 'colorNatural', 'colorActual', 'productosUsados', 'alergias',
+    ];
     const actualizaciones: any = {};
 
+    // Manejar campos directos
     camposPermitidos.forEach(campo => {
       if (updateData[campo] !== undefined) {
         actualizaciones[campo] = updateData[campo];
       }
     });
+
+    // Manejar objetos direccion y perfilCapilar si vienen como objetos
+    if (updateData.direccion) {
+      const { direccion } = updateData;
+      if (direccion.calle !== undefined) actualizaciones.calle = direccion.calle;
+      if (direccion.numero !== undefined) actualizaciones.numero = direccion.numero;
+      if (direccion.colonia !== undefined) actualizaciones.colonia = direccion.colonia;
+      if (direccion.ciudad !== undefined) actualizaciones.ciudad = direccion.ciudad;
+      if (direccion.estado !== undefined) actualizaciones.estado = direccion.estado;
+      if (direccion.codigoPostal !== undefined) actualizaciones.codigoPostal = direccion.codigoPostal;
+    }
+
+    if (updateData.perfilCapilar) {
+      const { perfilCapilar } = updateData;
+      if (perfilCapilar.tipoCabello !== undefined) actualizaciones.tipoCabello = perfilCapilar.tipoCabello;
+      if (perfilCapilar.colorNatural !== undefined) actualizaciones.colorNatural = perfilCapilar.colorNatural;
+      if (perfilCapilar.colorActual !== undefined) actualizaciones.colorActual = perfilCapilar.colorActual;
+      if (perfilCapilar.productosUsados !== undefined) actualizaciones.productosUsados = perfilCapilar.productosUsados;
+      if (perfilCapilar.alergias !== undefined) actualizaciones.alergias = perfilCapilar.alergias;
+    }
 
     const usuario = await this.prisma.usuario.update({
       where: { id },

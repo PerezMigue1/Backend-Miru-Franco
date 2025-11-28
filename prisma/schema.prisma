@@ -37,50 +37,37 @@ model Usuario {
   actualizadoEn         DateTime       @updatedAt @map("actualizado_en")
   activo                Boolean        @default(true)
 
-  // Relaciones
-  preguntaSeguridad     PreguntaSeguridad?
-  direccion             Direccion?
-  perfilCapilar         PerfilCapilar?
+  // Campos de dirección (embebidos)
+  calle                 String?
+  numero                String?
+  colonia               String?
+  ciudad                String?
+  estado                String?
+  codigoPostal          String?        @map("codigo_postal")
+
+  // Campos de perfil capilar (embebidos)
+  tipoCabello           TipoCabello?
+  colorNatural          String?        @map("color_natural")
+  colorActual           String?        @map("color_actual")
+  productosUsados       String?        @map("productos_usados")
+  alergias              String?
+
+  // Campos de pregunta de seguridad (embebidos)
+  preguntaSeguridad     String?        @map("pregunta_seguridad")
+  respuestaSeguridad    String?        @map("respuesta_seguridad") // Hasheada con bcrypt
 
   @@index([activo])
   @@index([email])
   @@map("usuarios")
 }
 
-model PreguntaSeguridad {
+// Tabla para preguntas predefinidas disponibles (solo para mostrar opciones)
+model PreguntaDisponible {
   id        String   @id @default(uuid())
-  usuarioId String   @unique
-  pregunta  String
-  respuesta String   // Hasheada con bcrypt
-  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  pregunta  String   @unique
+  activa    Boolean  @default(true)
+  creadoEn  DateTime @default(now()) @map("creado_en")
 
-  @@map("preguntas_seguridad")
-}
-
-model Direccion {
-  id          String   @id @default(uuid())
-  usuarioId   String   @unique
-  calle       String?
-  numero      String?
-  colonia     String?
-  ciudad      String?
-  estado      String?
-  codigoPostal String? @map("codigo_postal")
-  usuario     Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-
-  @@map("direcciones")
-}
-
-model PerfilCapilar {
-  id              String   @id @default(uuid())
-  usuarioId       String   @unique
-  tipoCabello     TipoCabello?
-  colorNatural    String?  @map("color_natural")
-  colorActual     String?  @map("color_actual")
-  productosUsados String?  @map("productos_usados")
-  alergias        String?
-  usuario         Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-
-  @@map("perfiles_capilares")
+  @@map("preguntas_disponibles")
 }
 
