@@ -674,19 +674,21 @@ export class UsuariosService {
 
     const hashedPassword = await bcrypt.hash(nuevaPassword, 10);
 
-    // Actualizar contraseña y marcar token como usado (null = usado)
+    // Actualizar contraseña, marcar token como usado (null = usado) y verificar cuenta
+    // Si el usuario puede acceder al email y cambiar la contraseña, verificamos automáticamente la cuenta
     await this.prisma.usuario.update({
       where: { id: usuario.id },
       data: {
         password: hashedPassword,
         resetPasswordToken: null, // Marcar como usado
         resetPasswordExpires: null, // Limpiar expiración
+        confirmado: true, // Verificar cuenta automáticamente (tiene acceso al email)
       },
     });
 
     return {
       success: true,
-      message: 'Contraseña actualizada correctamente',
+      message: 'Contraseña actualizada correctamente. Tu cuenta ha sido verificada automáticamente.',
     };
   }
 
