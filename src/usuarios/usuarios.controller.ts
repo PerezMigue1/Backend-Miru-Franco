@@ -82,6 +82,19 @@ export class UsuariosController {
     return this.usuariosService.validarRespuestaSeguridad(body.email, body.respuesta);
   }
 
+  @Post('solicitar-enlace-recuperacion')
+  @HttpCode(HttpStatus.OK)
+  // Rate limiting: 3 intentos por minuto por IP (para prevenir spam)
+  async solicitarEnlaceRecuperacion(@Body() body: { email: string }) {
+    return this.usuariosService.solicitarEnlaceRecuperacion(body.email);
+  }
+
+  @Post('validar-token-recuperacion')
+  @HttpCode(HttpStatus.OK)
+  async validarTokenRecuperacion(@Body() body: { email: string; token: string }) {
+    return this.usuariosService.validarTokenRecuperacion(body.email, body.token);
+  }
+
   @Post('cambiar-password')
   async cambiarPassword(@Body() cambiarPasswordDto: CambiarPasswordDto) {
     return this.usuariosService.cambiarPassword(

@@ -423,6 +423,95 @@ export class UsuariosService {
     };
   }
 
+  async solicitarEnlaceRecuperacion(email: string) {
+    // Sanitizar entrada
+    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    
+    // Prevenir SQL injection
+    if (containsSQLInjection(emailSanitizado)) {
+      console.warn('⚠️ Intento de SQL injection en solicitarEnlaceRecuperacion:', sanitizeForLogging({ email: emailSanitizado }));
+      // No revelar si el email existe o no
+      return {
+        success: true,
+        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+      };
+    }
+    
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { email: emailSanitizado },
+      select: {
+        id: true,
+        email: true,
+        activo: true,
+        googleId: true,
+        nombre: true,
+      },
+    });
+
+    // No revelar si el usuario existe o no (prevenir enumeración)
+    // Siempre devolver el mismo tipo de respuesta independientemente
+    if (!usuario || !usuario.activo) {
+      // No logear email real para prevenir información en logs
+      console.log('⚠️ Intento de recuperación para email no encontrado o inactivo');
+      return {
+        success: true,
+        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+      };
+    }
+
+    // Si es un usuario de Google, no permitir recuperación por email
+    if (usuario.googleId) {
+      console.log('⚠️ Intento de recuperación para usuario de Google:', sanitizeForLogging({ email: emailSanitizado }));
+      return {
+        success: true,
+        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+      };
+    }
+
+    // Generar token único y aleatorio
+    const token = crypto.randomBytes(32).toString('hex');
+    
+    // Tiempo de expiración: 60 minutos (configurable)
+    const expiresInMinutes = parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '60');
+    const resetPasswordExpires = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+
+    // Guardar token en la base de datos
+    await this.prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        resetPasswordToken: token,
+        resetPasswordExpires,
+      },
+    });
+
+    // Construir enlace de recuperación
+    const frontendUrl = process.env.FRONTEND_URL || 'https://miru-franco.vercel.app';
+    const resetLink = `${frontendUrl}/reset-password?token=${token}&email=${encodeURIComponent(usuario.email)}`;
+
+    // Enviar email con el enlace
+    try {
+      await this.emailService.sendPasswordResetEmail(
+        usuario.email,
+        resetLink,
+        expiresInMinutes,
+      );
+      
+      console.log('✅ Enlace de recuperación enviado a:', sanitizeForLogging({ email: emailSanitizado }));
+      
+      return {
+        success: true,
+        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+      };
+    } catch (err) {
+      console.error('Error al enviar correo de recuperación:', err);
+      // No revelar el error al usuario por seguridad
+      return {
+        success: true,
+        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+      };
+    }
+  }
+
   async obtenerPreguntaSeguridad(email: string) {
     // Sanitizar entrada
     const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
@@ -511,7 +600,36 @@ export class UsuariosService {
     };
   }
 
+  async validarTokenRecuperacion(email: string, token: string) {
+    const usuario = await this.prisma.usuario.findFirst({
+      where: {
+        email: email.toLowerCase(),
+        resetPasswordToken: token,
+        resetPasswordExpires: {
+          gt: new Date(),
+        },
+      },
+      select: {
+        id: true,
+        email: true,
+        nombre: true,
+      },
+    });
+
+    if (!usuario) {
+      throw new BadRequestException('Token inválido, expirado o ya utilizado');
+    }
+
+    return {
+      success: true,
+      valid: true,
+      email: usuario.email,
+      nombre: usuario.nombre,
+    };
+  }
+
   async cambiarPassword(email: string, token: string, nuevaPassword: string) {
+    // Verificar que el token existe, no está expirado y no ha sido usado
     const usuario = await this.prisma.usuario.findFirst({
       where: {
         email: email.toLowerCase(),
@@ -523,7 +641,7 @@ export class UsuariosService {
     });
 
     if (!usuario) {
-      throw new BadRequestException('Token inválido o expirado');
+      throw new BadRequestException('Token inválido, expirado o ya utilizado');
     }
 
     // Validar que la nueva contraseña no sea igual a la anterior
@@ -555,12 +673,13 @@ export class UsuariosService {
 
     const hashedPassword = await bcrypt.hash(nuevaPassword, 10);
 
+    // Actualizar contraseña y marcar token como usado (null = usado)
     await this.prisma.usuario.update({
       where: { id: usuario.id },
       data: {
         password: hashedPassword,
-        resetPasswordToken: null,
-        resetPasswordExpires: null,
+        resetPasswordToken: null, // Marcar como usado
+        resetPasswordExpires: null, // Limpiar expiración
       },
     });
 
