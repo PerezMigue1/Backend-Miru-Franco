@@ -23,24 +23,72 @@ export function sanitizeInput(input: string): string {
 
 /**
  * Valida si un string contiene código SQL peligroso
+ * Mejorado para reducir falsos positivos en emails y datos válidos
  */
 export function containsSQLInjection(input: string): boolean {
   if (typeof input !== 'string') {
     return false;
   }
 
+  // Si el input es muy corto, probablemente no es SQL injection
+  if (input.length < 3) {
+    return false;
+  }
+
+  // Validar formato de email básico antes de verificar SQL injection
+  // Si parece un email válido, ser más permisivo
+  const emailPattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  const looksLikeEmail = emailPattern.test(input);
+  
+  // Si es un email válido, solo verificar patrones muy específicos y peligrosos
+  if (looksLikeEmail) {
+    // Para emails válidos, solo verificar intentos obvios de SQL injection
+    // que no pueden ser parte de un email válido
+    const emailSafePatterns = [
+      // Comillas seguidas de comandos SQL (no válido en email)
+      /['"][\s]*((union|select|insert|update|delete|drop|exec)[\s]+)/i,
+      // UNION SELECT completo (no válido en email)
+      /union[\s]+select[\s]+/i,
+      // SELECT FROM completo (no válido en email)
+      /select[\s]+[\w\*]+[\s]+from[\s]+/i,
+      // Comentarios SQL (-- o /*) - no válidos en email
+      /--[\s]*$/m,
+      /\/\*.*\*\//,
+      // OR/AND con 1=1 (no válido en email)
+      /[\s]+(or|and)[\s]+['"]?1['"]?[\s]*=[\s]*['"]?1['"]?/i,
+      // Caracteres peligrosos codificados seguidos de comandos SQL
+      /(%27|%22|%3D|%3B).*(union|select|insert|update|delete|drop)/i,
+    ];
+    return emailSafePatterns.some((pattern) => pattern.test(input));
+  }
+
+  // Para campos que NO son emails, usar patrones más amplios
   const sqlPatterns = [
-    /(\%27)|(\')|(\-\-)|(\%23)|(#)/i, // SQL Meta characters
-    /((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-)|(\%3B)|(;))/i, // SQL Injection
-    /\w*((\%27)|(\'))((\%6F)|o|(\%4F))((\%72)|r|(\%52))/i, // SQL injection OR
-    /((\%27)|(\'))union/i, // SQL injection UNION
-    /exec(\s|\+)+(s|x)p\w+/i, // SQL injection EXEC/EXECUTE
-    /union[^a-z]+select/i, // SQL injection UNION SELECT
-    /select.*from/i, // SQL injection SELECT FROM
-    /insert.*into.*values/i, // SQL injection INSERT
-    /delete.*from/i, // SQL injection DELETE
-    /drop.*table/i, // SQL injection DROP TABLE
-    /update.*set/i, // SQL injection UPDATE
+    // Comillas simples o dobles seguidas de comandos SQL
+    /['"][\s]*((union|select|insert|update|delete|drop|exec|execute)[\s]+)/i,
+    // UNION SELECT (debe tener ambos)
+    /union[\s]+select[\s]+/i,
+    // SELECT FROM (debe tener ambos)
+    /select[\s]+[\w\*]+[\s]+from[\s]+/i,
+    // INSERT INTO VALUES
+    /insert[\s]+into[\s]+\w+[\s]+values/i,
+    // DELETE FROM
+    /delete[\s]+from[\s]+\w+/i,
+    // DROP TABLE
+    /drop[\s]+table[\s]+\w+/i,
+    // UPDATE SET
+    /update[\s]+\w+[\s]+set[\s]+/i,
+    // EXEC/EXECUTE stored procedures
+    /exec(ute)?[\s]+(xp_|sp_)/i,
+    // Comentarios SQL (-- o /*)
+    /--[\s]*$/m, // Comentario al final de línea
+    /\/\*.*\*\//, // Comentario multilínea
+    // OR 1=1 o variantes
+    /[\s]+or[\s]+['"]?1['"]?[\s]*=[\s]*['"]?1['"]?/i,
+    // AND 1=1 o variantes
+    /[\s]+and[\s]+['"]?1['"]?[\s]*=[\s]*['"]?1['"]?/i,
+    // Caracteres peligrosos codificados seguidos de comandos
+    /(%27|%22|%3D|%3B).*(union|select|insert|update|delete|drop)/i,
   ];
 
   return sqlPatterns.some((pattern) => pattern.test(input));
