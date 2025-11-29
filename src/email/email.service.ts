@@ -52,7 +52,7 @@ export class EmailService {
     }
   }
 
-  async sendPasswordResetEmail(correo: string, resetLink: string, expiresInMinutes: number = 60): Promise<void> {
+  async sendPasswordResetEmail(correo: string, resetLink: string, expiresInMinutes: number = 10): Promise<void> {
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
     const fromEmail = this.configService.get<string>('SENDGRID_FROM_EMAIL');
     const fromName = this.configService.get<string>('SENDGRID_FROM_NAME') || 'Miru Franco Salón Beauty';

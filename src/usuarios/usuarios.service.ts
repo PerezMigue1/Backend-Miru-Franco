@@ -433,7 +433,7 @@ export class UsuariosService {
       // No revelar si el email existe o no
       return {
         success: true,
-        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+        message: 'Si el email existe, se ha enviado un enlace de recuperación',
       };
     }
     
@@ -455,7 +455,7 @@ export class UsuariosService {
       console.log('⚠️ Intento de recuperación para email no encontrado o inactivo');
       return {
         success: true,
-        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+        message: 'Si el email existe, se ha enviado un enlace de recuperación',
       };
     }
 
@@ -464,15 +464,15 @@ export class UsuariosService {
       console.log('⚠️ Intento de recuperación para usuario de Google:', sanitizeForLogging({ email: emailSanitizado }));
       return {
         success: true,
-        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+        message: 'Si el email existe, se ha enviado un enlace de recuperación',
       };
     }
 
     // Generar token único y aleatorio
     const token = crypto.randomBytes(32).toString('hex');
     
-    // Tiempo de expiración: 60 minutos (configurable)
-    const expiresInMinutes = parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '60');
+    // Tiempo de expiración: 10 minutos (según guía)
+    const expiresInMinutes = parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '10');
     const resetPasswordExpires = new Date(Date.now() + expiresInMinutes * 60 * 1000);
 
     // Guardar token en la base de datos
@@ -500,14 +500,14 @@ export class UsuariosService {
       
       return {
         success: true,
-        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+        message: 'Si el email existe, se ha enviado un enlace de recuperación',
       };
     } catch (err) {
       console.error('Error al enviar correo de recuperación:', err);
       // No revelar el error al usuario por seguridad
       return {
         success: true,
-        message: 'Si el email existe, recibirás un enlace de recuperación en tu correo.',
+        message: 'Si el email existe, se ha enviado un enlace de recuperación',
       };
     }
   }
@@ -623,6 +623,7 @@ export class UsuariosService {
     return {
       success: true,
       valid: true,
+      message: 'Token válido',
       email: usuario.email,
       nombre: usuario.nombre,
     };
