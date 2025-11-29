@@ -34,7 +34,7 @@
     "@nestjs/passport": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/throttler": "^6.4.0",
-    "@prisma/client": "^5.19.0",
+    "@prisma/client": "^5.22.0",
     "@sendgrid/mail": "^8.1.6",
     "@types/cookie-parser": "^1.4.10",
     "@types/csurf": "^1.11.5",
@@ -63,7 +63,7 @@
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "eslint": "^8.42.0",
-    "prisma": "^5.19.0",
+    "prisma": "^5.22.0",
     "ts-loader": "^9.4.3",
     "ts-node": "^10.9.1",
     "tsconfig-paths": "^4.2.0"

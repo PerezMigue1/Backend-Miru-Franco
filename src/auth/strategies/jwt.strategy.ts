@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-import { SecurityService } from '../common/services/security.service';
+import { SecurityService } from '../../common/services/security.service';
 import { Request } from 'express';
 
 // Extender ExtractJwt para obtener el token raw
