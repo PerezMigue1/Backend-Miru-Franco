@@ -1,5 +1,6 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, IsDateString, IsObject, ValidateNested, IsNotEmpty } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsDateString, IsObject, ValidateNested, IsNotEmpty, MinLength } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsStrongPassword } from '../../common/validators/password.validator';
 
 class PreguntaSeguridadDto {
   @IsString()
@@ -90,6 +91,8 @@ export class CreateUsuarioDto {
 
   @IsString()
   @IsNotEmpty()
+  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  @IsStrongPassword()
   password: string;
 
   @IsDateString()

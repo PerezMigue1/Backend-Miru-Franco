@@ -2,13 +2,17 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import * as cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
+  // Cookie parser para CSRF tokens
+  app.use(cookieParser());
+  
   // Prefijo global para todas las rutas
   app.setGlobalPrefix('api', {
-    exclude: ['/salud', '/', '/v1'],
+    exclude: ['/salud', '/'],
   });
   
   // Configurar ruta de health check (excluida del prefijo global)
@@ -55,22 +59,60 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token'],
     exposedHeaders: ['Authorization'],
+  });
+
+  // Headers de seguridad HTTP
+  app.use((req, res, next) => {
+    // X-Content-Type-Options: previene MIME type sniffing
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    
+    // X-Frame-Options: previene clickjacking
+    res.setHeader('X-Frame-Options', 'DENY');
+    
+    // X-XSS-Protection: protección básica contra XSS (legacy)
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    
+    // Strict-Transport-Security: fuerza HTTPS (HSTS)
+    if (process.env.NODE_ENV === 'production') {
+      res.setHeader(
+        'Strict-Transport-Security',
+        'max-age=31536000; includeSubDomains; preload',
+      );
+    }
+    
+    // Content-Security-Policy: previene XSS
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'",
+    );
+    
+    // Referrer-Policy: controla información de referrer
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    
+    // Permissions-Policy: limita funcionalidades del navegador
+    res.setHeader(
+      'Permissions-Policy',
+      'geolocation=(), microphone=(), camera=()',
+    );
+    
+    next();
   });
 
   // Filtro global de excepciones
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  // Validación global
+  // Validación global con sanitización
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: false,
+      whitelist: true, // Remueve propiedades no definidas en el DTO
+      forbidNonWhitelisted: true, // Rechaza propiedades no definidas
       transform: true,
       transformOptions: {
         enableImplicitConversion: true,
       },
+      disableErrorMessages: process.env.NODE_ENV === 'production', // Ocultar mensajes detallados en producción
     }),
   );
 

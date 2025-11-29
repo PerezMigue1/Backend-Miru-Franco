@@ -1,6 +1,7 @@
 import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+import { SecurityService } from '../common/services/security.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { JwtService } from '@nestjs/jwt';
@@ -8,6 +9,7 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
+import { sanitizeInput, containsSQLInjection, sanitizeForLogging, isCommonAnswer } from '../common/utils/security.util';
 
 @Injectable()
 export class UsuariosService {
@@ -15,14 +17,31 @@ export class UsuariosService {
     private prisma: PrismaService,
     private emailService: EmailService,
     private jwtService: JwtService,
+    private securityService: SecurityService,
   ) {}
 
   async crearUsuario(createUsuarioDto: CreateUsuarioDto) {
     const { nombre, email, telefono, password, fechaNacimiento, preguntaSeguridad, direccion, perfilCapilar, aceptaAvisoPrivacidad, recibePromociones } = createUsuarioDto;
 
+    // Sanitizar todas las entradas de texto
+    const nombreSanitizado = sanitizeInput(nombre);
+    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    
+    // Prevenir SQL injection
+    if (
+      containsSQLInjection(nombreSanitizado) ||
+      containsSQLInjection(emailSanitizado) ||
+      (telefono && containsSQLInjection(telefono)) ||
+      containsSQLInjection(preguntaSeguridad.pregunta) ||
+      containsSQLInjection(preguntaSeguridad.respuesta)
+    ) {
+      console.warn('⚠️ Intento de SQL injection detectado en crearUsuario:', sanitizeForLogging({ email: emailSanitizado }));
+      throw new BadRequestException('Datos inválidos. Por favor verifica la información ingresada.');
+    }
+
     // Verificar si el email ya existe
     const existe = await this.prisma.usuario.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: emailSanitizado },
     });
 
     if (existe) {
@@ -40,13 +59,12 @@ export class UsuariosService {
     const otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
 
     // Crear nuevo usuario con campos embebidos
-    const preguntaGuardada = preguntaSeguridad.pregunta.trim();
-    console.log('💾 Guardando pregunta de seguridad para usuario:', email, 'Pregunta:', preguntaGuardada);
+    const preguntaGuardada = sanitizeInput(preguntaSeguridad.pregunta.trim());
     
     const nuevoUsuario = await this.prisma.usuario.create({
       data: {
-        nombre,
-        email: email.toLowerCase(),
+        nombre: nombreSanitizado,
+        email: emailSanitizado,
         telefono,
         password: hashedPassword,
         fechaNacimiento: new Date(fechaNacimiento),
@@ -75,12 +93,12 @@ export class UsuariosService {
       },
     });
 
-    console.log('✅ Usuario registrado:', email, 'OTP:', codigoOTP, 'Expira en 2 minutos');
-    console.log('✅ Pregunta de seguridad guardada:', nuevoUsuario.preguntaSeguridad);
+    // Log seguro (sin datos sensibles)
+    console.log('✅ Usuario registrado:', sanitizeForLogging({ email: emailSanitizado, id: nuevoUsuario.id }));
 
     // Enviar correo con el código OTP
     try {
-      await this.emailService.sendOTPEmail(email, codigoOTP);
+      await this.emailService.sendOTPEmail(emailSanitizado, codigoOTP);
       return {
         success: true,
         message: 'Ingresa el código para activar tu cuenta. El código expira en 2 minutos.',
@@ -95,25 +113,51 @@ export class UsuariosService {
   async login(loginDto: LoginDto) {
     const { email, password } = loginDto;
 
+    // Sanitizar y validar entrada
+    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    
+    // Prevenir SQL injection
+    if (containsSQLInjection(emailSanitizado) || containsSQLInjection(password)) {
+      console.warn('⚠️ Intento de SQL injection detectado:', sanitizeForLogging({ email: emailSanitizado }));
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    // Verificar si la cuenta está bloqueada
+    const lockStatus = await this.securityService.isAccountLocked(emailSanitizado);
+    if (lockStatus.locked) {
+      const minutosRestantes = Math.ceil(
+        (lockStatus.until!.getTime() - Date.now()) / 60000,
+      );
+      throw new ForbiddenException(
+        `Cuenta bloqueada temporalmente por múltiples intentos fallidos. Intenta de nuevo en ${minutosRestantes} minutos.`,
+      );
+    }
+
     const usuario = await this.prisma.usuario.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: emailSanitizado },
     });
 
-    if (!usuario) {
-      throw new NotFoundException('Usuario no encontrado');
-    }
-
-    if (!usuario.activo) {
-      throw new ForbiddenException('Usuario inactivo');
-    }
-
-    if (!usuario.password) {
-      throw new UnauthorizedException('Contraseña incorrecta');
+    // No revelar si el usuario existe o no (security best practice)
+    if (!usuario || !usuario.activo || !usuario.password) {
+      // Registrar intento fallido incluso si el usuario no existe (timing attack prevention)
+      await this.securityService.recordFailedLoginAttempt(emailSanitizado);
+      throw new UnauthorizedException('Credenciales inválidas');
     }
 
     const esValido = await bcrypt.compare(password, usuario.password);
     if (!esValido) {
-      throw new UnauthorizedException('Contraseña incorrecta');
+      // Registrar intento fallido
+      await this.securityService.recordFailedLoginAttempt(emailSanitizado);
+      
+      // Verificar si ahora está bloqueado
+      const newLockStatus = await this.securityService.isAccountLocked(emailSanitizado);
+      if (newLockStatus.locked) {
+        throw new ForbiddenException(
+          'Cuenta bloqueada temporalmente por múltiples intentos fallidos.',
+        );
+      }
+      
+      throw new UnauthorizedException('Credenciales inválidas');
     }
 
     // Verificar que la cuenta esté confirmada (excepto para usuarios de Google)
@@ -121,11 +165,23 @@ export class UsuariosService {
       throw new ForbiddenException('Tu cuenta no está activada. Revisa tu correo para activar tu cuenta.');
     }
 
-    // Generar token JWT
+    // Resetear intentos fallidos después de login exitoso
+    await this.securityService.resetFailedLoginAttempts(emailSanitizado);
+
+    // Generar token JWT con información de actividad
+    const now = Math.floor(Date.now() / 1000);
     const token = this.jwtService.sign(
-      { id: usuario.id, email: usuario.email },
+      { 
+        id: usuario.id, 
+        email: usuario.email,
+        jti: crypto.randomBytes(16).toString('hex'), // Token ID único
+        lastActivity: now,
+      },
       { expiresIn: '1d' },
     );
+
+    // Log seguro (sin contraseña)
+    console.log('✅ Login exitoso:', sanitizeForLogging({ id: usuario.id, email: usuario.email }));
 
     return {
       success: true,
@@ -354,10 +410,17 @@ export class UsuariosService {
   }
 
   async obtenerPreguntaSeguridad(email: string) {
-    console.log('🔍 Obteniendo pregunta de seguridad para email:', email);
+    // Sanitizar entrada
+    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    
+    // Prevenir SQL injection
+    if (containsSQLInjection(emailSanitizado)) {
+      console.warn('⚠️ Intento de SQL injection en obtenerPreguntaSeguridad:', sanitizeForLogging({ email: emailSanitizado }));
+      throw new NotFoundException('No se encontró pregunta de seguridad para este correo');
+    }
     
     const usuario = await this.prisma.usuario.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: emailSanitizado },
       select: {
         id: true,
         email: true,
@@ -367,28 +430,21 @@ export class UsuariosService {
       },
     });
 
-    if (!usuario) {
-      console.error('❌ Usuario no encontrado para email:', email);
-      throw new NotFoundException('Correo no encontrado');
-    }
-
-    if (!usuario.activo) {
-      console.error('❌ Usuario inactivo:', email);
-      throw new ForbiddenException('Usuario inactivo');
+    // No revelar si el usuario existe o no (prevenir enumeración)
+    // Siempre devolver el mismo tipo de respuesta independientemente
+    if (!usuario || !usuario.activo) {
+      // No logear email real para prevenir información en logs
+      throw new NotFoundException('No se encontró pregunta de seguridad para este correo');
     }
 
     // Si es un usuario de Google y no tiene pregunta de seguridad
     if (usuario.googleId && !usuario.preguntaSeguridad) {
-      console.log('⚠️ Usuario de Google sin pregunta de seguridad:', email);
       throw new NotFoundException('Este correo está asociado a una cuenta de Google. No se puede usar recuperación de contraseña por pregunta de seguridad. Usa "Continuar con Google" para iniciar sesión.');
     }
 
     if (!usuario.preguntaSeguridad) {
-      console.error('❌ Usuario sin pregunta de seguridad:', email);
-      throw new NotFoundException('No se encontró pregunta de seguridad para este usuario. Este correo puede estar asociado a una cuenta de Google.');
+      throw new NotFoundException('No se encontró pregunta de seguridad para este correo');
     }
-
-    console.log('✅ Pregunta de seguridad encontrada:', usuario.preguntaSeguridad);
 
     return {
       success: true,

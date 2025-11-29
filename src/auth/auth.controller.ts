@@ -78,6 +78,28 @@ export class AuthController {
     return this.authService.verificarCorreoExistente(verificarCorreoDto.correo);
   }
 
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async logout(@Req() req: any) {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return { success: true, message: 'Sesión cerrada' };
+    }
+    return this.authService.logout(token);
+  }
+
+  @Post('refresh')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async refreshToken(@Req() req: any, @CurrentUser() user: any) {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return { success: false, message: 'Token no proporcionado' };
+    }
+    return this.authService.refreshToken(token, user);
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async getProfile(@CurrentUser() user: any) {

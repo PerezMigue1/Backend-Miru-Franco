@@ -36,6 +36,12 @@ model Usuario {
   creadoEn              DateTime       @default(now()) @map("creado_en")
   actualizadoEn         DateTime       @updatedAt @map("actualizado_en")
   activo                Boolean        @default(true)
+  
+  // Campos de seguridad
+  intentosLoginFallidos Int            @default(0) @map("intentos_login_fallidos")
+  cuentaBloqueadaHasta  DateTime?      @map("cuenta_bloqueada_hasta")
+  ultimoIntentoLogin    DateTime?      @map("ultimo_intento_login")
+  rol                   String         @default("usuario") // 'usuario', 'admin'
 
   // Campos de dirección (embebidos)
   calle                 String?
@@ -71,3 +77,13 @@ model PreguntaDisponible {
   @@map("preguntas_disponibles")
 }
 
+// Tabla para tokens JWT revocados (blacklist)
+model TokenRevocado {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  expiraEn  DateTime @map("expira_en")
+  creadoEn  DateTime @default(now()) @map("creado_en")
+
+  @@index([expiraEn])
+  @@map("tokens_revocados")
+}

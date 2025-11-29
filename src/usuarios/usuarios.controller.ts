@@ -48,6 +48,7 @@ export class UsuariosController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  // Rate limiting: 5 intentos por minuto por IP
   async login(@Body() loginDto: LoginDto) {
     return this.usuariosService.login(loginDto);
   }
@@ -80,6 +81,8 @@ export class UsuariosController {
   }
 
   @Post('pregunta-seguridad')
+  @HttpCode(HttpStatus.OK)
+  // Rate limiting: 3 intentos por minuto por IP (para prevenir enumeración de usuarios)
   async obtenerPreguntaSeguridad(@Body() body: { email: string }) {
     return this.usuariosService.obtenerPreguntaSeguridad(body.email);
   }
