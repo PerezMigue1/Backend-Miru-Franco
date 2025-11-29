@@ -492,9 +492,9 @@ export class UsuariosService {
       throw new UnauthorizedException('Respuesta incorrecta');
     }
 
-    // Generar token temporal válido por 15 minutos
+    // Generar token temporal válido por 10 minutos
     const token = crypto.randomBytes(32).toString('hex');
-    const resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000);
+    const resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     await this.prisma.usuario.update({
       where: { id: usuario.id },
