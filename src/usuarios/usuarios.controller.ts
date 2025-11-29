@@ -17,6 +17,8 @@ import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
 import { UpdateUsuarioDto } from './dto/update-usuario.dto';
+import { CambiarPasswordDto } from './dto/cambiar-password.dto';
+import { CambiarPasswordPerfilDto } from './dto/cambiar-password-perfil.dto';
 
 @Controller('usuarios')
 export class UsuariosController {
@@ -81,8 +83,12 @@ export class UsuariosController {
   }
 
   @Post('cambiar-password')
-  async cambiarPassword(@Body() body: { email: string; token: string; nuevaPassword: string }) {
-    return this.usuariosService.cambiarPassword(body.email, body.token, body.nuevaPassword);
+  async cambiarPassword(@Body() cambiarPasswordDto: CambiarPasswordDto) {
+    return this.usuariosService.cambiarPassword(
+      cambiarPasswordDto.email,
+      cambiarPasswordDto.token,
+      cambiarPasswordDto.nuevaPassword,
+    );
   }
 
   // ===== ROUTES CON PARÁMETROS DINÁMICOS (al final) =====
@@ -111,12 +117,12 @@ export class UsuariosController {
   @UseGuards(JwtAuthGuard)
   async cambiarPasswordDesdePerfil(
     @Param('id') id: string,
-    @Body() body: { actualPassword: string; nuevaPassword: string },
+    @Body() cambiarPasswordPerfilDto: CambiarPasswordPerfilDto,
   ) {
     return this.usuariosService.cambiarPasswordDesdePerfil(
       id,
-      body.actualPassword,
-      body.nuevaPassword,
+      cambiarPasswordPerfilDto.actualPassword,
+      cambiarPasswordPerfilDto.nuevaPassword,
     );
   }
 

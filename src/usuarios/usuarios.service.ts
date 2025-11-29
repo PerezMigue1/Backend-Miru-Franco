@@ -512,10 +512,6 @@ export class UsuariosService {
   }
 
   async cambiarPassword(email: string, token: string, nuevaPassword: string) {
-    if (nuevaPassword.length < 6) {
-      throw new BadRequestException('La contraseña debe tener al menos 6 caracteres');
-    }
-
     const usuario = await this.prisma.usuario.findFirst({
       where: {
         email: email.toLowerCase(),
@@ -528,6 +524,33 @@ export class UsuariosService {
 
     if (!usuario) {
       throw new BadRequestException('Token inválido o expirado');
+    }
+
+    // Validar que la nueva contraseña no sea igual a la anterior
+    if (usuario.password) {
+      const esMismaContraseña = await bcrypt.compare(nuevaPassword, usuario.password);
+      if (esMismaContraseña) {
+        throw new BadRequestException('La nueva contraseña no puede ser igual a la contraseña anterior');
+      }
+    }
+
+    // Validar complejidad de contraseña (el DTO ya valida con @IsStrongPassword, pero validamos datos personales aquí)
+    const passwordValidation = validatePasswordAgainstPersonalData(nuevaPassword, {
+      nombre: usuario.nombre,
+      email: usuario.email,
+      telefono: usuario.telefono,
+      fechaNacimiento: usuario.fechaNacimiento?.toISOString().split('T')[0],
+      direccion: {
+        calle: usuario.calle,
+        colonia: usuario.colonia,
+      },
+      preguntaSeguridad: {
+        respuesta: '', // No tenemos acceso a la respuesta en texto plano, pero validamos otros campos
+      },
+    });
+
+    if (!passwordValidation.valid) {
+      throw new BadRequestException(passwordValidation.reason);
     }
 
     const hashedPassword = await bcrypt.hash(nuevaPassword, 10);
@@ -548,10 +571,6 @@ export class UsuariosService {
   }
 
   async cambiarPasswordDesdePerfil(id: string, actualPassword: string, nuevaPassword: string) {
-    if (nuevaPassword.length < 6) {
-      throw new BadRequestException('La nueva contraseña debe tener al menos 6 caracteres');
-    }
-
     const usuario = await this.prisma.usuario.findUnique({
       where: { id },
     });
@@ -563,6 +582,31 @@ export class UsuariosService {
     const esValida = await bcrypt.compare(actualPassword, usuario.password);
     if (!esValida) {
       throw new UnauthorizedException('Contraseña actual incorrecta');
+    }
+
+    // Validar que la nueva contraseña no sea igual a la anterior
+    const esMismaContraseña = await bcrypt.compare(nuevaPassword, usuario.password);
+    if (esMismaContraseña) {
+      throw new BadRequestException('La nueva contraseña no puede ser igual a la contraseña actual');
+    }
+
+    // Validar complejidad de contraseña (el DTO ya valida con @IsStrongPassword, pero validamos datos personales aquí)
+    const passwordValidation = validatePasswordAgainstPersonalData(nuevaPassword, {
+      nombre: usuario.nombre,
+      email: usuario.email,
+      telefono: usuario.telefono,
+      fechaNacimiento: usuario.fechaNacimiento?.toISOString().split('T')[0],
+      direccion: {
+        calle: usuario.calle,
+        colonia: usuario.colonia,
+      },
+      preguntaSeguridad: {
+        respuesta: '', // No tenemos acceso a la respuesta en texto plano, pero validamos otros campos
+      },
+    });
+
+    if (!passwordValidation.valid) {
+      throw new BadRequestException(passwordValidation.reason);
     }
 
     const hashedPassword = await bcrypt.hash(nuevaPassword, 10);
