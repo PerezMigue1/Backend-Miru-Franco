@@ -10,6 +10,7 @@ import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
 import { sanitizeInput, containsSQLInjection, sanitizeForLogging, isCommonAnswer } from '../common/utils/security.util';
+import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 
 @Injectable()
 export class UsuariosService {
@@ -46,6 +47,20 @@ export class UsuariosService {
 
     if (existe) {
       throw new ConflictException('El email ya está registrado');
+    }
+
+    // Validar que la contraseña no contenga datos personales
+    const passwordValidation = validatePasswordAgainstPersonalData(password, {
+      nombre,
+      email: emailSanitizado,
+      telefono,
+      fechaNacimiento,
+      direccion,
+      preguntaSeguridad,
+    });
+
+    if (!passwordValidation.valid) {
+      throw new BadRequestException(passwordValidation.reason);
     }
 
     // Hashear la contraseña
@@ -294,7 +309,7 @@ export class UsuariosService {
         email: true,
         telefono: true,
         fechaNacimiento: true,
-        preguntaSeguridad: true,
+        // NO incluir preguntaSeguridad (información sensible)
         // Campos de dirección embebidos
         calle: true,
         numero: true,
@@ -316,10 +331,9 @@ export class UsuariosService {
         creadoEn: true,
         actualizadoEn: true,
         activo: true,
+        // NO incluir: password, respuestaSeguridad, codigoOTP, resetPasswordToken
       },
     });
-
-    // Las respuestas ya no se incluyen en el select, no hay nada que ocultar
 
     return {
       success: true,
