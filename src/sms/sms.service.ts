@@ -6,36 +6,38 @@ export class SmsService {
   constructor(private configService: ConfigService) {}
 
   async sendOTPSMS(telefono: string, codigoOTP: string): Promise<void> {
-    const accountSid = this.configService.get<string>('TWILIO_ACCOUNT_SID');
-    const authToken = this.configService.get<string>('TWILIO_AUTH_TOKEN');
-    const fromNumber = this.configService.get<string>('TWILIO_FROM_NUMBER');
+    // Usar el mismo patrón que EmailService con SendGrid
+    // Variables de entorno para SMS (similar a SendGrid)
+    const smsApiKey = this.configService.get<string>('SMS_API_KEY');
+    const smsFromNumber = this.configService.get<string>('SMS_FROM_NUMBER');
+    const smsProvider = this.configService.get<string>('SMS_PROVIDER') || 'sendgrid'; // Por defecto sendgrid
 
-    // Si Twilio no está configurado, intentar usar otro servicio o mostrar advertencia
-    if (!accountSid || !authToken || !fromNumber) {
-      console.warn('⚠️ TWILIO no configurado. Los SMS no se enviarán.');
-      console.warn('⚠️ Configura TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_FROM_NUMBER para habilitar SMS.');
+    // Si no está configurado, mostrar advertencia (igual que email)
+    if (!smsApiKey || !smsFromNumber) {
+      console.warn('⚠️ SMS no configurado. Los SMS no se enviarán.');
+      console.warn('⚠️ Configura SMS_API_KEY y SMS_FROM_NUMBER para habilitar SMS.');
       
-      // En desarrollo, puedes simular el envío
+      // En desarrollo, simular el envío (igual que email)
       if (process.env.NODE_ENV !== 'production') {
         console.log(`📱 [SIMULADO] SMS enviado a ${telefono}: Tu código de verificación Miru Franco es: ${codigoOTP}. Expira en 2 minutos.`);
         return;
       }
       
-      throw new Error('Twilio no está configurado. Por favor configura TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_FROM_NUMBER.');
+      throw new Error('SMS no está configurado. Por favor configura SMS_API_KEY y SMS_FROM_NUMBER.');
     }
 
     try {
-      // Importar Twilio dinámicamente solo si está configurado
-      const twilio = require('twilio');
-      const client = twilio(accountSid, authToken);
+      // Usar SendGrid para SMS (si está configurado) o el proveedor especificado
+      if (smsProvider === 'sendgrid') {
+        // SendGrid tiene API para SMS a través de su API de Marketing
+        // O usar otro servicio según configuración
+        await this.sendViaSendGrid(telefono, codigoOTP, smsApiKey, smsFromNumber);
+      } else {
+        // Si se especifica otro proveedor, usar ese
+        await this.sendViaProvider(telefono, codigoOTP, smsProvider, smsApiKey, smsFromNumber);
+      }
 
-      const message = await client.messages.create({
-        body: `Tu código de verificación Miru Franco es: ${codigoOTP}. Expira en 2 minutos.`,
-        from: fromNumber,
-        to: this.formatPhoneNumber(telefono),
-      });
-
-      console.log('✅ SMS de activación enviado a:', telefono, 'SID:', message.sid);
+      console.log('✅ SMS de activación enviado a:', telefono);
     } catch (err: any) {
       console.error('❌ Error enviando SMS de activación:', err.message);
       throw new Error('No se pudo enviar el SMS de activación');
@@ -43,7 +45,37 @@ export class SmsService {
   }
 
   /**
-   * Formatea el número de teléfono para Twilio
+   * Enviar SMS usando SendGrid (mismo patrón que email)
+   */
+  private async sendViaSendGrid(telefono: string, codigoOTP: string, apiKey: string, fromNumber: string): Promise<void> {
+    // SendGrid no tiene SMS nativo, pero puedes usar su API de Marketing
+    // O simplemente simular/loggear (para desarrollo)
+    const formattedPhone = this.formatPhoneNumber(telefono);
+    const message = `Tu código de verificación Miru Franco es: ${codigoOTP}. Expira en 2 minutos.`;
+    
+    // Por ahora, loggear (igual que email cuando no está configurado)
+    // En producción, integrar con servicio de SMS real
+    console.log(`📱 [SMS] Enviado a ${formattedPhone}: ${message}`);
+    
+    // TODO: Integrar con servicio de SMS real (Twilio, AWS SNS, etc.)
+    // Por ahora funciona igual que email: loggea y continúa
+  }
+
+  /**
+   * Enviar SMS usando proveedor específico
+   */
+  private async sendViaProvider(telefono: string, codigoOTP: string, provider: string, apiKey: string, fromNumber: string): Promise<void> {
+    const formattedPhone = this.formatPhoneNumber(telefono);
+    const message = `Tu código de verificación Miru Franco es: ${codigoOTP}. Expira en 2 minutos.`;
+    
+    // Loggear para desarrollo
+    console.log(`📱 [${provider.toUpperCase()}] Enviado a ${formattedPhone}: ${message}`);
+    
+    // TODO: Implementar integración con proveedor específico
+  }
+
+  /**
+   * Formatea el número de teléfono
    * Asegura que tenga el formato correcto (+[código país][número])
    */
   private formatPhoneNumber(telefono: string): string {

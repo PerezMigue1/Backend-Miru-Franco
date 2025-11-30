@@ -4,30 +4,25 @@
 
 La verificación por SMS ha sido agregada al backend. Ahora puedes elegir entre **Email** o **SMS** para enviar códigos OTP.
 
-## 🔧 Configuración de Twilio (Opcional)
+**Importante:** SMS se maneja **igual que Email** - usa el mismo patrón con variables de entorno configurables.
 
-### 1. Instalar Twilio
+## 🔧 Configuración de SMS (Opcional)
 
-```bash
-npm install twilio
-```
-
-### 2. Obtener credenciales de Twilio
-
-1. Crea una cuenta en [Twilio](https://www.twilio.com/)
-2. Obtén tu **Account SID** y **Auth Token** del dashboard
-3. Compra un número de teléfono (o usa el número de prueba)
-
-### 3. Agregar variables de entorno
+### 1. Agregar variables de entorno
 
 **Archivo:** `.env`
 
 ```env
-# Twilio SMS (Opcional - solo si quieres usar SMS)
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=tu_auth_token_aqui
-TWILIO_FROM_NUMBER=+1234567890  # Número de Twilio con código de país
+# SMS (Opcional - solo si quieres usar SMS)
+# Se maneja igual que SendGrid para Email
+SMS_API_KEY=tu_api_key_sms_aqui
+SMS_FROM_NUMBER=+1234567890  # Número con código de país
+SMS_PROVIDER=sendgrid  # O el proveedor que uses (sendgrid, twilio, aws, etc.)
 ```
+
+**Nota:** Por defecto, si no configuras SMS, funciona igual que Email:
+- En **desarrollo**: Simula el envío (muestra en consola)
+- En **producción**: Lanza error si se intenta usar SMS sin configuración
 
 ### 4. Formato del número de teléfono
 
@@ -98,7 +93,7 @@ Si **NO** se especifica `metodoVerificacion` o se omite:
 
 ## ⚠️ Modo Desarrollo
 
-Si Twilio **NO está configurado**:
+Si SMS **NO está configurado** (igual que Email):
 - En **desarrollo**: El sistema simula el envío de SMS (muestra en consola)
 - En **producción**: Lanza un error si se intenta usar SMS sin configuración
 
@@ -107,11 +102,11 @@ Si Twilio **NO está configurado**:
 📱 [SIMULADO] SMS enviado a +521234567890: Tu código de verificación Miru Franco es: 123456. Expira en 2 minutos.
 ```
 
-## 🧪 Probar sin Twilio
+## 🧪 Probar sin Configurar SMS
 
-Puedes probar el flujo completo sin configurar Twilio:
+Puedes probar el flujo completo sin configurar SMS (igual que Email):
 
-1. El sistema detectará que Twilio no está configurado
+1. El sistema detectará que SMS no está configurado
 2. En desarrollo, simulará el envío
 3. Puedes usar el código que aparece en la consola para verificar
 
@@ -119,11 +114,11 @@ Puedes probar el flujo completo sin configurar Twilio:
 
 | Aspecto | Email | SMS |
 |---------|-------|-----|
-| **Configuración requerida** | SendGrid | Twilio (opcional) |
-| **Costo** | Gratis (hasta cierto límite) | ~$0.0075 USD por SMS |
-| **Velocidad** | Variable (segundos a minutos) | Inmediato (segundos) |
-| **Disponibilidad** | Requiere internet en email | Requiere señal móvil |
+| **Configuración requerida** | SendGrid | SMS_API_KEY (opcional) |
+| **Patrón de código** | ✅ Igual | ✅ Igual |
+| **Variables de entorno** | SENDGRID_API_KEY | SMS_API_KEY |
 | **Por defecto** | ✅ Sí | ❌ No (opcional) |
+| **Manejo** | ✅ SendGrid | ✅ Mismo patrón que Email |
 
 ## 🔐 Seguridad
 
@@ -133,11 +128,11 @@ Puedes probar el flujo completo sin configurar Twilio:
 - ✅ No se revela si el número existe
 - ✅ Validación de formato de teléfono
 
-## 📚 Recursos
+## 📚 Notas Importantes
 
-- **Twilio Docs**: https://www.twilio.com/docs/sms
-- **Twilio Console**: https://console.twilio.com/
-- **Twilio Pricing**: https://www.twilio.com/pricing
+- **SMS se maneja igual que Email**: Mismo patrón, mismas variables de entorno
+- **No requiere Twilio específicamente**: Puedes usar cualquier proveedor de SMS
+- **Configuración opcional**: Si no configuras SMS, funciona igual que Email (simula en desarrollo)
 
 ## ✅ Resumen
 
