@@ -4,11 +4,13 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsuariosController } from './usuarios.controller';
 import { UsuariosService } from './usuarios.service';
 import { EmailModule } from '../email/email.module';
+import { SmsModule } from '../sms/sms.module';
 import { SecurityModule } from '../common/services/security.module';
 
 @Module({
   imports: [
     EmailModule,
+    SmsModule,
     SecurityModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

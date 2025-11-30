@@ -121,5 +121,9 @@ export class CreateUsuarioDto {
   @IsBoolean()
   @IsOptional()
   recibePromociones?: boolean;
+
+  @IsString()
+  @IsOptional()
+  metodoVerificacion?: 'email' | 'sms' = 'email'; // Método de verificación: email o sms
 }
 

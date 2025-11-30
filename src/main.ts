@@ -34,6 +34,8 @@ async function bootstrap() {
   const allowedOrigins = [
     'https://miru-franco.vercel.app',
     'https://miru-franco-pznm3jk0w-miru-franco.vercel.app',
+    'https://miru-franco-4pdg1kua8-miru-franco.vercel.app', // URL de preview/deployment de Vercel
+    'https://miru-franco-hri9o928g-miru-franco.vercel.app', // URL actual de Vercel
     'http://localhost:3000',
     'http://localhost:3001',
     process.env.FRONTEND_URL,
