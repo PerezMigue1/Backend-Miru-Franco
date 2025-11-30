@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { UsuariosService } from './usuarios.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
@@ -66,13 +67,14 @@ export class UsuariosController {
 
   @Post('reenviar-codigo')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms)
   async reenviarCodigo(@Body() reenviarCodigoDto: ReenviarCodigoDto) {
     return this.usuariosService.reenviarCodigo(reenviarCodigoDto);
   }
 
   @Post('pregunta-seguridad')
   @HttpCode(HttpStatus.OK)
-  // Rate limiting: 3 intentos por minuto por IP (para prevenir enumeración de usuarios)
+  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms) - previene enumeración de usuarios
   async obtenerPreguntaSeguridad(@Body() body: { email: string }) {
     return this.usuariosService.obtenerPreguntaSeguridad(body.email);
   }
@@ -84,7 +86,7 @@ export class UsuariosController {
 
   @Post('solicitar-enlace-recuperacion')
   @HttpCode(HttpStatus.OK)
-  // Rate limiting: 3 intentos por minuto por IP (para prevenir spam)
+  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms) - previene spam
   async solicitarEnlaceRecuperacion(@Body() body: { email: string }) {
     return this.usuariosService.solicitarEnlaceRecuperacion(body.email);
   }
