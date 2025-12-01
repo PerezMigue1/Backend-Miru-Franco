@@ -3,7 +3,7 @@ import { AuthGuard } from '@nestjs/passport';
 
 @Injectable()
 export class GoogleAuthGuard extends AuthGuard('google') {
-  // No sobrescribir canActivate - dejar que Passport maneje todo
-  // El método handleRequest se ejecuta después de que Passport procesa
+  // El parámetro prompt: 'select_account' se configura en la estrategia
+  // Esto fuerza a Google a mostrar siempre la pantalla de selección de cuenta
 }
 
