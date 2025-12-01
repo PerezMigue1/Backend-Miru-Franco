@@ -13,6 +13,7 @@ import {
 import { UsuariosService } from './usuarios.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
+import { CsrfGuard } from '../common/guards/csrf.guard';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
@@ -22,6 +23,7 @@ import { CambiarPasswordDto } from './dto/cambiar-password.dto';
 import { CambiarPasswordPerfilDto } from './dto/cambiar-password-perfil.dto';
 
 @Controller('usuarios')
+@UseGuards(CsrfGuard)
 export class UsuariosController {
   constructor(private readonly usuariosService: UsuariosService) {}
 

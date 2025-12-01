@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { CsrfMiddleware } from './common/middleware/csrf.middleware';
 const cookieParser = require('cookie-parser');
 
 async function bootstrap() {
@@ -9,6 +10,8 @@ async function bootstrap() {
   
   // Cookie parser para CSRF tokens
   app.use(cookieParser());
+  // Middleware para generar y exponer tokens CSRF
+  app.use(new CsrfMiddleware().use.bind(new CsrfMiddleware()));
   
   // Prefijo global para todas las rutas
   app.setGlobalPrefix('api', {

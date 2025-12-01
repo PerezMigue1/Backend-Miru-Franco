@@ -15,10 +15,12 @@ import { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
+import { CsrfGuard } from '../common/guards/csrf.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 
 @Controller('auth')
+@UseGuards(CsrfGuard)
 export class AuthController {
   constructor(private readonly authService: AuthService) {
     console.log('✅ AuthController inicializado');
