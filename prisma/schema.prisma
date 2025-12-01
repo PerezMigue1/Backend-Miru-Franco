@@ -89,3 +89,17 @@ model TokenRevocado {
   @@index([expiraEn])
   @@map("tokens_revocados")
 }
+
+// Tabla para códigos temporales de OAuth (Authorization Code Flow)
+model CodigoOAuth {
+  id        String   @id @default(uuid())
+  codigo    String   @unique
+  token     String   // Token JWT asociado
+  expiraEn  DateTime @map("expira_en")
+  usado     Boolean  @default(false)
+  creadoEn  DateTime @default(now()) @map("creado_en")
+
+  @@index([codigo])
+  @@index([expiraEn])
+  @@map("codigos_oauth")
+}

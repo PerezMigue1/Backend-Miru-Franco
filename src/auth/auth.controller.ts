@@ -8,6 +8,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
@@ -61,7 +62,8 @@ export class AuthController {
 
       const result = await this.authService.googleLogin(req.user);
       // Redirigir al frontend con una redirección HTTP real
-      console.log('🔍 Redirigiendo a:', result.redirect);
+      // NO loggear la URL completa que contiene el código (por seguridad)
+      console.log('🔍 Redirigiendo al frontend (OAuth callback)');
       res.redirect(result.redirect);
     } catch (error: any) {
       console.error('❌ Error en googleAuthRedirect:', error);
@@ -112,6 +114,19 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async getProfile(@CurrentUser() user: any) {
     return this.authService.getProfile(user);
+  }
+
+  /**
+   * Intercambia un código temporal de OAuth por un token JWT
+   * Endpoint seguro que no expone el token en la URL
+   */
+  @Post('exchange-code')
+  @HttpCode(HttpStatus.OK)
+  async exchangeCode(@Body() body: { code: string }) {
+    if (!body.code) {
+      throw new UnauthorizedException('Código requerido');
+    }
+    return this.authService.intercambiarCodigoPorToken(body.code);
   }
 }
 

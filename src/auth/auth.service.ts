@@ -38,23 +38,93 @@ export class AuthService {
     }
 
     try {
+      // Generar token JWT
       const token = await this.generateToken(user);
+
+      // Generar código temporal único y seguro (Authorization Code Flow)
+      const codigo = crypto.randomBytes(32).toString('hex');
+      
+      // Almacenar código con token asociado (expira en 5 minutos)
+      const expiraEn = new Date(Date.now() + 5 * 60 * 1000); // 5 minutos
+      await this.prisma.codigoOAuth.create({
+        data: {
+          codigo,
+          token,
+          expiraEn,
+          usado: false,
+        },
+      });
 
       const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
       
       // Limpiar la URL (remover barras finales)
       const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
       
-      // Redirigir al frontend con el token
+      // Redirigir al frontend con el código (NO el token) - Seguro
       return { 
-        redirect: `${cleanFrontendUrl}/auth/callback?token=${token}&success=true`,
-        token,
-        user,
+        redirect: `${cleanFrontendUrl}/auth/callback?code=${codigo}&success=true`,
+        // NO retornar token en la respuesta (solo para uso interno)
       };
     } catch (error: any) {
-      console.error('❌ Error en googleLogin:', error);
+      // NO loggear el token, solo el error
+      console.error('❌ Error en googleLogin:', error.message);
       throw new Error(`Error al generar token: ${error.message}`);
     }
+  }
+
+  /**
+   * Intercambia un código temporal por un token JWT (Authorization Code Flow)
+   * El código solo puede usarse una vez y expira en 5 minutos
+   */
+  async intercambiarCodigoPorToken(codigo: string) {
+    // Buscar el código
+    const codigoOAuth = await this.prisma.codigoOAuth.findUnique({
+      where: { codigo },
+    });
+
+    if (!codigoOAuth) {
+      throw new UnauthorizedException('Código inválido');
+    }
+
+    // Verificar si ya fue usado
+    if (codigoOAuth.usado) {
+      throw new UnauthorizedException('Código ya utilizado');
+    }
+
+    // Verificar si expiró
+    if (codigoOAuth.expiraEn < new Date()) {
+      // Limpiar código expirado
+      await this.prisma.codigoOAuth.delete({
+        where: { codigo },
+      });
+      throw new UnauthorizedException('Código expirado');
+    }
+
+    // Marcar como usado (single-use)
+    await this.prisma.codigoOAuth.update({
+      where: { codigo },
+      data: { usado: true },
+    });
+
+    // Retornar el token
+    return {
+      success: true,
+      token: codigoOAuth.token,
+    };
+  }
+
+  /**
+   * Limpia códigos OAuth expirados o usados (ejecutar periódicamente)
+   */
+  async limpiarCodigosExpirados() {
+    await this.prisma.codigoOAuth.deleteMany({
+      where: {
+        OR: [
+          { usado: true },
+          { expiraEn: { lt: new Date() } },
+        ],
+      },
+    });
   }
 
   async logout(token: string, logoutAll: boolean = false) {
