@@ -3,7 +3,20 @@ import { AuthGuard } from '@nestjs/passport';
 
 @Injectable()
 export class GoogleAuthGuard extends AuthGuard('google') {
-  // El parámetro prompt: 'select_account' se configura en la estrategia
-  // Esto fuerza a Google a mostrar siempre la pantalla de selección de cuenta
+  // Sobrescribir getAuthenticateOptions para pasar prompt directamente
+  // Esto asegura que el parámetro se incluya en la URL de autorización de Google
+  getAuthenticateOptions(context: ExecutionContext) {
+    const request = context.switchToHttp().getRequest();
+    
+    // Solo aplicar prompt en la ruta de inicio, no en el callback
+    if (request.url && !request.url.includes('/callback')) {
+      console.log('🔍 GoogleAuthGuard - Aplicando prompt=select_account a la URL de autorización');
+      return {
+        prompt: 'select_account',
+      };
+    }
+    
+    return {};
+  }
 }
 
