@@ -45,6 +45,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
     
+    // Verificar logout global (todos los tokens revocados)
+    if (payload.iat) {
+      const isRevokedByGlobalLogout = await this.securityService.isTokenRevokedByGlobalLogout(
+        payload.id,
+        payload.iat,
+      );
+      if (isRevokedByGlobalLogout) {
+        throw new UnauthorizedException('Sesión cerrada. Por favor inicia sesión nuevamente.');
+      }
+    }
+    
     // Verificar expiración y actividad contra la base de datos
     // Esto es más confiable que solo verificar el token JWT (que es inmutable)
     const isInactive = await this.securityService.isUserInactive(payload.id, 15);

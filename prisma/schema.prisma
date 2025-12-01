@@ -42,6 +42,7 @@ model Usuario {
   cuentaBloqueadaHasta  DateTime?      @map("cuenta_bloqueada_hasta")
   ultimoIntentoLogin    DateTime?      @map("ultimo_intento_login")
   ultimaActividad       DateTime?      @map("ultima_actividad") // Última actividad del usuario (para expiración por inactividad)
+  tokensRevocadosDesde  DateTime?      @map("tokens_revocados_desde") // Fecha desde la cual todos los tokens anteriores están revocados (para logout global)
   rol                   String         @default("usuario") // 'usuario', 'admin'
 
   // Campos de dirección (embebidos)

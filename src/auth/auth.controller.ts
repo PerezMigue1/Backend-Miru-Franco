@@ -81,12 +81,20 @@ export class AuthController {
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async logout(@Req() req: any) {
+  async logout(@Req() req: any, @Body() body?: { logoutAll?: boolean }) {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
       return { success: true, message: 'Sesión cerrada' };
     }
-    return this.authService.logout(token);
+    const logoutAll = body?.logoutAll || false;
+    return this.authService.logout(token, logoutAll);
+  }
+
+  @Post('logout-all')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async logoutAll(@CurrentUser() user: any) {
+    return this.authService.logoutAll(user.id);
   }
 
   @Post('refresh')

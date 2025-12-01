@@ -211,5 +211,50 @@ export class SecurityService {
       return false;
     }
   }
+
+  /**
+   * Revoca todos los tokens de un usuario (logout global)
+   * Establece tokensRevocadosDesde a la fecha actual, invalidando todos los tokens emitidos antes de esta fecha
+   */
+  async revokeAllUserTokens(userId: string): Promise<void> {
+    await this.prisma.usuario.update({
+      where: { id: userId },
+      data: {
+        tokensRevocadosDesde: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Verifica si un token fue emitido antes de tokensRevocadosDesde
+   * @param userId ID del usuario
+   * @param tokenIat Issued at time del token (en segundos Unix timestamp)
+   * @returns true si el token está revocado (fue emitido antes de tokensRevocadosDesde)
+   */
+  async isTokenRevokedByGlobalLogout(userId: string, tokenIat: number): Promise<boolean> {
+    try {
+      const usuario = await this.prisma.usuario.findUnique({
+        where: { id: userId },
+        select: {
+          tokensRevocadosDesde: true,
+        },
+      });
+
+      if (!usuario || !usuario.tokensRevocadosDesde) {
+        // No hay logout global, el token es válido
+        return false;
+      }
+
+      // Convertir tokenIat (segundos) a Date
+      const tokenIssuedAt = new Date(tokenIat * 1000);
+
+      // Si el token fue emitido antes de tokensRevocadosDesde, está revocado
+      return tokenIssuedAt < usuario.tokensRevocadosDesde;
+    } catch (error) {
+      console.error('Error verificando logout global:', error);
+      // En caso de error, no bloquear acceso
+      return false;
+    }
+  }
 }
 

@@ -198,6 +198,7 @@ export class UsuariosService {
         id: usuario.id, 
         email: usuario.email,
         jti: crypto.randomBytes(16).toString('hex'), // Token ID único
+        iat: now, // Issued at time (para logout global)
         lastActivity: now,
       },
       { expiresIn: '1d' },

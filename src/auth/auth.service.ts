@@ -22,6 +22,7 @@ export class AuthService {
       id: user.id,
       email: user.email,
       jti: crypto.randomBytes(16).toString('hex'), // Token ID único
+      iat: now, // Issued at time (para logout global)
     };
     
     if (includeActivity) {
@@ -56,25 +57,48 @@ export class AuthService {
     }
   }
 
-  async logout(token: string) {
+  async logout(token: string, logoutAll: boolean = false) {
     try {
-      // Decodificar token para obtener expiración
+      // Decodificar token para obtener información
       const decoded: any = this.jwtService.decode(token);
       if (!decoded || !decoded.exp) {
         throw new UnauthorizedException('Token inválido');
       }
       
-      const expiresAt = new Date(decoded.exp * 1000);
-      
-      // Agregar token a blacklist
-      await this.securityService.revokeToken(token, expiresAt);
+      if (logoutAll) {
+        // Logout global: revocar todos los tokens del usuario
+        await this.securityService.revokeAllUserTokens(decoded.id);
+        
+        return {
+          success: true,
+          message: 'Todas las sesiones han sido cerradas correctamente',
+        };
+      } else {
+        // Logout individual: solo revocar este token
+        const expiresAt = new Date(decoded.exp * 1000);
+        await this.securityService.revokeToken(token, expiresAt);
+        
+        return {
+          success: true,
+          message: 'Sesión cerrada correctamente',
+        };
+      }
+    } catch (error) {
+      throw new UnauthorizedException('Error al cerrar sesión');
+    }
+  }
+
+  async logoutAll(userId: string) {
+    try {
+      // Revocar todos los tokens del usuario
+      await this.securityService.revokeAllUserTokens(userId);
       
       return {
         success: true,
-        message: 'Sesión cerrada correctamente',
+        message: 'Todas las sesiones han sido cerradas correctamente',
       };
     } catch (error) {
-      throw new UnauthorizedException('Error al cerrar sesión');
+      throw new UnauthorizedException('Error al cerrar todas las sesiones');
     }
   }
 
