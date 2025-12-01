@@ -30,6 +30,10 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       clientSecret: clientSecret || 'dummy-client-secret',
       callbackURL: callbackURL,
       scope: ['email', 'profile'],
+      // Forzar siempre la pantalla de selección de cuenta, incluso si solo hay una cuenta
+      authorizationParams: {
+        prompt: 'select_account',
+      },
     });
   }
 
