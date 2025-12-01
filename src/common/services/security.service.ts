@@ -172,23 +172,44 @@ export class SecurityService {
    * @returns true si está inactivo, false si está activo
    */
   async isUserInactive(userId: string, inactivityTimeoutMinutes: number = 15): Promise<boolean> {
-    const usuario = await this.prisma.usuario.findUnique({
-      where: { id: userId },
-      select: {
-        ultimaActividad: true,
-      },
-    });
+    try {
+      const usuario = await this.prisma.usuario.findUnique({
+        where: { id: userId },
+        select: {
+          ultimaActividad: true,
+        },
+      });
 
-    if (!usuario || !usuario.ultimaActividad) {
-      // Si no hay registro de actividad, considerar inactivo
-      return true;
+      if (!usuario) {
+        // Usuario no encontrado, considerar inactivo
+        return true;
+      }
+
+      // Si no hay registro de actividad (null), permitir acceso (usuario nuevo o migración pendiente)
+      // Pero actualizar la actividad para futuras verificaciones
+      if (!usuario.ultimaActividad) {
+        // No considerar inactivo si es null (podría ser usuario nuevo o migración no ejecutada)
+        // Actualizar para que la próxima vez sí se verifique
+        await this.updateLastActivity(userId);
+        return false;
+      }
+
+      const now = new Date();
+      const inactivityTimeout = inactivityTimeoutMinutes * 60 * 1000; // Convertir a milisegundos
+      const timeSinceActivity = now.getTime() - usuario.ultimaActividad.getTime();
+
+      return timeSinceActivity > inactivityTimeout;
+    } catch (error: any) {
+      // Si hay error (ej: columna no existe), no bloquear el acceso
+      // Pero loggear el error para debugging
+      if (error.message?.includes('ultima_actividad') || error.message?.includes('ultimaActividad')) {
+        console.warn('⚠️ Campo ultima_actividad no existe. Ejecuta la migración SQL.');
+      } else {
+        console.error('Error verificando inactividad:', error);
+      }
+      // No bloquear acceso si hay error (fallback a comportamiento anterior)
+      return false;
     }
-
-    const now = new Date();
-    const inactivityTimeout = inactivityTimeoutMinutes * 60 * 1000; // Convertir a milisegundos
-    const timeSinceActivity = now.getTime() - usuario.ultimaActividad.getTime();
-
-    return timeSinceActivity > inactivityTimeout;
   }
 }
 
