@@ -183,6 +183,14 @@ export class UsuariosService {
     // Resetear intentos fallidos después de login exitoso
     await this.securityService.resetFailedLoginAttempts(emailSanitizado);
 
+    // Actualizar última actividad en la base de datos
+    await this.prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        ultimaActividad: new Date(),
+      },
+    });
+
     // Generar token JWT con información de actividad
     const now = Math.floor(Date.now() / 1000);
     const token = this.jwtService.sign(

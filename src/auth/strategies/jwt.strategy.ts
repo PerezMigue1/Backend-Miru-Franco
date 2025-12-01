@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { SecurityService } from '../../common/services/security.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { Request } from 'express';
 
 // Extender ExtractJwt para obtener el token raw
@@ -22,6 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private configService: ConfigService,
     private securityService: SecurityService,
+    private prisma: PrismaService,
   ) {
     super({
       jwtFromRequest: ExtractJwtFromRequest,
@@ -43,21 +45,29 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
     
-    // Verificar expiración y actividad
-    const now = Math.floor(Date.now() / 1000);
-    const INACTIVITY_TIMEOUT = 15 * 60; // 15 minutos en segundos
+    // Verificar expiración y actividad contra la base de datos
+    // Esto es más confiable que solo verificar el token JWT (que es inmutable)
+    const isInactive = await this.securityService.isUserInactive(payload.id, 15);
     
-    if (payload.lastActivity) {
-      const timeSinceActivity = now - payload.lastActivity;
-      if (timeSinceActivity > INACTIVITY_TIMEOUT) {
-        throw new UnauthorizedException('Sesión expirada por inactividad. Por favor inicia sesión nuevamente.');
-      }
+    if (isInactive) {
+      throw new UnauthorizedException('Sesión expirada por inactividad. Por favor inicia sesión nuevamente.');
     }
+    
+    // Actualizar última actividad en la base de datos (en background, no bloquear la respuesta)
+    // Usar setImmediate para no bloquear la respuesta
+    setImmediate(async () => {
+      try {
+        await this.securityService.updateLastActivity(payload.id);
+      } catch (error) {
+        // No fallar la petición si falla la actualización de actividad
+        console.error('Error actualizando última actividad:', error);
+      }
+    });
     
     return { 
       id: payload.id, 
       email: payload.email,
-      lastActivity: payload.lastActivity || now,
+      lastActivity: Math.floor(Date.now() / 1000), // Mantener compatibilidad con código existente
     };
   }
 }

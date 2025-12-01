@@ -41,6 +41,7 @@ model Usuario {
   intentosLoginFallidos Int            @default(0) @map("intentos_login_fallidos")
   cuentaBloqueadaHasta  DateTime?      @map("cuenta_bloqueada_hasta")
   ultimoIntentoLogin    DateTime?      @map("ultimo_intento_login")
+  ultimaActividad       DateTime?      @map("ultima_actividad") // Última actividad del usuario (para expiración por inactividad)
   rol                   String         @default("usuario") // 'usuario', 'admin'
 
   // Campos de dirección (embebidos)

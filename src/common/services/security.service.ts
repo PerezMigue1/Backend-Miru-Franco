@@ -151,5 +151,44 @@ export class SecurityService {
     // Por ahora, esta es una implementación simplificada
     return false;
   }
+
+  /**
+   * Actualiza la última actividad del usuario
+   * Se llama en cada petición autenticada para rastrear actividad
+   */
+  async updateLastActivity(userId: string): Promise<void> {
+    await this.prisma.usuario.update({
+      where: { id: userId },
+      data: {
+        ultimaActividad: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Verifica si el usuario ha estado inactivo por más del tiempo permitido
+   * @param userId ID del usuario
+   * @param inactivityTimeoutMinutes Tiempo de inactividad permitido en minutos (default: 15)
+   * @returns true si está inactivo, false si está activo
+   */
+  async isUserInactive(userId: string, inactivityTimeoutMinutes: number = 15): Promise<boolean> {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      select: {
+        ultimaActividad: true,
+      },
+    });
+
+    if (!usuario || !usuario.ultimaActividad) {
+      // Si no hay registro de actividad, considerar inactivo
+      return true;
+    }
+
+    const now = new Date();
+    const inactivityTimeout = inactivityTimeoutMinutes * 60 * 1000; // Convertir a milisegundos
+    const timeSinceActivity = now.getTime() - usuario.ultimaActividad.getTime();
+
+    return timeSinceActivity > inactivityTimeout;
+  }
 }
 
