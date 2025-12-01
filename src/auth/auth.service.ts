@@ -145,13 +145,13 @@ export class AuthService {
         };
       } else {
         // Logout individual: solo revocar este token
-      const expiresAt = new Date(decoded.exp * 1000);
-      await this.securityService.revokeToken(token, expiresAt);
-      
-      return {
-        success: true,
-        message: 'Sesión cerrada correctamente',
-      };
+        const expiresAt = new Date(decoded.exp * 1000);
+        await this.securityService.revokeToken(token, expiresAt);
+        
+        return {
+          success: true,
+          message: 'Sesión cerrada correctamente',
+        };
       }
     } catch (error) {
       throw new UnauthorizedException('Error al cerrar sesión');
