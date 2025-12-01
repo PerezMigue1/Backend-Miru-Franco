@@ -6,7 +6,6 @@ import { UsuariosModule } from './usuarios/usuarios.module';
 import { AuthModule } from './auth/auth.module';
 import { PreguntaSeguridadModule } from './pregunta-seguridad/pregunta-seguridad.module';
 import { EmailModule } from './email/email.module';
-import { SmsModule } from './sms/sms.module';
 import { SecurityModule } from './common/services/security.module';
 import { AppController } from './app.controller';
 
@@ -25,7 +24,6 @@ import { AppController } from './app.controller';
     SecurityModule,
     // Módulos de funcionalidad
     EmailModule,
-    SmsModule,
     UsuariosModule,
     AuthModule,
     PreguntaSeguridadModule,

@@ -1,7 +1,6 @@
 import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
-import { SmsService } from '../sms/sms.service';
 import { SecurityService } from '../common/services/security.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
@@ -18,13 +17,12 @@ export class UsuariosService {
   constructor(
     private prisma: PrismaService,
     private emailService: EmailService,
-    private smsService: SmsService,
     private jwtService: JwtService,
     private securityService: SecurityService,
   ) {}
 
   async crearUsuario(createUsuarioDto: CreateUsuarioDto) {
-    const { nombre, email, telefono, password, fechaNacimiento, preguntaSeguridad, direccion, perfilCapilar, aceptaAvisoPrivacidad, recibePromociones, metodoVerificacion } = createUsuarioDto;
+    const { nombre, email, telefono, password, fechaNacimiento, preguntaSeguridad, direccion, perfilCapilar, aceptaAvisoPrivacidad, recibePromociones } = createUsuarioDto;
 
     // Sanitizar todas las entradas de texto
     const nombreSanitizado = sanitizeInput(nombre);
@@ -113,33 +111,17 @@ export class UsuariosService {
     // Log seguro (sin datos sensibles)
     console.log('✅ Usuario registrado:', sanitizeForLogging({ email: emailSanitizado, id: nuevoUsuario.id }));
 
-    // Enviar código OTP según el método seleccionado (email o sms)
-    const metodo = metodoVerificacion || 'email'; // Por defecto email
-    
+    // Enviar correo con el código OTP
     try {
-      if (metodo === 'sms') {
-        // Enviar SMS con el código OTP
-        await this.smsService.sendOTPSMS(telefono, codigoOTP);
-        return {
-          success: true,
-          message: 'Ingresa el código enviado a tu teléfono para activar tu cuenta. El código expira en 2 minutos.',
-          requiereVerificacion: true,
-          metodo: 'sms',
-        };
-      } else {
-        // Enviar correo con el código OTP (método por defecto)
-        await this.emailService.sendOTPEmail(emailSanitizado, codigoOTP);
-        return {
-          success: true,
-          message: 'Ingresa el código para activar tu cuenta. El código expira en 2 minutos.',
-          requiereVerificacion: true,
-          metodo: 'email',
-        };
-      }
+      await this.emailService.sendOTPEmail(emailSanitizado, codigoOTP);
+      return {
+        success: true,
+        message: 'Ingresa el código para activar tu cuenta. El código expira en 2 minutos.',
+        requiereVerificacion: true,
+      };
     } catch (err) {
-      console.error(`Error al enviar código de activación por ${metodo}:`, err);
-      const metodoTexto = metodo === 'sms' ? 'SMS' : 'correo';
-      throw new Error(`Usuario registrado, pero no se pudo enviar el ${metodoTexto} de activación. Contacta al soporte.`);
+      console.error('Error al enviar correo de activación:', err);
+      throw new Error('Usuario registrado, pero no se pudo enviar el correo de activación. Contacta al soporte.');
     }
   }
 
@@ -268,7 +250,7 @@ export class UsuariosService {
   }
 
   async reenviarCodigo(reenviarCodigoDto: ReenviarCodigoDto) {
-    const { email, metodoVerificacion } = reenviarCodigoDto;
+    const { email } = reenviarCodigoDto;
 
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
@@ -294,31 +276,15 @@ export class UsuariosService {
       },
     });
 
-    // Enviar código según el método seleccionado
-    const metodo = metodoVerificacion || 'email'; // Por defecto email
-
     try {
-      if (metodo === 'sms') {
-        // Enviar SMS con el nuevo código OTP
-        await this.smsService.sendOTPSMS(usuario.telefono, nuevoCodigo);
-        return {
-          success: true,
-          message: 'Nuevo código enviado a tu teléfono. Recuerda que el código expira en 2 minutos.',
-          metodo: 'sms',
-        };
-      } else {
-        // Enviar correo con el nuevo código OTP (método por defecto)
-        await this.emailService.sendOTPEmail(email, nuevoCodigo);
-        return {
-          success: true,
-          message: 'Nuevo código enviado al correo. Recuerda que el código expira en 2 minutos.',
-          metodo: 'email',
-        };
-      }
-    } catch (error) {
-      console.error(`Error enviando código por ${metodo}:`, error);
-      const metodoTexto = metodo === 'sms' ? 'SMS' : 'correo';
-      throw new Error(`Error al enviar el ${metodoTexto}. Por favor intenta más tarde.`);
+      await this.emailService.sendOTPEmail(email, nuevoCodigo);
+      return {
+        success: true,
+        message: 'Nuevo código enviado al correo. Recuerda que el código expira en 2 minutos.',
+      };
+    } catch (emailError) {
+      console.error('Error enviando correo:', emailError);
+      throw new Error('Error al enviar el correo. Por favor intenta más tarde.');
     }
   }
 
