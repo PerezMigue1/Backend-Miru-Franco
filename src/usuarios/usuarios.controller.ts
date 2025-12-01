@@ -13,6 +13,7 @@ import {
 import { UsuariosService } from './usuarios.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
+import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
@@ -26,8 +27,13 @@ export class UsuariosController {
   constructor(private readonly usuariosService: UsuariosService) {}
 
   // ===== GET ROUTES (sin parámetros primero) =====
+  /**
+   * Obtener todos los usuarios
+   * ✅ Solo para administradores (rol = 'admin')
+   */
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async obtenerUsuarios() {
     return this.usuariosService.obtenerUsuarios();
   }
@@ -141,8 +147,13 @@ export class UsuariosController {
     );
   }
 
+  /**
+   * Actualizar usuario por ID
+   * ✅ Solo para administradores (rol = 'admin')
+   */
   @Put(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async actualizarUsuario(
     @Param('id') id: string,
     @Body() updateUsuarioDto: UpdateUsuarioDto,
@@ -150,8 +161,13 @@ export class UsuariosController {
     return this.usuariosService.actualizarUsuario(id, updateUsuarioDto);
   }
 
+  /**
+   * Eliminar usuario por ID (borrado lógico o físico según el servicio)
+   * ✅ Solo para administradores (rol = 'admin')
+   */
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async eliminarUsuario(@Param('id') id: string) {
     return this.usuariosService.eliminarUsuario(id);
   }
