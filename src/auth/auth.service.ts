@@ -145,25 +145,16 @@ export class AuthService {
       if (!decoded || !decoded.exp) {
         throw new UnauthorizedException('Token inválido');
       }
-      
-      if (logoutAll) {
-        // Logout global: revocar todos los tokens del usuario
-        await this.securityService.revokeAllUserTokens(decoded.id);
-        
-        return {
-          success: true,
-          message: 'Todas las sesiones han sido cerradas correctamente',
-        };
-      } else {
-        // Logout individual: solo revocar este token
-      const expiresAt = new Date(decoded.exp * 1000);
-      await this.securityService.revokeToken(token, expiresAt);
+
+      // SIEMPRE hacer logout global:
+      // - Revocar todos los tokens del usuario (cierra sesión en todos los dispositivos)
+      // - Cumple con el requisito de que cerrar sesión en un dispositivo invalida las demás sesiones
+      await this.securityService.revokeAllUserTokens(decoded.id);
       
       return {
         success: true,
-        message: 'Sesión cerrada correctamente',
+        message: 'Todas las sesiones han sido cerradas correctamente',
       };
-      }
     } catch (error) {
       throw new UnauthorizedException('Error al cerrar sesión');
     }
