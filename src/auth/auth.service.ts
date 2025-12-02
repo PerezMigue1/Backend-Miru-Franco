@@ -106,6 +106,17 @@ export class AuthService {
       data: { usado: true },
     });
 
+    // Actualizar última actividad del usuario asociado al token
+    try {
+      const decoded: any = this.jwtService.decode(codigoOAuth.token);
+      if (decoded?.id) {
+        await this.securityService.updateLastActivity(decoded.id);
+      }
+    } catch (error) {
+      // No bloquear el flujo de login por errores al actualizar actividad
+      console.error('Error actualizando última actividad en OAuth:', error);
+    }
+
     // Retornar el token
     return {
       success: true,
@@ -145,13 +156,13 @@ export class AuthService {
         };
       } else {
         // Logout individual: solo revocar este token
-        const expiresAt = new Date(decoded.exp * 1000);
-        await this.securityService.revokeToken(token, expiresAt);
-        
-        return {
-          success: true,
-          message: 'Sesión cerrada correctamente',
-        };
+      const expiresAt = new Date(decoded.exp * 1000);
+      await this.securityService.revokeToken(token, expiresAt);
+      
+      return {
+        success: true,
+        message: 'Sesión cerrada correctamente',
+      };
       }
     } catch (error) {
       throw new UnauthorizedException('Error al cerrar sesión');
