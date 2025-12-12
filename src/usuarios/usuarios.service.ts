@@ -9,7 +9,7 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
-import { sanitizeInput, containsSQLInjection, sanitizeForLogging, isCommonAnswer } from '../common/utils/security.util';
+import { sanitizeInput, containsSQLInjection, sanitizeForLogging, isCommonAnswer, sanitizeRegisterData, sanitizeEmail, sanitizePhone, sanitizePostalCode } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 
 @Injectable()
@@ -22,27 +22,27 @@ export class UsuariosService {
   ) {}
 
   async crearUsuario(createUsuarioDto: CreateUsuarioDto) {
-    const { nombre, email, telefono, password, fechaNacimiento, preguntaSeguridad, direccion, perfilCapilar, aceptaAvisoPrivacidad, recibePromociones } = createUsuarioDto;
-
-    // Sanitizar todas las entradas de texto
-    const nombreSanitizado = sanitizeInput(nombre);
-    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    // ⚠️ IMPORTANTE: Sanitizar TODOS los datos recibidos antes de procesarlos
+    // Esto previene XSS incluso si alguien envía peticiones directas (bypass del frontend)
+    const sanitizedData = sanitizeRegisterData(createUsuarioDto);
     
+    const { nombre, email, telefono, password, fechaNacimiento, preguntaSeguridad, direccion, perfilCapilar, aceptaAvisoPrivacidad, recibePromociones } = sanitizedData;
+
     // Prevenir SQL injection
     if (
-      containsSQLInjection(nombreSanitizado) ||
-      containsSQLInjection(emailSanitizado) ||
+      containsSQLInjection(nombre) ||
+      containsSQLInjection(email) ||
       (telefono && containsSQLInjection(telefono)) ||
-      containsSQLInjection(preguntaSeguridad.pregunta) ||
-      containsSQLInjection(preguntaSeguridad.respuesta)
+      (preguntaSeguridad?.pregunta && containsSQLInjection(preguntaSeguridad.pregunta)) ||
+      (preguntaSeguridad?.respuesta && containsSQLInjection(preguntaSeguridad.respuesta))
     ) {
-      console.warn('⚠️ Intento de SQL injection detectado en crearUsuario:', sanitizeForLogging({ email: emailSanitizado }));
+      console.warn('⚠️ Intento de SQL injection detectado en crearUsuario:', sanitizeForLogging({ email }));
       throw new BadRequestException('Datos inválidos. Por favor verifica la información ingresada.');
     }
 
     // Verificar si el email ya existe
     const existe = await this.prisma.usuario.findUnique({
-      where: { email: emailSanitizado },
+      where: { email },
     });
 
     if (existe) {
@@ -52,7 +52,7 @@ export class UsuariosService {
     // Validar que la contraseña no contenga datos personales
     const passwordValidation = validatePasswordAgainstPersonalData(password, {
       nombre,
-      email: emailSanitizado,
+      email,
       telefono,
       fechaNacimiento,
       direccion,
@@ -67,38 +67,37 @@ export class UsuariosService {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Hashear la respuesta de seguridad
-    const respuestaHasheada = await bcrypt.hash(preguntaSeguridad.respuesta.trim(), 10);
+    const respuestaHasheada = await bcrypt.hash((preguntaSeguridad?.respuesta || '').trim(), 10);
 
     // Generar código OTP de 6 dígitos
     const codigoOTP = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
 
     // Crear nuevo usuario con campos embebidos
-    const preguntaGuardada = sanitizeInput(preguntaSeguridad.pregunta.trim());
-    
+    // ⚠️ IMPORTANTE: Usar sanitizedData, NO createUsuarioDto directamente
     const nuevoUsuario = await this.prisma.usuario.create({
       data: {
-        nombre: nombreSanitizado,
-        email: emailSanitizado,
-        telefono,
+        nombre,              // ✅ Ya sanitizado
+        email,               // ✅ Ya sanitizado
+        telefono,            // ✅ Ya sanitizado
         password: hashedPassword,
         fechaNacimiento: new Date(fechaNacimiento),
         // Pregunta de seguridad embebida
-        preguntaSeguridad: preguntaGuardada,
+        preguntaSeguridad: preguntaSeguridad?.pregunta || '', // ✅ Ya sanitizado
         respuestaSeguridad: respuestaHasheada,
         // Campos de dirección embebidos
-        calle: direccion?.calle,
-        numero: direccion?.numero,
-        colonia: direccion?.colonia,
-        ciudad: direccion?.ciudad,
-        estado: direccion?.estado,
-        codigoPostal: direccion?.codigoPostal,
+        calle: direccion?.calle,           // ✅ Ya sanitizado
+        numero: direccion?.numero,          // ✅ Ya sanitizado
+        colonia: direccion?.colonia,        // ✅ Ya sanitizado
+        ciudad: direccion?.ciudad,          // ✅ Ya sanitizado
+        estado: direccion?.estado,          // ✅ Ya sanitizado
+        codigoPostal: direccion?.codigoPostal, // ✅ Ya sanitizado
         // Campos de perfil capilar embebidos
         tipoCabello: perfilCapilar?.tipoCabello as any,
-        colorNatural: perfilCapilar?.colorNatural,
-        colorActual: perfilCapilar?.colorActual,
-        productosUsados: perfilCapilar?.productosUsados,
-        alergias: perfilCapilar?.alergias,
+        colorNatural: perfilCapilar?.colorNatural,      // ✅ Ya sanitizado
+        colorActual: perfilCapilar?.colorActual,        // ✅ Ya sanitizado
+        productosUsados: perfilCapilar?.productosUsados, // ✅ Ya sanitizado
+        alergias: perfilCapilar?.alergias,              // ✅ Ya sanitizado
         aceptaAvisoPrivacidad,
         recibePromociones: recibePromociones || false,
         codigoOTP,
@@ -109,11 +108,11 @@ export class UsuariosService {
     });
 
     // Log seguro (sin datos sensibles)
-    console.log('✅ Usuario registrado:', sanitizeForLogging({ email: emailSanitizado, id: nuevoUsuario.id }));
+    console.log('✅ Usuario registrado:', sanitizeForLogging({ email, id: nuevoUsuario.id }));
 
     // Enviar correo con el código OTP
     try {
-      await this.emailService.sendOTPEmail(emailSanitizado, codigoOTP);
+      await this.emailService.sendOTPEmail(email, codigoOTP);
       return {
         success: true,
         message: 'Ingresa el código para activar tu cuenta. El código expira en 2 minutos.',
@@ -129,7 +128,7 @@ export class UsuariosService {
     const { email, password } = loginDto;
 
     // Sanitizar y validar entrada
-    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    const emailSanitizado = sanitizeEmail(email);
     
     // Prevenir SQL injection
     if (containsSQLInjection(emailSanitizado) || containsSQLInjection(password)) {
@@ -222,8 +221,11 @@ export class UsuariosService {
   async verificarOTP(verificarOtpDto: VerificarOtpDto) {
     const { email, codigo } = verificarOtpDto;
 
+    // Sanitizar email antes de buscar
+    const emailSanitizado = sanitizeEmail(email);
+
     const usuario = await this.prisma.usuario.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: emailSanitizado },
     });
 
     if (!usuario) {
@@ -261,8 +263,11 @@ export class UsuariosService {
   async reenviarCodigo(reenviarCodigoDto: ReenviarCodigoDto) {
     const { email } = reenviarCodigoDto;
 
+    // Sanitizar email antes de buscar
+    const emailSanitizado = sanitizeEmail(email);
+
     const usuario = await this.prisma.usuario.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: emailSanitizado },
     });
 
     if (!usuario) {
@@ -286,7 +291,7 @@ export class UsuariosService {
     });
 
     try {
-      await this.emailService.sendOTPEmail(email, nuevoCodigo);
+      await this.emailService.sendOTPEmail(emailSanitizado, nuevoCodigo);
       return {
         success: true,
         message: 'Nuevo código enviado al correo. Recuerda que el código expira en 2 minutos.',
@@ -298,8 +303,15 @@ export class UsuariosService {
   }
 
   async verificarCorreoExistente(correo: string) {
+    // Sanitizar email antes de buscar
+    const correoSanitizado = sanitizeEmail(correo);
+
+    if (!correoSanitizado) {
+      return { existe: false, message: 'Correo no proporcionado' };
+    }
+
     const usuario = await this.prisma.usuario.findUnique({
-      where: { email: correo.toLowerCase() },
+      where: { email: correoSanitizado },
     });
 
     if (usuario) {
@@ -434,7 +446,7 @@ export class UsuariosService {
 
   async solicitarEnlaceRecuperacion(email: string) {
     // Sanitizar entrada
-    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    const emailSanitizado = sanitizeEmail(email);
     
     // Prevenir SQL injection
     if (containsSQLInjection(emailSanitizado)) {
@@ -523,7 +535,7 @@ export class UsuariosService {
 
   async obtenerPreguntaSeguridad(email: string) {
     // Sanitizar entrada
-    const emailSanitizado = sanitizeInput(email.toLowerCase().trim());
+    const emailSanitizado = sanitizeEmail(email);
     
     // Prevenir SQL injection
     if (containsSQLInjection(emailSanitizado)) {
@@ -565,8 +577,12 @@ export class UsuariosService {
   }
 
   async validarRespuestaSeguridad(email: string, respuesta: string) {
+    // Sanitizar email y respuesta antes de procesar
+    const emailSanitizado = sanitizeEmail(email);
+    const respuestaSanitizada = sanitizeInput(respuesta);
+
     const usuario = await this.prisma.usuario.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: emailSanitizado },
       select: {
         id: true,
         email: true,
@@ -583,7 +599,7 @@ export class UsuariosService {
     }
 
     const respuestaValida = await bcrypt.compare(
-      respuesta.trim(),
+      respuestaSanitizada.trim(),
       usuario.respuestaSeguridad,
     );
     if (!respuestaValida) {
@@ -610,9 +626,12 @@ export class UsuariosService {
   }
 
   async validarTokenRecuperacion(email: string, token: string) {
+    // Sanitizar email antes de buscar
+    const emailSanitizado = sanitizeEmail(email);
+
     const usuario = await this.prisma.usuario.findFirst({
       where: {
-        email: email.toLowerCase(),
+        email: emailSanitizado,
         resetPasswordToken: token,
         resetPasswordExpires: {
           gt: new Date(),
@@ -639,10 +658,13 @@ export class UsuariosService {
   }
 
   async cambiarPassword(email: string, token: string, nuevaPassword: string) {
+    // Sanitizar email antes de buscar
+    const emailSanitizado = sanitizeEmail(email);
+
     // Verificar que el token existe, no está expirado y no ha sido usado
     const usuario = await this.prisma.usuario.findFirst({
       where: {
-        email: email.toLowerCase(),
+        email: emailSanitizado,
         resetPasswordToken: token,
         resetPasswordExpires: {
           gt: new Date(),
@@ -810,31 +832,41 @@ export class UsuariosService {
     ];
     const actualizaciones: any = {};
 
-    // Manejar campos directos
+    // Sanitizar campos directos
     camposPermitidos.forEach(campo => {
       if (updateData[campo] !== undefined) {
-        actualizaciones[campo] = updateData[campo];
+        // Sanitizar según el tipo de campo
+        if (campo === 'telefono' && typeof updateData[campo] === 'string') {
+          actualizaciones[campo] = sanitizePhone(updateData[campo]);
+        } else if (campo === 'codigoPostal' && typeof updateData[campo] === 'string') {
+          actualizaciones[campo] = sanitizePostalCode(updateData[campo]);
+        } else if (typeof updateData[campo] === 'string' && ['nombre', 'calle', 'numero', 'colonia', 'ciudad', 'estado', 'colorNatural', 'colorActual', 'productosUsados', 'alergias'].includes(campo)) {
+          actualizaciones[campo] = sanitizeInput(updateData[campo]);
+        } else {
+          // Para campos no string (fechaNacimiento, recibePromociones, tipoCabello)
+          actualizaciones[campo] = updateData[campo];
+        }
       }
     });
 
     // Manejar objetos direccion y perfilCapilar si vienen como objetos
     if (updateData.direccion) {
       const { direccion } = updateData;
-      if (direccion.calle !== undefined) actualizaciones.calle = direccion.calle;
-      if (direccion.numero !== undefined) actualizaciones.numero = direccion.numero;
-      if (direccion.colonia !== undefined) actualizaciones.colonia = direccion.colonia;
-      if (direccion.ciudad !== undefined) actualizaciones.ciudad = direccion.ciudad;
-      if (direccion.estado !== undefined) actualizaciones.estado = direccion.estado;
-      if (direccion.codigoPostal !== undefined) actualizaciones.codigoPostal = direccion.codigoPostal;
+      if (direccion.calle !== undefined) actualizaciones.calle = sanitizeInput(direccion.calle);
+      if (direccion.numero !== undefined) actualizaciones.numero = sanitizeInput(direccion.numero);
+      if (direccion.colonia !== undefined) actualizaciones.colonia = sanitizeInput(direccion.colonia);
+      if (direccion.ciudad !== undefined) actualizaciones.ciudad = sanitizeInput(direccion.ciudad);
+      if (direccion.estado !== undefined) actualizaciones.estado = sanitizeInput(direccion.estado);
+      if (direccion.codigoPostal !== undefined) actualizaciones.codigoPostal = sanitizePostalCode(direccion.codigoPostal);
     }
 
     if (updateData.perfilCapilar) {
       const { perfilCapilar } = updateData;
       if (perfilCapilar.tipoCabello !== undefined) actualizaciones.tipoCabello = perfilCapilar.tipoCabello;
-      if (perfilCapilar.colorNatural !== undefined) actualizaciones.colorNatural = perfilCapilar.colorNatural;
-      if (perfilCapilar.colorActual !== undefined) actualizaciones.colorActual = perfilCapilar.colorActual;
-      if (perfilCapilar.productosUsados !== undefined) actualizaciones.productosUsados = perfilCapilar.productosUsados;
-      if (perfilCapilar.alergias !== undefined) actualizaciones.alergias = perfilCapilar.alergias;
+      if (perfilCapilar.colorNatural !== undefined) actualizaciones.colorNatural = sanitizeInput(perfilCapilar.colorNatural);
+      if (perfilCapilar.colorActual !== undefined) actualizaciones.colorActual = sanitizeInput(perfilCapilar.colorActual);
+      if (perfilCapilar.productosUsados !== undefined) actualizaciones.productosUsados = sanitizeInput(perfilCapilar.productosUsados);
+      if (perfilCapilar.alergias !== undefined) actualizaciones.alergias = sanitizeInput(perfilCapilar.alergias);
     }
 
     const usuario = await this.prisma.usuario.update({
