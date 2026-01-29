@@ -15,23 +15,41 @@ export class ProductosService {
       // Sanitizar categoría antes de usar
       const categoriaSanitizada = sanitizeInput(categoria);
       if (containsSQLInjection(categoriaSanitizada)) {
-        console.warn('⚠️ Intento de SQL injection detectado en listar productos:', sanitizeForLogging({ categoria }));
+        console.warn(
+          '⚠️ Intento de SQL injection detectado en listar productos:',
+          sanitizeForLogging({ categoria }),
+        );
         throw new BadRequestException('Categoría inválida');
       }
       where.categoria = categoriaSanitizada;
     }
 
-    const productos = await this.prisma.producto.findMany({
-      where,
-      include: { presentaciones: true },
-      orderBy: { id: 'asc' },
-    });
+    try {
+      const productos = await this.prisma.producto.findMany({
+        where,
+        include: { presentaciones: true },
+        orderBy: { id: 'asc' },
+      });
 
-    return {
-      success: true,
-      count: productos.length,
-      data: productos,
-    };
+      return {
+        success: true,
+        count: productos.length,
+        data: productos,
+      };
+    } catch (error) {
+      // Log detallado para depuración
+      console.error('❌ Error al listar productos:', error);
+
+      // En desarrollo exponemos el mensaje real para poder ver el problema
+      if (process.env.NODE_ENV !== 'production') {
+        throw new BadRequestException(
+          `Error al listar productos: ${(error as any)?.message || 'error desconocido'}`,
+        );
+      }
+
+      // En producción devolvemos mensaje genérico
+      throw new BadRequestException('No se pudieron obtener los productos');
+    }
   }
 
   async obtenerPorId(id: number) {
