@@ -19,6 +19,7 @@ export class AppController {
           me: '/api/auth/me',
         },
         seguridad: '/api/pregunta-seguridad',
+        productos: '/api/productos',
       },
     };
   }
