@@ -103,3 +103,48 @@ model CodigoOAuth {
   @@index([expiraEn])
   @@map("codigos_oauth")
 }
+
+// Tabla principal de productos
+model Producto {
+  id               Int                     @id @default(autoincrement())
+  nombre           String
+  marca            String
+  descripcion      String?                 @db.VarChar(1000)
+  descripcionLarga String?                 @db.Text
+  precio           String
+  precioOriginal   String?
+  descuento        Int?
+  categoria        String?
+  stock            Int                     @default(0)
+  disponible       Boolean                 @default(true)
+  nuevo            Boolean                 @default(false)
+  crueltyFree      Boolean                 @default(false)
+  caracteristicas  String[]                @default([])
+  ingredientes     String?
+  creadoEn         DateTime                @default(now()) @map("creado_en")
+  actualizadoEn    DateTime                @updatedAt @map("actualizado_en")
+
+  presentaciones   ProductoPresentacion[]
+
+  @@index([categoria])
+  @@index([disponible])
+  @@map("productos")
+}
+
+// Tabla de presentaciones de cada producto
+model ProductoPresentacion {
+  id             Int       @id @default(autoincrement())
+  tamanio        String
+  precio         String
+  precioOriginal String?
+  stock          Int       @default(0)
+  disponible     Boolean   @default(true)
+  creadoEn       DateTime  @default(now()) @map("creado_en")
+  actualizadoEn  DateTime  @updatedAt @map("actualizado_en")
+
+  producto       Producto  @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  productoId     Int
+
+  @@map("producto_presentaciones")
+  @@index([productoId])
+}

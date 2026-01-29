@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { PreguntaSeguridadModule } from './pregunta-seguridad/pregunta-seguridad.module';
 import { EmailModule } from './email/email.module';
 import { SecurityModule } from './common/services/security.module';
+import { ProductosModule } from './productos/productos.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -27,6 +28,7 @@ import { AppController } from './app.controller';
     UsuariosModule,
     AuthModule,
     PreguntaSeguridadModule,
+    ProductosModule,
   ],
   controllers: [AppController],
 })
