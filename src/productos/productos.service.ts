@@ -9,7 +9,7 @@ export class ProductosService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listar(categoria?: string) {
-    const where: any = { disponible: true };
+    const where: any = {};
 
     if (categoria) {
       // Sanitizar categoría antes de usar
@@ -40,15 +40,10 @@ export class ProductosService {
       // Log detallado para depuración
       console.error('❌ Error al listar productos:', error);
 
-      // En desarrollo exponemos el mensaje real para poder ver el problema
-      if (process.env.NODE_ENV !== 'production') {
-        throw new BadRequestException(
-          `Error al listar productos: ${(error as any)?.message || 'error desconocido'}`,
-        );
-      }
-
-      // En producción devolvemos mensaje genérico
-      throw new BadRequestException('No se pudieron obtener los productos');
+      // Devolvemos el detalle en el propio mensaje para poder verlo en el frontend
+      throw new BadRequestException(
+        `No se pudieron obtener los productos: ${(error as any)?.message || 'error desconocido'}`,
+      );
     }
   }
 
@@ -74,8 +69,13 @@ export class ProductosService {
     const marcaSanitizada = sanitizeInput(dto.marca);
     const descripcionSanitizada = dto.descripcion ? sanitizeInput(dto.descripcion) : null;
     const descripcionLargaSanitizada = dto.descripcionLarga ? sanitizeInput(dto.descripcionLarga) : null;
+    const imagenesSanitizadas = dto.imagenes
+      ? dto.imagenes.map((url) => sanitizeInput(url))
+      : [];
     const categoriaSanitizada = dto.categoria ? sanitizeInput(dto.categoria) : null;
     const ingredientesSanitizados = dto.ingredientes ? sanitizeInput(dto.ingredientes) : null;
+    const modoUsoSanitizado = dto.modoUso ? sanitizeInput(dto.modoUso) : null;
+    const resultadoSanitizado = dto.resultado ? sanitizeInput(dto.resultado) : null;
 
     // Prevenir SQL injection
     if (
@@ -84,7 +84,9 @@ export class ProductosService {
       (descripcionSanitizada && containsSQLInjection(descripcionSanitizada)) ||
       (descripcionLargaSanitizada && containsSQLInjection(descripcionLargaSanitizada)) ||
       (categoriaSanitizada && containsSQLInjection(categoriaSanitizada)) ||
-      (ingredientesSanitizados && containsSQLInjection(ingredientesSanitizados))
+      (ingredientesSanitizados && containsSQLInjection(ingredientesSanitizados)) ||
+      (modoUsoSanitizado && containsSQLInjection(modoUsoSanitizado)) ||
+      (resultadoSanitizado && containsSQLInjection(resultadoSanitizado))
     ) {
       console.warn('⚠️ Intento de SQL injection detectado en crear producto:', sanitizeForLogging({ nombre: nombreSanitizado }));
       throw new BadRequestException('Datos inválidos. Por favor verifica la información ingresada.');
@@ -103,16 +105,15 @@ export class ProductosService {
         marca: marcaSanitizada,
         descripcion: descripcionSanitizada,
         descripcionLarga: descripcionLargaSanitizada,
-        precio: dto.precio,
-        precioOriginal: dto.precioOriginal,
+        imagenes: imagenesSanitizadas,
         descuento: dto.descuento,
         categoria: categoriaSanitizada,
-        stock: dto.stock,
-        disponible: dto.disponible ?? true,
         nuevo: dto.nuevo ?? false,
         crueltyFree: dto.crueltyFree ?? false,
         caracteristicas: caracteristicasSanitizadas,
         ingredientes: ingredientesSanitizados,
+        modoUso: modoUsoSanitizado,
+        resultado: resultadoSanitizado,
         presentaciones: presentaciones && presentaciones.length
           ? {
               create: presentaciones.map((p) => ({
@@ -169,6 +170,11 @@ export class ProductosService {
     if (dto.descripcionLarga !== undefined) {
       dataActualizada.descripcionLarga = dto.descripcionLarga ? sanitizeInput(dto.descripcionLarga) : null;
     }
+    // Imágenes: si vienen y tienen al menos una URL, actualizamos.
+    // Si vienen como arreglo vacío [], NO borramos las existentes para no perder imágenes por error.
+    if (dto.imagenes !== undefined && dto.imagenes.length > 0) {
+      dataActualizada.imagenes = dto.imagenes.map((url) => sanitizeInput(url));
+    }
 
     if (dto.categoria !== undefined) {
       dataActualizada.categoria = dto.categoria ? sanitizeInput(dto.categoria) : null;
@@ -178,16 +184,20 @@ export class ProductosService {
       dataActualizada.ingredientes = dto.ingredientes ? sanitizeInput(dto.ingredientes) : null;
     }
 
+    if (dto.modoUso !== undefined) {
+      dataActualizada.modoUso = dto.modoUso ? sanitizeInput(dto.modoUso) : null;
+    }
+
+    if (dto.resultado !== undefined) {
+      dataActualizada.resultado = dto.resultado ? sanitizeInput(dto.resultado) : null;
+    }
+
     if (dto.caracteristicas !== undefined) {
       dataActualizada.caracteristicas = dto.caracteristicas.map(c => sanitizeInput(c));
     }
 
     // Campos que no requieren sanitización especial
-    if (dto.precio !== undefined) dataActualizada.precio = dto.precio;
-    if (dto.precioOriginal !== undefined) dataActualizada.precioOriginal = dto.precioOriginal;
     if (dto.descuento !== undefined) dataActualizada.descuento = dto.descuento;
-    if (dto.stock !== undefined) dataActualizada.stock = dto.stock;
-    if (dto.disponible !== undefined) dataActualizada.disponible = dto.disponible;
     if (dto.nuevo !== undefined) dataActualizada.nuevo = dto.nuevo;
     if (dto.crueltyFree !== undefined) dataActualizada.crueltyFree = dto.crueltyFree;
 
@@ -226,16 +236,15 @@ export class ProductosService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    await this.prisma.producto.update({
+    await this.prisma.producto.delete({
       where: { id },
-      data: { disponible: false },
     });
 
-    console.log('✅ Producto deshabilitado:', sanitizeForLogging({ id }));
+    console.log('✅ Producto eliminado:', sanitizeForLogging({ id }));
 
     return {
       success: true,
-      message: 'Producto deshabilitado correctamente',
+      message: 'Producto eliminado correctamente',
     };
   }
 }

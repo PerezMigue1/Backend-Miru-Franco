@@ -1,7 +1,8 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { BadRequestException, ValidationPipe, VersioningType } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import type { ValidationError } from 'class-validator';
 const cookieParser = require('cookie-parser');
 
 async function bootstrap() {
@@ -106,16 +107,28 @@ async function bootstrap() {
   // Filtro global de excepciones
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  // Validación global con sanitización
+  // Validación global: 400 con formato { success, error, message, errors } (guía 400/403/500)
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // Remueve propiedades no definidas en el DTO
-      forbidNonWhitelisted: true, // Rechaza propiedades no definidas
+      whitelist: true,
+      forbidNonWhitelisted: true,
       transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
+      transformOptions: { enableImplicitConversion: true },
+      disableErrorMessages: process.env.NODE_ENV === 'production',
+      exceptionFactory: (validationErrors: ValidationError[]) => {
+        const errors: Record<string, string> = {};
+        validationErrors.forEach((err) => {
+          if (err.property && err.constraints) {
+            errors[err.property] = Object.values(err.constraints)[0] ?? 'Campo inválido';
+          }
+        });
+        return new BadRequestException({
+          success: false,
+          error: 'Errores de validación',
+          message: 'Revisa los campos del formulario',
+          errors,
+        });
       },
-      disableErrorMessages: process.env.NODE_ENV === 'production', // Ocultar mensajes detallados en producción
     }),
   );
 

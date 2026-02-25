@@ -6,7 +6,6 @@ import {
   IsOptional,
   IsString,
   MaxLength,
-  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -34,13 +33,11 @@ export class CreateProductoDto {
   @IsOptional()
   descripcionLarga?: string;
 
-  @IsString()
-  @IsNotEmpty()
-  precio: string;
-
-  @IsString()
+  /** URLs de imágenes (ej. Cloudinary). Solo se guardan las URLs en la BD. */
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
-  precioOriginal?: string;
+  imagenes?: string[];
 
   @IsInt()
   @IsOptional()
@@ -55,14 +52,6 @@ export class CreateProductoDto {
   @Type(() => CreatePresentacionDto)
   @IsOptional()
   presentaciones?: CreatePresentacionDto[];
-
-  @IsInt()
-  @Min(0)
-  stock: number;
-
-  @IsBoolean()
-  @IsOptional()
-  disponible?: boolean = true;
 
   @IsBoolean()
   @IsOptional()
@@ -80,5 +69,15 @@ export class CreateProductoDto {
   @IsString()
   @IsOptional()
   ingredientes?: string;
+
+  /** Modo de uso del producto (instrucciones). */
+  @IsString()
+  @IsOptional()
+  modoUso?: string;
+
+  /** Resultado esperado o descripción del resultado. */
+  @IsString()
+  @IsOptional()
+  resultado?: string;
 }
 

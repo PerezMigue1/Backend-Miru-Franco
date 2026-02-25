@@ -43,7 +43,7 @@ model Usuario {
   ultimoIntentoLogin    DateTime?      @map("ultimo_intento_login")
   ultimaActividad       DateTime?      @map("ultima_actividad") // Última actividad del usuario (para expiración por inactividad)
   tokensRevocadosDesde  DateTime?      @map("tokens_revocados_desde") // Fecha desde la cual todos los tokens anteriores están revocados (para logout global)
-  rol                   String         @default("usuario") // 'usuario', 'admin'
+  rol                   String         @default("cliente") // admin | estilista | empleado | becario | cliente
 
   // Campos de dirección (embebidos)
   calle                 String?
@@ -63,6 +63,8 @@ model Usuario {
   // Campos de pregunta de seguridad (embebidos)
   preguntaSeguridad     String?        @map("pregunta_seguridad")
   respuestaSeguridad    String?        @map("respuesta_seguridad") // Hasheada con bcrypt
+
+  serviciosComoEspecialista ServicioEspecialista[]
 
   @@index([activo])
   @@index([email])
@@ -110,24 +112,23 @@ model Producto {
   nombre           String
   marca            String
   descripcion      String?                 @db.VarChar(1000)
-  descripcionLarga String?                 @db.Text
-  precio           String
-  precioOriginal   String?
-  descuento        Int?
+  descripcionLarga String?                 @db.Text @map("descripcion_larga")
+  imagenes         String[]                @default([])
+  descuento        Int?                    // Porcentaje de descuento aplicable a presentaciones
   categoria        String?
-  stock            Int                     @default(0)
-  disponible       Boolean                 @default(true)
   nuevo            Boolean                 @default(false)
-  crueltyFree      Boolean                 @default(false)
+  crueltyFree      Boolean                 @default(false) @map("cruelty_free")
   caracteristicas  String[]                @default([])
   ingredientes     String?
+  modoUso          String?                 @db.Text @map("modo_uso")
+  resultado        String?                 @db.Text
   creadoEn         DateTime                @default(now()) @map("creado_en")
   actualizadoEn    DateTime                @updatedAt @map("actualizado_en")
 
-  presentaciones   ProductoPresentacion[]
+  presentaciones      ProductoPresentacion[]
+  serviciosAsociados  ServicioProducto[]
 
   @@index([categoria])
-  @@index([disponible])
   @@map("productos")
 }
 
@@ -136,15 +137,71 @@ model ProductoPresentacion {
   id             Int       @id @default(autoincrement())
   tamanio        String
   precio         String
-  precioOriginal String?
+  precioOriginal String?    @map("precio_original")
   stock          Int       @default(0)
   disponible     Boolean   @default(true)
   creadoEn       DateTime  @default(now()) @map("creado_en")
   actualizadoEn  DateTime  @updatedAt @map("actualizado_en")
 
   producto       Producto  @relation(fields: [productoId], references: [id], onDelete: Cascade)
-  productoId     Int
+  productoId     Int       @map("producto_id")
 
   @@map("producto_presentaciones")
   @@index([productoId])
+}
+
+// Servicios (corte, coloración, tratamientos, etc.)
+model Servicio {
+  id                  Int                @id @default(autoincrement())
+  nombre              String
+  descripcion         String?            @db.Text
+  descripcionLarga    String?            @db.Text @map("descripcion_larga")
+  precio              Decimal            @db.Decimal(10, 2)
+  duracionMinutos     Int                 @map("duracion_minutos")
+  categoria           String
+  requiereEvaluacion  Boolean            @default(false) @map("requiere_evaluacion")
+  imagen              Json               @default("[]")
+  incluye             Json               @default("[]")
+  recomendaciones     Json               @default("[]") @map("recomendaciones")
+  activo              Boolean            @default(true)
+  creadoEn            DateTime           @default(now()) @map("creado_en")
+  actualizadoEn       DateTime           @updatedAt @map("actualizado_en")
+
+  productosAsociados  ServicioProducto[]
+  especialistas       ServicioEspecialista[]
+
+  @@index([categoria])
+  @@index([activo])
+  @@map("servicios")
+}
+
+// Productos asociados a un servicio (qué productos se usan y en qué cantidad)
+model ServicioProducto {
+  id                Int      @id @default(autoincrement())
+  cantidadEstimada  Decimal  @default(1) @map("cantidad_estimada") @db.Decimal(10, 2)
+
+  servicio          Servicio @relation(fields: [servicioId], references: [id], onDelete: Cascade)
+  servicioId        Int      @map("servicio_id")
+  producto          Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  productoId        Int      @map("producto_id")
+
+  @@unique([servicioId, productoId])
+  @@map("servicio_productos")
+  @@index([servicioId])
+  @@index([productoId])
+}
+
+// Especialistas asignados a un servicio (usuarios que realizan ese servicio)
+model ServicioEspecialista {
+  id         Int      @id @default(autoincrement())
+  servicioId Int      @map("servicio_id")
+  usuarioId  String   @map("usuario_id")
+
+  servicio   Servicio @relation(fields: [servicioId], references: [id], onDelete: Cascade)
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([servicioId, usuarioId])
+  @@map("servicio_especialistas")
+  @@index([servicioId])
+  @@index([usuarioId])
 }

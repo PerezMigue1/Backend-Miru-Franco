@@ -23,7 +23,7 @@ export class ProductosController {
 
   /**
    * Obtener catálogo de productos (público)
-   * Filtro opcional por categoría: GET /productos?categoria=shampoo
+   * Devuelve todos los productos. Filtro opcional: ?categoria=shampoo
    */
   @Get()
   async listar(@Query('categoria') categoria?: string) {

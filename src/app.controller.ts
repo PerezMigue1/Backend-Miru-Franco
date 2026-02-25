@@ -20,6 +20,7 @@ export class AppController {
         },
         seguridad: '/api/pregunta-seguridad',
         productos: '/api/productos',
+        servicios: '/api/servicios',
       },
     };
   }

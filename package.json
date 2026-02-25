@@ -14,6 +14,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
+    "set-admin": "ts-node -r tsconfig-paths/register scripts/set-admin.ts",
     "postinstall": "prisma generate",
     "migrate:data": "ts-node scripts/migrate-mongodb-to-postgresql.ts"
   },

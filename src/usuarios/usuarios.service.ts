@@ -110,6 +110,16 @@ export class UsuariosService {
     // Log seguro (sin datos sensibles)
     console.log('✅ Usuario registrado:', sanitizeForLogging({ email, id: nuevoUsuario.id }));
 
+    // Objeto usuario creado para la respuesta (panel admin puede mostrarlo en la lista)
+    const usuarioCreado = {
+      id: nuevoUsuario.id,
+      _id: nuevoUsuario.id,
+      nombre: nuevoUsuario.nombre,
+      email: nuevoUsuario.email,
+      rol: nuevoUsuario.rol,
+      activo: nuevoUsuario.activo,
+    };
+
     // Enviar correo con el código OTP
     try {
       await this.emailService.sendOTPEmail(email, codigoOTP);
@@ -117,10 +127,17 @@ export class UsuariosService {
         success: true,
         message: 'Ingresa el código para activar tu cuenta. El código expira en 2 minutos.',
         requiereVerificacion: true,
+        data: usuarioCreado,
       };
     } catch (err) {
       console.error('Error al enviar correo de activación:', err);
-      throw new Error('Usuario registrado, pero no se pudo enviar el correo de activación. Contacta al soporte.');
+      // Usuario ya creado; devolverlo para que el panel admin pueda mostrarlo
+      return {
+        success: true,
+        message: 'Usuario registrado. No se pudo enviar el correo de activación.',
+        requiereVerificacion: true,
+        data: usuarioCreado,
+      };
     }
   }
 
@@ -211,9 +228,11 @@ export class UsuariosService {
       message: 'Inicio de sesión exitoso',
       token,
       usuario: {
-        _id: usuario.id,
+        id: usuario.id,
+        _id: usuario.id, // alias por compatibilidad con frontend
         nombre: usuario.nombre,
         email: usuario.email,
+        rol: usuario.rol,
       },
     };
   }
@@ -394,6 +413,7 @@ export class UsuariosService {
         creadoEn: true,
         actualizadoEn: true,
         activo: true,
+        rol: true,
       },
     });
 
@@ -441,6 +461,47 @@ export class UsuariosService {
     return {
       success: true,
       message: 'Usuario eliminado correctamente',
+    };
+  }
+
+  /**
+   * Cambiar estado activo/inactivo de un usuario (solo admin).
+   * PATCH /usuarios/:id/estado con body { activo: true | false }
+   */
+  async cambiarEstadoUsuario(id: string, activo: boolean) {
+    const usuario = await this.prisma.usuario.findUnique({ where: { id } });
+    if (!usuario) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    await this.prisma.usuario.update({
+      where: { id },
+      data: { activo },
+    });
+
+    return {
+      success: true,
+      message: activo ? 'Usuario activado correctamente' : 'Usuario desactivado correctamente',
+      data: { id, activo },
+    };
+  }
+
+  /** Cambiar solo el rol de un usuario (solo admin). Valores: cliente | becario | empleado | estilista | admin. */
+  async cambiarRolUsuario(id: string, rol: string) {
+    const usuario = await this.prisma.usuario.findUnique({ where: { id } });
+    if (!usuario) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    await this.prisma.usuario.update({
+      where: { id },
+      data: { rol },
+    });
+
+    return {
+      success: true,
+      message: 'Rol actualizado correctamente',
+      data: { id, rol },
     };
   }
 
@@ -809,6 +870,7 @@ export class UsuariosService {
         alergias: true,
         // Pregunta de seguridad (sin respuesta)
         preguntaSeguridad: true,
+        rol: true,
       },
     });
 

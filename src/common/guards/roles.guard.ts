@@ -37,7 +37,10 @@ export class RolesGuard implements CanActivate {
 
     // Verificar si el usuario tiene uno de los roles requeridos
     if (!requiredRoles.includes(usuario.rol)) {
-      throw new ForbiddenException('No tienes permisos para acceder a este recurso');
+      throw new ForbiddenException({
+        message: 'No tienes permisos de administrador para esta acción',
+        code: 'INSUFFICIENT_ROLE',
+      });
     }
 
     return true;

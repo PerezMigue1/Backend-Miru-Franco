@@ -8,6 +8,7 @@ import { PreguntaSeguridadModule } from './pregunta-seguridad/pregunta-seguridad
 import { EmailModule } from './email/email.module';
 import { SecurityModule } from './common/services/security.module';
 import { ProductosModule } from './productos/productos.module';
+import { ServiciosModule } from './servicios/servicios.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -29,6 +30,7 @@ import { AppController } from './app.controller';
     AuthModule,
     PreguntaSeguridadModule,
     ProductosModule,
+    ServiciosModule,
   ],
   controllers: [AppController],
 })
