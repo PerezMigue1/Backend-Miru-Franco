@@ -121,5 +121,10 @@ export class CreateUsuarioDto {
   @IsBoolean()
   @IsOptional()
   recibePromociones?: boolean;
+
+  /** Cuenta confirmada (para usuarios creados por admin; omitir en registro público) */
+  @IsBoolean()
+  @IsOptional()
+  confirmado?: boolean;
 }
 

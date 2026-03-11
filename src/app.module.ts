@@ -9,6 +9,7 @@ import { EmailModule } from './email/email.module';
 import { SecurityModule } from './common/services/security.module';
 import { ProductosModule } from './productos/productos.module';
 import { ServiciosModule } from './servicios/servicios.module';
+import { DbModule } from './db/db.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -31,6 +32,7 @@ import { AppController } from './app.controller';
     PreguntaSeguridadModule,
     ProductosModule,
     ServiciosModule,
+    DbModule,
   ],
   controllers: [AppController],
 })

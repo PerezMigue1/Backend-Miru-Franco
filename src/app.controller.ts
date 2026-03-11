@@ -21,6 +21,11 @@ export class AppController {
         seguridad: '/api/pregunta-seguridad',
         productos: '/api/productos',
         servicios: '/api/servicios',
+        db: {
+          import: 'POST /api/db/import (multipart: tabla, archivo, formato?)',
+          export: 'GET /api/db/export?tabla=&formato=csv|json',
+          diagram: 'GET /api/db/diagram?formato=mermaid|svg|png',
+        },
       },
     };
   }

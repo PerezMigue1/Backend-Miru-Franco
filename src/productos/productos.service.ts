@@ -122,6 +122,7 @@ export class ProductosService {
                 precioOriginal: p.precioOriginal,
                 stock: p.stock,
                 disponible: p.disponible ?? true,
+                fechaCaducidad: p.fechaCaducidad ? new Date(p.fechaCaducidad) : undefined,
               })),
             }
           : undefined,
@@ -211,6 +212,7 @@ export class ProductosService {
           precioOriginal: p.precioOriginal,
           stock: p.stock,
           disponible: p.disponible ?? true,
+          fechaCaducidad: p.fechaCaducidad ? new Date(p.fechaCaducidad) : undefined,
         })),
       };
     }

@@ -134,14 +134,15 @@ model Producto {
 
 // Tabla de presentaciones de cada producto
 model ProductoPresentacion {
-  id             Int       @id @default(autoincrement())
-  tamanio        String
-  precio         String
-  precioOriginal String?    @map("precio_original")
-  stock          Int       @default(0)
-  disponible     Boolean   @default(true)
-  creadoEn       DateTime  @default(now()) @map("creado_en")
-  actualizadoEn  DateTime  @updatedAt @map("actualizado_en")
+  id              Int       @id @default(autoincrement())
+  tamanio         String
+  precio          String
+  precioOriginal  String?   @map("precio_original")
+  stock           Int       @default(0)
+  disponible      Boolean   @default(true)
+  fechaCaducidad  DateTime? @map("fecha_caducidad")
+  creadoEn        DateTime  @default(now()) @map("creado_en")
+  actualizadoEn   DateTime  @updatedAt @map("actualizado_en")
 
   producto       Producto  @relation(fields: [productoId], references: [id], onDelete: Cascade)
   productoId     Int       @map("producto_id")

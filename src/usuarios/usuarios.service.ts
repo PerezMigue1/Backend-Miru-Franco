@@ -102,7 +102,7 @@ export class UsuariosService {
         recibePromociones: recibePromociones || false,
         codigoOTP,
         otpExpira,
-        confirmado: false,
+        confirmado: createUsuarioDto.confirmado ?? false,
         activo: true,
       },
     });

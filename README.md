@@ -145,9 +145,15 @@ backend-miru/
 │   │   ├── auth.service.ts
 │   │   ├── auth.controller.ts
 │   │   └── strategies/         # Estrategias de Passport
-│   └── email/
-│       ├── email.module.ts
-│       └── email.service.ts    # Servicio de SendGrid
+│   ├── email/
+│   │   ├── email.module.ts
+│   │   └── email.service.ts    # Servicio de SendGrid
+│   └── db/
+│       ├── db.module.ts        # Módulo de import/export/diagrama ER
+│       ├── db.controller.ts
+│       ├── db.service.ts
+│       ├── db.constants.ts
+│       └── schema-to-mermaid.ts
 ├── prisma/
 │   └── schema.prisma           # Schema de Prisma
 ├── render.yaml                 # Configuración de Render
@@ -157,6 +163,14 @@ backend-miru/
 ```
 
 ## 🔌 Endpoints Principales
+
+### Módulo de Base de Datos (admin)
+
+Endpoints para importar, exportar y visualizar el diagrama ER. Requieren JWT + rol admin. Ver [MODULO_BASE_DATOS.md](MODULO_BASE_DATOS.md) para documentación completa.
+
+- `GET /api/db/diagram?formato=mermaid|svg|png` - Diagrama ER del schema
+- `POST /api/db/import` - Importar CSV/JSON (multipart: tabla, archivo, formato?)
+- `GET /api/db/export?tabla=&formato=csv|json` - Exportar datos
 
 ### Usuarios
 

@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreatePresentacionDto {
   @IsString()
@@ -20,5 +20,10 @@ export class CreatePresentacionDto {
   @IsBoolean()
   @IsOptional()
   disponible?: boolean = true;
+
+  /** Fecha de caducidad (ISO 8601: "2025-12-31") */
+  @IsDateString()
+  @IsOptional()
+  fechaCaducidad?: string;
 }
 
