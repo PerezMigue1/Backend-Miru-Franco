@@ -42,7 +42,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.sast }}
         with:
           args: >-
-            -Dsonar.projectKey=PerezMigue1_Miru-PerezMigue1_Backend-Miru-Franco
+            -Dsonar.projectKey=PerezMigue1_Backend-Miru-Franco
             -Dsonar.organization=idashido
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             -Dsonar.sources=src
