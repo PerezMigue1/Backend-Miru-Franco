@@ -10,6 +10,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Opt-in a Node.js 24 para las acciones (evita el aviso de deprecación de Node 20)
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # Base de datos del contenedor de CI (no uses tu DB real aquí)
+      DATABASE_URL: postgresql://test:test@localhost:5432/test
 
     services:
       postgres:
@@ -25,9 +30,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
-    env:
-      DATABASE_URL: postgresql://neondb_owner:npg_RYZU6jMI8gBP@ep-rough-waterfall-aii9j7oq-pooler.c-4.us-east-1.aws.neon.tech/miru?sslmode=require&channel_binding=require
 
     steps:
       - name: Checkout
