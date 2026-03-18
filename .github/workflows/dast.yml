@@ -1,0 +1,43 @@
+# DAST = Dynamic Application Security Testing
+# Prueba la API backend DESPLEGADA (staging/producción) con OWASP ZAP.
+
+name: DAST Backend (OWASP ZAP)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Ejecutar manualmente cuando ya tengas la app desplegada
+
+jobs:
+  dast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check DAST target URL (backend)
+        run: |
+          if [ -z "${{ secrets.DAST_TARGET_URL }}" ]; then
+            echo "::warning::No está configurado el secreto DAST_TARGET_URL. Añádelo en Settings → Secrets → Actions (ej. https://tu-backend-miru.onrender.com/api)"
+            exit 1
+          fi
+          echo "DAST apuntará a la URL del backend configurada en DAST_TARGET_URL"
+
+      # Escaneo DAST contra la URL del backend desplegado (definida en el secreto DAST_TARGET_URL)
+      - name: OWASP ZAP Baseline Scan (deployed backend)
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ secrets.DAST_TARGET_URL }}
+          cmd_options: '-a -j'
+        continue-on-error: true
+
+      - name: Upload ZAP report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-report
+          path: report_html.html
+          retention-days: 30
