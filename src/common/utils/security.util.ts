@@ -40,17 +40,29 @@ export function sanitizeEmail(email: string): string {
 }
 
 /**
- * Sanitiza teléfono (solo permite números y caracteres permitidos)
- * 
- * @param phone - Teléfono a sanitizar
- * @returns Teléfono sanitizado
+ * Normaliza teléfono para almacenamiento y búsqueda en BD.
+ * Aplica: trim, quitar espacios internos, dejar solo dígitos y "+".
+ * Así "+52 771 405 3712" y "+527714053712" se unifican en "+527714053712".
+ *
+ * @param phone - Teléfono a normalizar
+ * @returns Teléfono normalizado (sin espacios, mismo formato para comparar)
  */
-export function sanitizePhone(phone: string): string {
+export function normalizePhone(phone: string): string {
   if (!phone || typeof phone !== 'string') {
     return '';
   }
-  // Solo permite números, espacios, guiones, paréntesis y el símbolo +
-  return phone.replace(/[^\d\s\-\+\(\)]/g, '').trim();
+  const trimmed = phone.trim().replace(/\s/g, '');
+  return trimmed.replace(/[^\d+]/g, '');
+}
+
+/**
+ * Sanitiza teléfono (normaliza para guardar y buscar en BD con formato consistente)
+ *
+ * @param phone - Teléfono a sanitizar
+ * @returns Teléfono sanitizado y normalizado (sin espacios, solo dígitos y +)
+ */
+export function sanitizePhone(phone: string): string {
+  return normalizePhone(phone);
 }
 
 /**
@@ -242,15 +254,6 @@ interface RegisterData {
     pregunta?: string;
     respuesta?: string;
   };
-  direccion?: {
-    calle?: string;
-    numero?: string;
-    colonia?: string;
-    ciudad?: string;
-    estado?: string;
-    codigoPostal?: string;
-    referencia?: string;
-  };
   perfilCapilar?: {
     tipoCabello?: 'liso' | 'ondulado' | 'rizado';
     colorNatural?: string;
@@ -295,31 +298,6 @@ export function sanitizeRegisterData(registerData: RegisterData): RegisterData {
       respuesta: registerData.preguntaSeguridad.respuesta 
         ? sanitizeInput(registerData.preguntaSeguridad.respuesta) 
         : '',
-    } : undefined,
-    
-    // Sanitizar dirección
-    direccion: registerData.direccion ? {
-      calle: registerData.direccion.calle 
-        ? sanitizeInput(registerData.direccion.calle) 
-        : undefined,
-      numero: registerData.direccion.numero 
-        ? sanitizeInput(registerData.direccion.numero) 
-        : undefined,
-      colonia: registerData.direccion.colonia 
-        ? sanitizeInput(registerData.direccion.colonia) 
-        : undefined,
-      ciudad: registerData.direccion.ciudad 
-        ? sanitizeInput(registerData.direccion.ciudad) 
-        : undefined,
-      estado: registerData.direccion.estado 
-        ? sanitizeInput(registerData.direccion.estado) 
-        : undefined,
-      codigoPostal: registerData.direccion.codigoPostal 
-        ? sanitizePostalCode(registerData.direccion.codigoPostal) 
-        : undefined,
-      referencia: registerData.direccion.referencia 
-        ? sanitizeInput(registerData.direccion.referencia) 
-        : undefined,
     } : undefined,
     
     // Sanitizar perfil capilar

@@ -16,10 +16,10 @@ export class AppController {
         auth: {
           google: '/api/auth/google',
           verifyEmail: '/api/auth/verificar-correo',
-          me: '/api/auth/me',
+          me: 'GET /api/auth/me',
+          patchMe: 'PATCH /api/auth/me (perfil; foto: URL | null)',
         },
         seguridad: '/api/pregunta-seguridad',
-        productos: '/api/productos',
         servicios: '/api/servicios',
         db: {
           import: 'POST /api/db/import (multipart: tabla, archivo, formato?)',

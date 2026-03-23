@@ -1,17 +1,31 @@
-import { IsBoolean, IsDateString, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsDateString,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreatePresentacionDto {
   @IsString()
   @IsNotEmpty()
   tamanio: string; // ej. "1000ml"
 
-  @IsString()
-  @IsNotEmpty()
-  precio: string; // ej. "$250"
+  /** Precio en MXN (2 decimales recomendados) */
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Type(() => Number)
+  precio: number;
 
-  @IsString()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   @IsOptional()
-  precioOriginal?: string;
+  @Type(() => Number)
+  precioOriginal?: number;
 
   @IsInt()
   @Min(0)
@@ -26,4 +40,3 @@ export class CreatePresentacionDto {
   @IsOptional()
   fechaCaducidad?: string;
 }
-

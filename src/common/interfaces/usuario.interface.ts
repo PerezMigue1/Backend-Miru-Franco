@@ -6,7 +6,6 @@ export interface IUsuario {
   password?: string;
   fechaNacimiento?: Date;
   preguntaSeguridad?: IPreguntaSeguridad;
-  direccion?: IDireccion;
   perfilCapilar?: IPerfilCapilar;
   googleId?: string;
   foto?: string;
@@ -25,14 +24,6 @@ export interface IUsuario {
 export interface IPreguntaSeguridad {
   pregunta: string;
   respuesta?: string; // Hasheada
-}
-
-export interface IDireccion {
-  calle?: string;
-  numero?: string;
-  colonia?: string;
-  codigoPostal?: string;
-  referencia?: string;
 }
 
 export interface IPerfilCapilar {

@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, IsDateString, IsObject, ValidateNested, IsNotEmpty, MinLength } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsDateString, ValidateNested, IsNotEmpty, MinLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsStrongPassword } from '../../common/validators/password.validator';
 
@@ -10,36 +10,6 @@ class PreguntaSeguridadDto {
   @IsString()
   @IsNotEmpty()
   respuesta: string;
-}
-
-class DireccionDto {
-  @IsString()
-  @IsOptional()
-  calle?: string;
-
-  @IsString()
-  @IsOptional()
-  numero?: string;
-
-  @IsString()
-  @IsOptional()
-  colonia?: string;
-
-  @IsString()
-  @IsOptional()
-  ciudad?: string;
-
-  @IsString()
-  @IsOptional()
-  estado?: string;
-
-  @IsString()
-  @IsOptional()
-  codigoPostal?: string;
-
-  @IsString()
-  @IsOptional()
-  referencia?: string;
 }
 
 class PerfilCapilarDto {
@@ -103,11 +73,6 @@ export class CreateUsuarioDto {
   @Type(() => PreguntaSeguridadDto)
   @IsNotEmpty()
   preguntaSeguridad: PreguntaSeguridadDto;
-
-  @ValidateNested()
-  @Type(() => DireccionDto)
-  @IsNotEmpty()
-  direccion: DireccionDto;
 
   @ValidateNested()
   @Type(() => PerfilCapilarDto)

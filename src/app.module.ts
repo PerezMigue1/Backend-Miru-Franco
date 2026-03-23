@@ -10,6 +10,7 @@ import { SecurityModule } from './common/services/security.module';
 import { ProductosModule } from './productos/productos.module';
 import { ServiciosModule } from './servicios/servicios.module';
 import { DbModule } from './db/db.module';
+import { EcommerceModule } from './ecommerce/ecommerce.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -33,6 +34,7 @@ import { AppController } from './app.controller';
     ProductosModule,
     ServiciosModule,
     DbModule,
+    EcommerceModule,
   ],
   controllers: [AppController],
 })

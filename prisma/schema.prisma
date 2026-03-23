@@ -17,6 +17,36 @@ enum TipoCabello {
   rizado
 }
 
+enum TipoDomicilio {
+  casa
+  trabajo
+}
+
+enum EstadoPedido {
+  borrador
+  pendiente_pago
+  pagado
+  preparando
+  enviado
+  entregado
+  cancelado
+}
+
+enum EstadoEnvio {
+  preparando
+  en_transito
+  entregado
+  fallido
+}
+
+enum EstadoPago {
+  pendiente
+  aprobado
+  rechazado
+  cancelado
+  reembolsado
+}
+
 model Usuario {
   id                    String         @id @default(uuid())
   nombre                String
@@ -45,14 +75,6 @@ model Usuario {
   tokensRevocadosDesde  DateTime?      @map("tokens_revocados_desde") // Fecha desde la cual todos los tokens anteriores están revocados (para logout global)
   rol                   String         @default("cliente") // admin | estilista | empleado | becario | cliente
 
-  // Campos de dirección (embebidos)
-  calle                 String?
-  numero                String?
-  colonia               String?
-  ciudad                String?
-  estado                String?
-  codigoPostal          String?        @map("codigo_postal")
-
   // Campos de perfil capilar (embebidos)
   tipoCabello           TipoCabello?
   colorNatural          String?        @map("color_natural")
@@ -65,10 +87,256 @@ model Usuario {
   respuestaSeguridad    String?        @map("respuesta_seguridad") // Hasheada con bcrypt
 
   serviciosComoEspecialista ServicioEspecialista[]
+  direcciones                  DireccionUsuario[]
+  pedidos                      Pedido[]
+  carritoItems                 CarritoItem[]
+  valoraciones                 Valoracion[]
+  notificaciones               Notificacion[]
+  historialCambiosEstadoPedido HistorialEstadoPedido[]
 
   @@index([activo])
   @@index([email])
   @@map("usuarios")
+}
+
+// Direcciones de envío del usuario
+model DireccionUsuario {
+  id                     String        @id @default(uuid())
+  calle                  String        @db.Text
+  codigoPostal           String        @map("codigo_postal")
+  estado                 String
+  municipioAlcaldia      String        @map("municipio_alcaldia")
+  localidad              String
+  coloniaBarrio          String        @map("colonia_barrio")
+  numeroInterior         String?       @map("numero_interior")
+  indicaciones           String?       @db.Text
+  tipoDomicilio          TipoDomicilio @map("tipo_domicilio")
+  contactoNombreApellido String        @map("contacto_nombre_apellido")
+  contactoTelefono       String        @map("contacto_telefono")
+  esPrincipal            Boolean       @default(false) @map("es_principal")
+  creadoEn               DateTime      @default(now()) @map("creado_en")
+  actualizadoEn          DateTime      @updatedAt @map("actualizado_en")
+
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String   @map("usuario_id")
+  pedidos   Pedido[]
+
+  @@map("direcciones_usuario")
+  @@index([usuarioId])
+}
+
+model Pedido {
+  id                       Int           @id @default(autoincrement())
+  estado                   EstadoPedido  @default(borrador)
+  subtotal                 Decimal       @db.Decimal(10, 2)
+  costoEnvio               Decimal       @default(0) @map("costo_envio") @db.Decimal(10, 2)
+  impuestos                Decimal       @default(0) @db.Decimal(10, 2)
+  descuento                Decimal       @default(0) @db.Decimal(10, 2)
+  total                    Decimal       @db.Decimal(10, 2)
+  moneda                   String        @default("MXN")
+  direccionTextoCompleta   String?       @map("direccion_texto_completa") @db.Text
+  notasCliente             String?       @map("notas_cliente") @db.Text
+  metodoPago               String?       @map("metodo_pago")
+  referenciaPago           String?       @map("referencia_pago")
+  pagadoEn                 DateTime?     @map("pagado_en")
+  creadoEn                 DateTime      @default(now()) @map("creado_en")
+  actualizadoEn            DateTime      @updatedAt @map("actualizado_en")
+
+  usuario          Usuario           @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+  usuarioId        String            @map("usuario_id")
+  direccionEnvio   DireccionUsuario? @relation(fields: [direccionEnvioId], references: [id], onDelete: SetNull)
+  direccionEnvioId String?           @map("direccion_envio_id")
+
+  items           PedidoItem[]
+  pagos           Pago[]
+  envios          Envio[]
+  facturas        Factura[]
+  valoraciones    Valoracion[]
+  devoluciones    Devolucion[]
+  historialEstado HistorialEstadoPedido[]
+
+  @@index([usuarioId])
+  @@index([estado])
+  @@index([creadoEn])
+  @@map("pedidos")
+}
+
+model PedidoItem {
+  id              Int      @id @default(autoincrement())
+  cantidad        Int
+  precioUnitario  Decimal  @map("precio_unitario") @db.Decimal(10, 2)
+  subtotal        Decimal  @db.Decimal(10, 2)
+  nombreProducto  String?  @map("nombre_producto")
+  tamanio         String?
+
+  pedido         Pedido               @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId       Int                  @map("pedido_id")
+  producto       Producto             @relation(fields: [productoId], references: [id], onDelete: Restrict)
+  productoId     Int                  @map("producto_id")
+  presentacion   ProductoPresentacion @relation(fields: [presentacionId], references: [id], onDelete: Restrict)
+  presentacionId Int                  @map("presentacion_id")
+
+  devoluciones Devolucion[]
+
+  @@index([pedidoId])
+  @@index([pedidoId, productoId])
+  @@index([productoId])
+  @@map("pedido_items")
+}
+
+model CarritoItem {
+  id               Int      @id @default(autoincrement())
+  cantidad         Int
+  precioReferencia Decimal? @map("precio_referencia") @db.Decimal(10, 2)
+  activo           Boolean  @default(true)
+  creadoEn         DateTime @default(now()) @map("creado_en")
+  actualizadoEn    DateTime @updatedAt @map("actualizado_en")
+
+  usuario        Usuario              @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId      String               @map("usuario_id")
+  producto       Producto             @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  productoId     Int                  @map("producto_id")
+  presentacion   ProductoPresentacion @relation(fields: [presentacionId], references: [id], onDelete: Cascade)
+  presentacionId Int                  @map("presentacion_id")
+
+  @@unique([usuarioId, presentacionId])
+  @@index([usuarioId])
+  @@map("carrito_items")
+}
+
+model Pago {
+  id                 Int        @id @default(autoincrement())
+  intentoNumero      Int        @map("intento_numero")
+  monto              Decimal    @db.Decimal(10, 2)
+  moneda             String     @default("MXN")
+  metodo             String
+  proveedor          String?
+  estado             EstadoPago @default(pendiente)
+  referenciaExterna  String?    @map("referencia_externa")
+  errorMensaje       String?    @map("error_mensaje") @db.Text
+  payload            Json?
+  pagadoEn           DateTime?  @map("pagado_en")
+  creadoEn           DateTime   @default(now()) @map("creado_en")
+  actualizadoEn      DateTime   @updatedAt @map("actualizado_en")
+
+  pedido    Pedido       @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId  Int          @map("pedido_id")
+  devoluciones Devolucion[]
+
+  @@index([pedidoId])
+  @@index([estado])
+  @@index([referenciaExterna])
+  @@map("pagos")
+}
+
+model HistorialEstadoPedido {
+  id             Int            @id @default(autoincrement())
+  estadoAnterior EstadoPedido?  @map("estado_anterior")
+  estadoNuevo    EstadoPedido   @map("estado_nuevo")
+  origen         String?
+  creadoEn       DateTime       @default(now()) @map("creado_en")
+
+  pedido    Pedido  @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId  Int     @map("pedido_id")
+  usuario   Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+  usuarioId String? @map("usuario_id")
+
+  @@index([pedidoId])
+  @@index([creadoEn])
+  @@map("historial_estados_pedido")
+}
+
+model Envio {
+  id            Int         @id @default(autoincrement())
+  empresaEnvio  String?     @map("empresa_envio")
+  numeroGuia    String?     @map("numero_guia")
+  estadoEnvio   EstadoEnvio @default(preparando) @map("estado_envio")
+  fechaEnvio    DateTime?   @map("fecha_envio")
+  fechaEntrega  DateTime?   @map("fecha_entrega")
+  notas         String?     @db.Text
+  creadoEn      DateTime    @default(now()) @map("creado_en")
+  actualizadoEn DateTime    @updatedAt @map("actualizado_en")
+
+  pedido   Pedido @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId Int    @map("pedido_id")
+
+  @@index([pedidoId])
+  @@index([numeroGuia])
+  @@map("envios")
+}
+
+model Factura {
+  id          Int       @id @default(autoincrement())
+  uuidFiscal  String?   @map("uuid_fiscal")
+  folio       String?
+  serie       String?
+  xmlUrl      String?   @map("xml_url")
+  pdfUrl      String?   @map("pdf_url")
+  estado      String?
+  creadoEn    DateTime  @default(now()) @map("creado_en")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  pedido   Pedido @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId Int    @map("pedido_id")
+
+  @@index([pedidoId])
+  @@map("facturas")
+}
+
+model Valoracion {
+  id         Int      @id @default(autoincrement())
+  puntuacion Int
+  comentario String?  @db.Text
+  creadoEn   DateTime @default(now()) @map("creado_en")
+
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId  String   @map("usuario_id")
+  producto   Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  productoId Int      @map("producto_id")
+  pedido     Pedido   @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId   Int      @map("pedido_id")
+
+  @@unique([usuarioId, productoId])
+  @@index([productoId])
+  @@index([pedidoId])
+  @@map("valoraciones")
+}
+
+model Devolucion {
+  id          Int      @id @default(autoincrement())
+  motivo      String?  @db.Text
+  estado      String
+  monto       Decimal? @db.Decimal(10, 2)
+  creadoEn    DateTime @default(now()) @map("creado_en")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  pedido       Pedido      @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId     Int         @map("pedido_id")
+  pedidoItem   PedidoItem? @relation(fields: [pedidoItemId], references: [id], onDelete: SetNull)
+  pedidoItemId Int?        @map("pedido_item_id")
+  pago         Pago?       @relation(fields: [pagoId], references: [id], onDelete: SetNull)
+  pagoId       Int?        @map("pago_id")
+
+  @@index([pedidoId])
+  @@index([estado])
+  @@map("devoluciones")
+}
+
+model Notificacion {
+  id        String   @id @default(uuid())
+  tipo      String
+  titulo    String
+  mensaje   String   @db.Text
+  leida     Boolean  @default(false)
+  metadata  Json?
+  creadoEn  DateTime @default(now()) @map("creado_en")
+
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @map("usuario_id")
+
+  @@index([usuarioId])
+  @@index([leida])
+  @@map("notificaciones")
 }
 
 // Tabla para preguntas predefinidas disponibles (solo para mostrar opciones)
@@ -127,6 +395,9 @@ model Producto {
 
   presentaciones      ProductoPresentacion[]
   serviciosAsociados  ServicioProducto[]
+  pedidoItems         PedidoItem[]
+  carritoItems        CarritoItem[]
+  valoraciones        Valoracion[]
 
   @@index([categoria])
   @@map("productos")
@@ -136,8 +407,8 @@ model Producto {
 model ProductoPresentacion {
   id              Int       @id @default(autoincrement())
   tamanio         String
-  precio          String
-  precioOriginal  String?   @map("precio_original")
+  precio          Decimal   @db.Decimal(10, 2)
+  precioOriginal  Decimal?  @map("precio_original") @db.Decimal(10, 2)
   stock           Int       @default(0)
   disponible      Boolean   @default(true)
   fechaCaducidad  DateTime? @map("fecha_caducidad")
@@ -146,6 +417,8 @@ model ProductoPresentacion {
 
   producto       Producto  @relation(fields: [productoId], references: [id], onDelete: Cascade)
   productoId     Int       @map("producto_id")
+  pedidoItems    PedidoItem[]
+  carritoItems   CarritoItem[]
 
   @@map("producto_presentaciones")
   @@index([productoId])

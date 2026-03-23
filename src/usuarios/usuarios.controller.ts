@@ -21,6 +21,8 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
+import { EnviarCodigoRecuperacionSmsDto } from './dto/enviar-codigo-recuperacion-sms.dto';
+import { VerificarCodigoRecuperacionSmsDto } from './dto/verificar-codigo-recuperacion-sms.dto';
 import { UpdateUsuarioDto } from './dto/update-usuario.dto';
 import { CambiarPasswordDto } from './dto/cambiar-password.dto';
 import { CambiarPasswordPerfilDto } from './dto/cambiar-password-perfil.dto';
@@ -121,6 +123,20 @@ export class UsuariosController {
     return this.usuariosService.solicitarEnlaceRecuperacion(body.email);
   }
 
+  @Post('enviar-codigo-recuperacion-sms')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms)
+  async enviarCodigoRecuperacionSMS(@Body() body: EnviarCodigoRecuperacionSmsDto) {
+    return this.usuariosService.enviarCodigoRecuperacionSMS(body.phone);
+  }
+
+  @Post('verificar-codigo-recuperacion-sms')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(5, 60000)) // 5 intentos por minuto (60000 ms)
+  async verificarCodigoRecuperacionSMS(@Body() body: VerificarCodigoRecuperacionSmsDto) {
+    return this.usuariosService.verificarCodigoRecuperacionSMS(body.phone, body.codigo);
+  }
+
   @Post('validar-token-recuperacion')
   @HttpCode(HttpStatus.OK)
   async validarTokenRecuperacion(@Body() body: { email: string; token: string }) {
@@ -172,7 +188,7 @@ export class UsuariosController {
   }
 
   /**
-   * Actualizar usuario por ID (incluye nombre, teléfono, dirección, rol, etc.)
+   * Actualizar usuario por ID (incluye nombre, teléfono, rol, etc.)
    * ✅ Solo para administradores (rol = 'admin')
    */
   @Put(':id')

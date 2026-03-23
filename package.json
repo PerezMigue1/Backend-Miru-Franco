@@ -55,6 +55,7 @@
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
     "sharp": "^0.33.5",
+    "twilio": "^5.13.0",
     "typescript": "^5.1.3"
   },
   "devDependencies": {

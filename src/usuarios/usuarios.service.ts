@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { SecurityService } from '../common/services/security.service';
@@ -9,24 +9,80 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
-import { sanitizeInput, containsSQLInjection, sanitizeForLogging, isCommonAnswer, sanitizeRegisterData, sanitizeEmail, sanitizePhone, sanitizePostalCode } from '../common/utils/security.util';
+import { sanitizeInput, containsSQLInjection, sanitizeForLogging, isCommonAnswer, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
+import twilio from 'twilio';
 
 @Injectable()
 export class UsuariosService {
+  private readonly twilioClient: ReturnType<typeof twilio> | null;
+  private readonly twilioVerifyServiceSid: string | undefined;
+
   constructor(
     private prisma: PrismaService,
     private emailService: EmailService,
     private jwtService: JwtService,
     private securityService: SecurityService,
-  ) {}
+  ) {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    this.twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+    this.twilioClient = accountSid && authToken ? twilio(accountSid, authToken) : null;
+  }
+
+  private buildPhoneLookupCandidates(phone: string): string[] {
+    const normalized = normalizePhone(phone);
+    const digits = normalized.replace(/\D/g, '');
+    const candidates = new Set<string>();
+
+    if (normalized) candidates.add(normalized);
+    if (digits) {
+      candidates.add(digits);
+      candidates.add(`+${digits}`);
+    }
+
+    // Compatibilidad con teléfonos MX guardados como 10 dígitos (sin lada país).
+    if (digits.length === 10) {
+      candidates.add(`52${digits}`);
+      candidates.add(`+52${digits}`);
+    }
+
+    // Compatibilidad con teléfonos MX guardados con 52 pero sin +.
+    if (digits.length === 12 && digits.startsWith('52')) {
+      candidates.add(digits.slice(2)); // 10 dígitos
+      candidates.add(`+${digits}`);
+    }
+
+    return Array.from(candidates).filter(Boolean);
+  }
+
+  private toTwilioE164(phone: string): string {
+    const normalized = normalizePhone(phone);
+    const digits = normalized.replace(/\D/g, '');
+
+    if (normalized.startsWith('+')) {
+      return normalized;
+    }
+
+    // Si viene en formato local MX (10 dígitos), prepender +52 para pruebas.
+    if (digits.length === 10) {
+      return `+52${digits}`;
+    }
+
+    // Si ya viene con 52 (12 dígitos) pero sin +, agregar +.
+    if (digits.length === 12 && digits.startsWith('52')) {
+      return `+${digits}`;
+    }
+
+    return digits ? `+${digits}` : '';
+  }
 
   async crearUsuario(createUsuarioDto: CreateUsuarioDto) {
     // ⚠️ IMPORTANTE: Sanitizar TODOS los datos recibidos antes de procesarlos
     // Esto previene XSS incluso si alguien envía peticiones directas (bypass del frontend)
     const sanitizedData = sanitizeRegisterData(createUsuarioDto);
     
-    const { nombre, email, telefono, password, fechaNacimiento, preguntaSeguridad, direccion, perfilCapilar, aceptaAvisoPrivacidad, recibePromociones } = sanitizedData;
+    const { nombre, email, telefono, password, fechaNacimiento, preguntaSeguridad, perfilCapilar, aceptaAvisoPrivacidad, recibePromociones } = sanitizedData;
 
     // Prevenir SQL injection
     if (
@@ -55,7 +111,6 @@ export class UsuariosService {
       email,
       telefono,
       fechaNacimiento,
-      direccion,
       preguntaSeguridad,
     });
 
@@ -85,13 +140,6 @@ export class UsuariosService {
         // Pregunta de seguridad embebida
         preguntaSeguridad: preguntaSeguridad?.pregunta || '', // ✅ Ya sanitizado
         respuestaSeguridad: respuestaHasheada,
-        // Campos de dirección embebidos
-        calle: direccion?.calle,           // ✅ Ya sanitizado
-        numero: direccion?.numero,          // ✅ Ya sanitizado
-        colonia: direccion?.colonia,        // ✅ Ya sanitizado
-        ciudad: direccion?.ciudad,          // ✅ Ya sanitizado
-        estado: direccion?.estado,          // ✅ Ya sanitizado
-        codigoPostal: direccion?.codigoPostal, // ✅ Ya sanitizado
         // Campos de perfil capilar embebidos
         tipoCabello: perfilCapilar?.tipoCabello as any,
         colorNatural: perfilCapilar?.colorNatural,      // ✅ Ya sanitizado
@@ -350,13 +398,6 @@ export class UsuariosService {
         telefono: true,
         fechaNacimiento: true,
         // NO incluir preguntaSeguridad (información sensible)
-        // Campos de dirección embebidos
-        calle: true,
-        numero: true,
-        colonia: true,
-        ciudad: true,
-        estado: true,
-        codigoPostal: true,
         // Campos de perfil capilar embebidos
         tipoCabello: true,
         colorNatural: true,
@@ -392,13 +433,6 @@ export class UsuariosService {
         telefono: true,
         fechaNacimiento: true,
         preguntaSeguridad: true,
-        // Campos de dirección embebidos
-        calle: true,
-        numero: true,
-        colonia: true,
-        ciudad: true,
-        estado: true,
-        codigoPostal: true,
         // Campos de perfil capilar embebidos
         tipoCabello: true,
         colorNatural: true,
@@ -502,6 +536,124 @@ export class UsuariosService {
       success: true,
       message: 'Rol actualizado correctamente',
       data: { id, rol },
+    };
+  }
+
+  async enviarCodigoRecuperacionSMS(phone: string) {
+    // Normalizar teléfono para buscar con el mismo formato almacenado en BD.
+    const phoneLookupCandidates = this.buildPhoneLookupCandidates(phone);
+
+    // No revelar si existe o no el usuario.
+    if (phoneLookupCandidates.length === 0) {
+      return {
+        success: true,
+        message: 'Se envió el código',
+      };
+    }
+
+    const usuario = await this.prisma.usuario.findFirst({
+      where: {
+        OR: phoneLookupCandidates.map((telefono) => ({ telefono })),
+      },
+      select: {
+        id: true,
+        telefono: true,
+        activo: true,
+      },
+    });
+
+    // No revelar si el teléfono existe o no en el sistema.
+    if (!usuario?.id || !usuario.activo) {
+      return {
+        success: true,
+        message: 'Se envió el código',
+      };
+    }
+
+    if (!this.twilioClient || !this.twilioVerifyServiceSid) {
+      throw new InternalServerErrorException('Twilio Verify no está configurado en el servidor');
+    }
+
+    const phoneForTwilio = this.toTwilioE164(usuario.telefono || phone);
+
+    try {
+      await this.twilioClient.verify.v2
+        .services(this.twilioVerifyServiceSid)
+        .verifications.create({ to: phoneForTwilio, channel: 'sms' });
+      console.log('✅ OTP SMS enviado con Twilio Verify:', sanitizeForLogging({ usuarioId: usuario.id, telefono: phoneForTwilio }));
+    } catch (error) {
+      console.error('Error enviando OTP SMS con Twilio Verify:', error);
+      throw new BadRequestException('No se pudo enviar el código de verificación por SMS');
+    }
+
+    return {
+      success: true,
+      message: 'Se envió el código',
+    };
+  }
+
+  async verificarCodigoRecuperacionSMS(phone: string, codigo: string) {
+    const phoneLookupCandidates = this.buildPhoneLookupCandidates(phone);
+    const codigoNormalizado = (codigo || '').trim();
+
+    if (phoneLookupCandidates.length === 0 || !codigoNormalizado) {
+      throw new BadRequestException('Código inválido o expirado');
+    }
+
+    if (!this.twilioClient || !this.twilioVerifyServiceSid) {
+      throw new InternalServerErrorException('Twilio Verify no está configurado en el servidor');
+    }
+
+    const usuario = await this.prisma.usuario.findFirst({
+      where: {
+        OR: phoneLookupCandidates.map((telefono) => ({ telefono })),
+        activo: true,
+      },
+      select: {
+        id: true,
+        email: true,
+        telefono: true,
+      },
+    });
+
+    // Respuesta genérica para no revelar existencia de cuenta.
+    if (!usuario) {
+      throw new BadRequestException('Código inválido o expirado');
+    }
+
+    try {
+      const phoneForTwilio = this.toTwilioE164(usuario.telefono || phone);
+      const verificationCheck = await this.twilioClient.verify.v2
+        .services(this.twilioVerifyServiceSid)
+        .verificationChecks.create({ to: phoneForTwilio, code: codigoNormalizado });
+
+      if (verificationCheck.status !== 'approved') {
+        throw new BadRequestException('Código inválido o expirado');
+      }
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      console.error('Error verificando OTP SMS con Twilio Verify:', error);
+      throw new BadRequestException('Código inválido o expirado');
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresInMinutes = parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '10');
+    const resetPasswordExpires = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+
+    await this.prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        resetPasswordToken: token,
+        resetPasswordExpires,
+      },
+    });
+
+    return {
+      success: true,
+      token,
+      email: usuario.email,
     };
   }
 
@@ -751,10 +903,6 @@ export class UsuariosService {
       email: usuario.email,
       telefono: usuario.telefono,
       fechaNacimiento: usuario.fechaNacimiento?.toISOString().split('T')[0],
-      direccion: {
-        calle: usuario.calle,
-        colonia: usuario.colonia,
-      },
       preguntaSeguridad: {
         respuesta: '', // No tenemos acceso a la respuesta en texto plano, pero validamos otros campos
       },
@@ -810,10 +958,6 @@ export class UsuariosService {
       email: usuario.email,
       telefono: usuario.telefono,
       fechaNacimiento: usuario.fechaNacimiento?.toISOString().split('T')[0],
-      direccion: {
-        calle: usuario.calle,
-        colonia: usuario.colonia,
-      },
       preguntaSeguridad: {
         respuesta: '', // No tenemos acceso a la respuesta en texto plano, pero validamos otros campos
       },
@@ -855,13 +999,6 @@ export class UsuariosService {
         creadoEn: true,
         actualizadoEn: true,
         activo: true,
-        // Campos de dirección embebidos
-        calle: true,
-        numero: true,
-        colonia: true,
-        ciudad: true,
-        estado: true,
-        codigoPostal: true,
         // Campos de perfil capilar embebidos
         tipoCabello: true,
         colorNatural: true,
@@ -886,9 +1023,7 @@ export class UsuariosService {
 
   async actualizarPerfilUsuario(id: string, updateData: any) {
     const camposPermitidos = [
-      'nombre', 'telefono', 'fechaNacimiento', 'recibePromociones',
-      // Campos de dirección embebidos
-      'calle', 'numero', 'colonia', 'ciudad', 'estado', 'codigoPostal',
+      'nombre', 'telefono', 'fechaNacimiento', 'recibePromociones', 'foto',
       // Campos de perfil capilar embebidos
       'tipoCabello', 'colorNatural', 'colorActual', 'productosUsados', 'alergias',
     ];
@@ -897,12 +1032,19 @@ export class UsuariosService {
     // Sanitizar campos directos
     camposPermitidos.forEach(campo => {
       if (updateData[campo] !== undefined) {
+        if (campo === 'foto') {
+          const v = updateData.foto;
+          if (v === null || (typeof v === 'string' && v.trim() === '')) {
+            actualizaciones.foto = null;
+          } else if (typeof v === 'string') {
+            actualizaciones.foto = sanitizeInput(v.trim());
+          }
+          return;
+        }
         // Sanitizar según el tipo de campo
         if (campo === 'telefono' && typeof updateData[campo] === 'string') {
           actualizaciones[campo] = sanitizePhone(updateData[campo]);
-        } else if (campo === 'codigoPostal' && typeof updateData[campo] === 'string') {
-          actualizaciones[campo] = sanitizePostalCode(updateData[campo]);
-        } else if (typeof updateData[campo] === 'string' && ['nombre', 'calle', 'numero', 'colonia', 'ciudad', 'estado', 'colorNatural', 'colorActual', 'productosUsados', 'alergias'].includes(campo)) {
+        } else if (typeof updateData[campo] === 'string' && ['nombre', 'colorNatural', 'colorActual', 'productosUsados', 'alergias'].includes(campo)) {
           actualizaciones[campo] = sanitizeInput(updateData[campo]);
         } else {
           // Para campos no string (fechaNacimiento, recibePromociones, tipoCabello)
@@ -910,17 +1052,6 @@ export class UsuariosService {
         }
       }
     });
-
-    // Manejar objetos direccion y perfilCapilar si vienen como objetos
-    if (updateData.direccion) {
-      const { direccion } = updateData;
-      if (direccion.calle !== undefined) actualizaciones.calle = sanitizeInput(direccion.calle);
-      if (direccion.numero !== undefined) actualizaciones.numero = sanitizeInput(direccion.numero);
-      if (direccion.colonia !== undefined) actualizaciones.colonia = sanitizeInput(direccion.colonia);
-      if (direccion.ciudad !== undefined) actualizaciones.ciudad = sanitizeInput(direccion.ciudad);
-      if (direccion.estado !== undefined) actualizaciones.estado = sanitizeInput(direccion.estado);
-      if (direccion.codigoPostal !== undefined) actualizaciones.codigoPostal = sanitizePostalCode(direccion.codigoPostal);
-    }
 
     if (updateData.perfilCapilar) {
       const { perfilCapilar } = updateData;

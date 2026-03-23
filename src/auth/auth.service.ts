@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
+import { UpdateUsuarioDto } from '../usuarios/dto/update-usuario.dto';
 import { SecurityService } from '../common/services/security.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
@@ -211,6 +212,11 @@ export class AuthService {
 
   async getProfile(user: any) {
     return this.usuariosService.obtenerUsuarioPorId(user.id);
+  }
+
+  /** PATCH /auth/me: mismos campos permitidos que PUT usuarios/:id/perfil (incl. `foto`). */
+  async updateProfileMe(userId: string, dto: UpdateUsuarioDto) {
+    return this.usuariosService.actualizarPerfilUsuario(userId, dto);
   }
 }
 

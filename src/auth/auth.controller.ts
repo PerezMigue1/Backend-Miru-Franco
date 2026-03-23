@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Req,
   Res,
@@ -17,6 +18,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
+import { UpdateUsuarioDto } from '../usuarios/dto/update-usuario.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -114,6 +116,17 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async getProfile(@CurrentUser() user: any) {
     return this.authService.getProfile(user);
+  }
+
+  /**
+   * Actualiza el perfil del usuario autenticado (parcial).
+   * Body puede incluir `foto`: string (URL) o `null` para quitarla (ver `Usuario.foto` en Prisma).
+   */
+  @Patch('me')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async patchMe(@CurrentUser() user: any, @Body() dto: UpdateUsuarioDto) {
+    return this.authService.updateProfileMe(user.id, dto);
   }
 
   /**
