@@ -18,6 +18,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Clean previous ZAP report
+        run: rm -f report_html.html
+
       - name: Check DAST target URL (backend)
         run: |
           if [ -z "${{ secrets.DAST_TARGET_URL }}" ]; then
@@ -25,6 +28,11 @@ jobs:
             exit 1
           fi
           echo "DAST apuntará a la URL del backend configurada en DAST_TARGET_URL"
+
+      - name: Validate target reachability
+        run: |
+          echo "Probando conectividad con ${{ secrets.DAST_TARGET_URL }}"
+          curl -L --max-time 30 -I "${{ secrets.DAST_TARGET_URL }}"
 
       # Escaneo DAST contra la URL del backend desplegado (definida en el secreto DAST_TARGET_URL)
       - name: OWASP ZAP Baseline Scan (deployed backend)
@@ -34,9 +42,19 @@ jobs:
           cmd_options: '-a -j'
         continue-on-error: true
 
+      - name: Validate fresh ZAP report
+        id: validate_report
+        run: |
+          if [ ! -f report_html.html ]; then
+            echo "::error::No se generó report_html.html. El escaneo ZAP falló o no alcanzó el objetivo."
+            exit 1
+          fi
+          echo "report_ready=true" >> "$GITHUB_OUTPUT"
+          echo "Reporte DAST generado correctamente."
+
       - name: Upload ZAP report
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.validate_report.outputs.report_ready == 'true'
         with:
           name: zap-report
           path: report_html.html
