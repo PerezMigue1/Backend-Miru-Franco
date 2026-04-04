@@ -99,8 +99,8 @@ export async function subirImagenesCloudinary(files, preset = presetProductos) {
 
 - **GET** `{VITE_API_URL}/productos`  
   Ejemplo: `fetch(`${import.meta.env.VITE_API_URL}/productos`)`
-- Respuesta: `{ success: true, count: N, data: [ { id, nombre, marca, precio, imagenes: [...], ... } ] }`
-- Muestra las imágenes con `<img src={producto.imagenes[0]} />` (o un carrusel si hay varias).
+- Respuesta: `{ success: true, count: N, data: [ { id, nombre, marca, presentaciones: [{ tamanio, precio, imagenes: [...] }], ... } ] }`
+- Muestra imágenes por presentación, ej. `<img src={producto.presentaciones[0]?.imagenes?.[0]} />`.
 
 ---
 
@@ -108,8 +108,8 @@ export async function subirImagenesCloudinary(files, preset = presetProductos) {
 
 - **GET** `{VITE_API_URL}/productos/:id`  
   Ejemplo: `fetch(`${import.meta.env.VITE_API_URL}/productos/1`)`
-- Respuesta: `{ success: true, data: { id, nombre, imagenes, presentaciones, ... } }`
-- Usa `data.imagenes` para la galería o imagen principal.
+- Respuesta: `{ success: true, data: { id, nombre, presentaciones, ... } }`
+- Usa `data.presentaciones[i].imagenes` para galería/imagen principal por presentación.
 
 ---
 
@@ -120,7 +120,7 @@ Flujo recomendado:
 1. El usuario elige una o varias imágenes (input type file o drag & drop).
 2. **Antes** de enviar el formulario al backend, sube cada imagen con `subirImagenCloudinary(file)` o `subirImagenesCloudinary(files)` (usan el preset de productos; la carpeta ya está en el preset).
 3. Obtén el array de URLs devueltas.
-4. Envía al backend el objeto del producto **con** `imagenes: [url1, url2, ...]`.
+4. Envía al backend el objeto del producto con imágenes dentro de cada presentación: `presentaciones[].imagenes`.
 
 Ejemplo de payload al crear producto:
 
@@ -140,12 +140,11 @@ const payload = {
   crueltyFree: true,
   caracteristicas: ['Sin sulfatos', 'Vegano'],
   ingredientes: 'Aqua, ...',
-  imagenes: urlsDeCloudinary,  // ← array de URLs devueltas por subirImagenCloudinary
   // Una entrada por presentación (250ml, 500ml, 1000ml, etc.). Pueden ser 2, 3 o más.
   presentaciones: [
-    { tamanio: '250ml', precio: '$150', precioOriginal: '$180', stock: 5, disponible: true },
-    { tamanio: '500ml', precio: '$250', precioOriginal: '$300', stock: 10, disponible: true },
-    { tamanio: '1000ml', precio: '$450', precioOriginal: '$500', stock: 8, disponible: true },
+    { tamanio: '250ml', imagenes: urls250, precio: '$150', precioOriginal: '$180', stock: 5, disponible: true },
+    { tamanio: '500ml', imagenes: urls500, precio: '$250', precioOriginal: '$300', stock: 10, disponible: true },
+    { tamanio: '1000ml', imagenes: urls1000, precio: '$450', precioOriginal: '$500', stock: 8, disponible: true },
   ],
 };
 
@@ -176,7 +175,7 @@ await fetch(`${import.meta.env.VITE_API_URL}/productos/${id}`, {
 | 2 | En `.env` del frontend: `VITE_API_URL`, `VITE_CLOUDINARY_CLOUD_NAME`, `VITE_CLOUDINARY_UPLOAD_PRESET_PRODUCTOS` (y opcionalmente `VITE_CLOUDINARY_UPLOAD_PRESET_SERVICIOS`). |
 | 3 | Crear `subirImagenCloudinary` / `subirImagenesCloudinary` que solo envíen `file` y `upload_preset` (sin `folder`). |
 | 4 | En el formulario de producto: subir imágenes con el preset de productos y guardar las URLs. |
-| 5 | Al enviar el formulario, incluir `imagenes: [url1, url2, ...]` en el body del POST/PUT a `/productos`. |
-| 6 | En listado y detalle: usar `producto.imagenes` para mostrar las fotos (ej. `<img src={producto.imagenes[0]} />`). |
+| 5 | Al enviar el formulario, incluir `presentaciones[].imagenes: [url1, url2, ...]` en POST/PUT a `/productos`. |
+| 6 | En listado y detalle: usar `producto.presentaciones[i].imagenes` para mostrar fotos. |
 
 Para **servicios**, usa el preset de servicios: `subirImagenCloudinary(file, import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET_SERVICIOS)` y guarda las URLs en tu modelo de servicios.

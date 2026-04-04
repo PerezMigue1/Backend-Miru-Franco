@@ -11,6 +11,7 @@ import { ProductosModule } from './productos/productos.module';
 import { ServiciosModule } from './servicios/servicios.module';
 import { DbModule } from './db/db.module';
 import { EcommerceModule } from './ecommerce/ecommerce.module';
+import { PaymentsModule } from './payments/payments.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -35,6 +36,7 @@ import { AppController } from './app.controller';
     ServiciosModule,
     DbModule,
     EcommerceModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
 })

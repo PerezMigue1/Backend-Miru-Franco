@@ -17,6 +17,7 @@ export function sanitizeInput(input: string): string {
   }
 
   return input
+    .replace(/\u0000/g, '')      // Eliminar byte nulo (PostgreSQL no lo admite en TEXT/VARCHAR)
     .replace(/</g, '&lt;')      // < → &lt;
     .replace(/>/g, '&gt;')      // > → &gt;
     .replace(/"/g, '&quot;')    // " → &quot;

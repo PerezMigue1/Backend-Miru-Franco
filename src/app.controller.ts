@@ -21,9 +21,16 @@ export class AppController {
         },
         seguridad: '/api/pregunta-seguridad',
         servicios: '/api/servicios',
+        productos: '/api/productos',
+        payments: {
+          binLookup: 'GET /api/payments/bin-lookup?bin=',
+          msiIndicio: 'GET /api/payments/msi-indicio?bancoEmisor=',
+          metodosPago: 'GET|POST|PATCH|DELETE /api/payments/metodos-pago (JWT)',
+        },
         db: {
           import: 'POST /api/db/import (multipart: tabla, archivo, formato?)',
           export: 'GET /api/db/export?tabla=&formato=csv|json',
+          exportDirect: 'GET /api/db/export-direct (admin JWT; ver doc/API_PAYMENTS_AND_DB_EXPORT.md)',
           diagram: 'GET /api/db/diagram?formato=mermaid|svg|png',
         },
       },

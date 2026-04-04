@@ -33,12 +33,6 @@ export class CreateProductoDto {
   @IsOptional()
   descripcionLarga?: string;
 
-  /** URLs de imágenes (ej. Cloudinary). Solo se guardan las URLs en la BD. */
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  imagenes?: string[];
-
   @IsInt()
   @IsOptional()
   descuento?: number;

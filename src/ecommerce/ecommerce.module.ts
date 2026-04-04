@@ -51,5 +51,6 @@ import { NotificacionesService } from './notificaciones/notificaciones.service';
     DevolucionesService,
     NotificacionesService,
   ],
+  exports: [EcommerceAccessService],
 })
 export class EcommerceModule {}

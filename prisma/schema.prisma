@@ -47,6 +47,12 @@ enum EstadoPago {
   reembolsado
 }
 
+// Tipo mostrado en UI (credito / debito), segun pasarela o BIN.
+enum TipoTarjetaGuardada {
+  credito
+  debito
+}
+
 model Usuario {
   id                    String         @id @default(uuid())
   nombre                String
@@ -93,10 +99,42 @@ model Usuario {
   valoraciones                 Valoracion[]
   notificaciones               Notificacion[]
   historialCambiosEstadoPedido HistorialEstadoPedido[]
+  // Metodos tokenizados guardados (perfil + checkout). No guardar PAN completo ni CVV.
+  metodosPagoGuardados       MetodoPagoUsuario[]
 
   @@index([activo])
   @@index([email])
   @@map("usuarios")
+}
+
+// Tarjetas guardadas por usuario (tipo Mercado Libre). Guardar id del proveedor, no el PAN.
+model MetodoPagoUsuario {
+  id                String               @id @default(uuid())
+  proveedor         String // mercadopago, stripe, conekta
+  // ID del metodo/tarjeta en la pasarela (tokenizacion).
+  idExterno         String               @map("id_externo")
+  marca             String?              @map("marca") // visa, mastercard, amex…
+  ultimos4          String               @map("ultimos_4") @db.VarChar(4)
+  bancoNombre       String?              @map("banco_nombre")
+  expMes            Int?                 @map("exp_mes") // 1–12
+  expAnio           Int?                 @map("exp_anio") // ej. 2029
+  tipoTarjeta       TipoTarjetaGuardada? @map("tipo_tarjeta")
+  esVirtual         Boolean              @default(false) @map("es_virtual")
+  // Texto opcional para UI (alias).
+  etiqueta          String?              @map("etiqueta")
+  esPredeterminada  Boolean              @default(false) @map("es_predeterminada")
+  activo            Boolean              @default(true) @map("activo")
+
+  creadoEn          DateTime             @default(now()) @map("creado_en")
+  actualizadoEn     DateTime             @updatedAt @map("actualizado_en")
+
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @map("usuario_id")
+
+  @@unique([usuarioId, proveedor, idExterno])
+  @@index([usuarioId])
+  @@index([usuarioId, activo])
+  @@map("metodos_pago_usuario")
 }
 
 // Direcciones de envío del usuario
@@ -381,7 +419,6 @@ model Producto {
   marca            String
   descripcion      String?                 @db.VarChar(1000)
   descripcionLarga String?                 @db.Text @map("descripcion_larga")
-  imagenes         String[]                @default([])
   descuento        Int?                    // Porcentaje de descuento aplicable a presentaciones
   categoria        String?
   nuevo            Boolean                 @default(false)
@@ -407,6 +444,7 @@ model Producto {
 model ProductoPresentacion {
   id              Int       @id @default(autoincrement())
   tamanio         String
+  imagenes        String[]  @default([])
   precio          Decimal   @db.Decimal(10, 2)
   precioOriginal  Decimal?  @map("precio_original") @db.Decimal(10, 2)
   stock           Int       @default(0)

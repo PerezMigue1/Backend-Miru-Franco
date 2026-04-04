@@ -5,6 +5,23 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import type { ValidationError } from 'class-validator';
 const cookieParser = require('cookie-parser');
 
+function flattenValidationErrors(
+  validationErrors: ValidationError[],
+  parentPath = '',
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const err of validationErrors) {
+    const path = parentPath ? `${parentPath}.${err.property}` : err.property;
+    if (err.constraints && Object.keys(err.constraints).length > 0) {
+      out[path] = Object.values(err.constraints)[0] ?? 'Campo inválido';
+    }
+    if (err.children?.length) {
+      Object.assign(out, flattenValidationErrors(err.children, path));
+    }
+  }
+  return out;
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
@@ -116,12 +133,7 @@ async function bootstrap() {
       transformOptions: { enableImplicitConversion: true },
       disableErrorMessages: process.env.NODE_ENV === 'production',
       exceptionFactory: (validationErrors: ValidationError[]) => {
-        const errors: Record<string, string> = {};
-        validationErrors.forEach((err) => {
-          if (err.property && err.constraints) {
-            errors[err.property] = Object.values(err.constraints)[0] ?? 'Campo inválido';
-          }
-        });
+        const errors = flattenValidationErrors(validationErrors);
         return new BadRequestException({
           success: false,
           error: 'Errores de validación',

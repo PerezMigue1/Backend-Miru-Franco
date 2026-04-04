@@ -18,12 +18,16 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/guards/roles.guard';
 import { DbService, type ImportResult } from './db.service';
 import { TABLAS_PERMITIDAS } from './db.constants';
+import { ExportDirectService } from './export-direct.service';
 
 @Controller('db')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin')
 export class DbController {
-  constructor(private readonly dbService: DbService) {}
+  constructor(
+    private readonly dbService: DbService,
+    private readonly exportDirectService: ExportDirectService,
+  ) {}
 
   @Get('diagram')
   async diagrama(
@@ -65,6 +69,25 @@ export class DbController {
     }
 
     return this.dbService.importar(tabla, archivo, typeof formato === 'string' ? formato : undefined);
+  }
+
+  /**
+   * Exportación directa / metadatos BD (equivalente a export-direct del front Next).
+   * Requiere JWT + rol admin. Mismos query params que la ruta original.
+   */
+  @Get('export-direct')
+  async exportDirect(
+    @Query() query: Record<string, string | undefined>,
+    @Res() res: Response,
+  ): Promise<void> {
+    const result = await this.exportDirectService.handleGet(query);
+    if (result.kind === 'json') {
+      res.status(result.status).json(result.body);
+      return;
+    }
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.status(result.status).send(result.body);
   }
 
   @Get('export')

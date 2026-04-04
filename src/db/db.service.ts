@@ -171,7 +171,6 @@ export class DbService {
       throw new Error('nombre y marca son requeridos');
     }
 
-    const imagenes = this.toArray(row.imagenes ?? row.imagen ?? []);
     const caracteristicas = this.toArray(row.caracteristicas ?? []);
 
     await this.prisma.producto.create({
@@ -180,7 +179,6 @@ export class DbService {
         marca,
         descripcion: this.optStr(row.descripcion),
         descripcionLarga: this.optStr(row.descripcionLarga),
-        imagenes,
         descuento: this.optInt(row.descuento),
         categoria: this.optStr(row.categoria),
         nuevo: this.toBool(row.nuevo, false),
@@ -342,7 +340,6 @@ export class DbService {
       marca: p.marca,
       descripcion: p.descripcion,
       descripcionLarga: p.descripcionLarga,
-      imagenes: Array.isArray(p.imagenes) ? p.imagenes.join('|') : p.imagenes,
       descuento: p.descuento,
       categoria: p.categoria,
       nuevo: p.nuevo,
@@ -358,6 +355,7 @@ export class DbService {
         precio: pr.precio != null ? Number(pr.precio) : null,
         precioOriginal:
           pr.precioOriginal != null ? Number(pr.precioOriginal) : null,
+        imagenes: Array.isArray(pr.imagenes) ? pr.imagenes.join('|') : pr.imagenes,
         stock: pr.stock,
         disponible: pr.disponible,
         fechaCaducidad: pr.fechaCaducidad ? pr.fechaCaducidad.toISOString() : null,

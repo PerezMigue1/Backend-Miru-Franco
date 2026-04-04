@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsBoolean,
   IsDateString,
   IsInt,
@@ -11,9 +12,22 @@ import {
 import { Type } from 'class-transformer';
 
 export class CreatePresentacionDto {
+  /** Solo en actualización de producto: identifica la fila en `producto_presentaciones`. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  id?: number;
+
   @IsString()
   @IsNotEmpty()
   tamanio: string; // ej. "1000ml"
+
+  /** URLs de imágenes de esta presentación (no del producto global). */
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  imagenes?: string[];
 
   /** Precio en MXN (2 decimales recomendados) */
   @IsNumber({ maxDecimalPlaces: 2 })
