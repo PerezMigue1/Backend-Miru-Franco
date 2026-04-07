@@ -1,4 +1,26 @@
-import { PartialType } from '@nestjs/mapped-types';
-import { CreatePaqueteDto } from './create-paquete.dto';
+import { IsArray, IsNumber, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
 
-export class UpdatePaqueteDto extends PartialType(CreatePaqueteDto) {}
+/**
+ * Actualización parcial de paquete.
+ * Definido explícitamente para no depender de '@nestjs/mapped-types'.
+ */
+export class UpdatePaqueteDto {
+  @IsString()
+  @IsOptional()
+  tipo_evento?: string;
+
+  @IsString()
+  @IsOptional()
+  descripcion?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  servicios_vinculados?: string[];
+
+  @IsNumber()
+  @Type(() => Number)
+  @IsOptional()
+  precio_especial?: number;
+}
