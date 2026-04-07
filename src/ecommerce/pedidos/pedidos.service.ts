@@ -27,26 +27,115 @@ export class PedidosService {
     };
   }
 
-  async listar(solicitanteId: string, filtroUsuarioId?: string) {
+  async listar(
+    solicitanteId: string,
+    filtros?: {
+      usuarioId?: string;
+      estado?: string;
+      fechaDesde?: string;
+      fechaHasta?: string;
+      metodoPago?: string;
+      q?: string;
+      sort?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
     const rol = await this.access.getRol(solicitanteId);
-    let where: Prisma.PedidoWhereInput = {};
+    const {
+      usuarioId: filtroUsuarioId,
+      estado,
+      fechaDesde,
+      fechaHasta,
+      metodoPago,
+      q,
+      sort,
+      page = 1,
+      limit = 20,
+    } = filtros ?? {};
+    const where: Prisma.PedidoWhereInput = {};
+
     if (filtroUsuarioId) {
       if (!this.access.isAdmin(rol)) {
         throw new ForbiddenException(
           'Solo administradores pueden filtrar pedidos por usuarioId',
         );
       }
-      where = { usuarioId: filtroUsuarioId };
+      where.usuarioId = filtroUsuarioId;
     } else if (!this.access.isAdmin(rol)) {
-      where = { usuarioId: solicitanteId };
+      where.usuarioId = solicitanteId;
     }
 
+    if (estado) {
+      if (!Object.values(EstadoPedido).includes(estado as EstadoPedido)) {
+        throw new BadRequestException(`Estado de pedido inválido: ${estado}`);
+      }
+      where.estado = estado as EstadoPedido;
+    }
+
+    if (metodoPago) {
+      where.metodoPago = { contains: metodoPago, mode: 'insensitive' };
+    }
+
+    if (fechaDesde || fechaHasta) {
+      const gte = fechaDesde ? new Date(fechaDesde) : undefined;
+      const lte = fechaHasta ? new Date(fechaHasta) : undefined;
+      if ((gte && Number.isNaN(gte.getTime())) || (lte && Number.isNaN(lte.getTime()))) {
+        throw new BadRequestException('fechaDesde/fechaHasta deben ser fechas ISO válidas');
+      }
+      where.creadoEn = {
+        ...(gte ? { gte } : {}),
+        ...(lte ? { lte } : {}),
+      };
+    }
+
+    if (q && q.trim().length > 0) {
+      const term = q.trim();
+      const byId = Number.parseInt(term, 10);
+      const orConditions: Prisma.PedidoWhereInput[] = [
+        { usuario: { is: { nombre: { contains: term, mode: 'insensitive' } } } },
+        { usuario: { is: { email: { contains: term, mode: 'insensitive' } } } },
+        { usuario: { is: { telefono: { contains: term, mode: 'insensitive' } } } },
+        { metodoPago: { contains: term, mode: 'insensitive' } },
+        { referenciaPago: { contains: term, mode: 'insensitive' } },
+      ];
+      if (!Number.isNaN(byId)) {
+        orConditions.push({ id: byId });
+      }
+      where.OR = orConditions;
+    }
+
+    let orderBy: Prisma.PedidoOrderByWithRelationInput = { creadoEn: 'desc' };
+    if (sort) {
+      const normalized = sort.trim().toLowerCase();
+      if (normalized === 'creadoen:asc') {
+        orderBy = { creadoEn: 'asc' };
+      } else if (normalized === 'creadoen:desc') {
+        orderBy = { creadoEn: 'desc' };
+      } else {
+        throw new BadRequestException(
+          'sort inválido. Usa creadoEn:asc o creadoEn:desc',
+        );
+      }
+    }
+
+    const skip = (page - 1) * limit;
+    const total = await this.prisma.pedido.count({ where });
     const data = await this.prisma.pedido.findMany({
       where,
       include: this.includeDefault(),
-      orderBy: { creadoEn: 'desc' },
+      orderBy,
+      skip,
+      take: limit,
     });
-    return { success: true, count: data.length, data };
+    return {
+      success: true,
+      count: total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      data,
+    };
   }
 
   async obtenerPorId(id: number, solicitanteId: string) {
@@ -80,11 +169,8 @@ export class PedidosService {
           `Presentación ${line.presentacionId} no encontrada`,
         );
       }
-      if (pres.productoId !== line.productoId) {
-        throw new BadRequestException(
-          `La presentación ${line.presentacionId} no pertenece al producto ${line.productoId}`,
-        );
-      }
+      // productoId canónico desde BD (el cliente puede enviar un productoId desfasado del carrito)
+      const productoId = pres.productoId;
       if (!pres.disponible || pres.stock < line.cantidad) {
         throw new BadRequestException(
           `Stock insuficiente o presentación no disponible (producto ${pres.producto.nombre})`,
@@ -93,7 +179,7 @@ export class PedidosService {
       const precioUnitario = precioPresentacionANumero(pres.precio);
       const subtotal = Math.round(precioUnitario * line.cantidad * 100) / 100;
       detalles.push({
-        productoId: line.productoId,
+        productoId,
         presentacionId: line.presentacionId,
         cantidad: line.cantidad,
         precioUnitario,

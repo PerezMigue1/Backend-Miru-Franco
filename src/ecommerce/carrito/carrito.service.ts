@@ -54,11 +54,10 @@ export class CarritoService {
     const pres = await this.prisma.productoPresentacion.findUnique({
       where: { id: dto.presentacionId },
     });
-    if (!pres || pres.productoId !== dto.productoId) {
-      throw new BadRequestException(
-        'Presentación no válida para el producto indicado',
-      );
+    if (!pres) {
+      throw new BadRequestException('Presentación no encontrada');
     }
+    const productoId = pres.productoId;
     if (!pres.disponible) {
       throw new BadRequestException('Presentación no disponible');
     }
@@ -72,7 +71,7 @@ export class CarritoService {
       },
       create: {
         usuarioId: solicitanteId,
-        productoId: dto.productoId,
+        productoId,
         presentacionId: dto.presentacionId,
         cantidad: dto.cantidad,
         precioReferencia: dto.precioReferencia ?? null,
@@ -80,6 +79,7 @@ export class CarritoService {
       },
       update: {
         cantidad: dto.cantidad,
+        productoId,
         ...(dto.precioReferencia !== undefined && {
           precioReferencia: dto.precioReferencia,
         }),

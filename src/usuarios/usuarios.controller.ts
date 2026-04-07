@@ -12,6 +12,7 @@ import {
   UseGuards,
   Req,
   ForbiddenException,
+  Query,
 } from '@nestjs/common';
 import { UsuariosService } from './usuarios.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -42,8 +43,8 @@ export class UsuariosController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  async obtenerUsuarios() {
-    return this.usuariosService.obtenerUsuarios();
+  async obtenerUsuarios(@Query('q') q?: string) {
+    return this.usuariosService.obtenerUsuarios(q);
   }
 
   /**

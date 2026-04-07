@@ -517,3 +517,14 @@ model ServicioEspecialista {
   @@index([servicioId])
   @@index([usuarioId])
 }
+
+// Paquetes promocionales (tabla existente en BD)
+model Paquete {
+  id                   Int      @id @default(autoincrement())
+  tipo_evento          String
+  descripcion          String   @db.Text
+  servicios_vinculados String[] @default([])
+  precio_especial      Decimal  @db.Decimal(10, 2)
+
+  @@map("paquetes")
+}

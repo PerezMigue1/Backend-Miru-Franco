@@ -57,6 +57,8 @@ async function bootstrap() {
     'https://miru-franco-idhk1rz7d-miru-franco.vercel.app', // Nueva URL de Vercel
     'http://localhost:3000',
     'http://localhost:3001',
+    'https://mirufranco.com',
+    'https://www.mirufranco.com',
     process.env.FRONTEND_URL,
   ].filter(Boolean); // Remover valores undefined/null
 
@@ -145,7 +147,7 @@ async function bootstrap() {
   );
 
 
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT || 3001;
   await app.listen(port);
   console.log(`🚀 Servidor corriendo en el puerto ${port}`);
   console.log(`📝 API disponible en http://localhost:${port}/api`);

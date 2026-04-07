@@ -21,6 +21,7 @@ export class AppController {
         },
         seguridad: '/api/pregunta-seguridad',
         servicios: '/api/servicios',
+        paquetes: '/api/paquetes (admin JWT)',
         productos: '/api/productos',
         payments: {
           binLookup: 'GET /api/payments/bin-lookup?bin=',

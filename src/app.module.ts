@@ -9,6 +9,7 @@ import { EmailModule } from './email/email.module';
 import { SecurityModule } from './common/services/security.module';
 import { ProductosModule } from './productos/productos.module';
 import { ServiciosModule } from './servicios/servicios.module';
+import { PaquetesModule } from './paquetes/paquetes.module';
 import { DbModule } from './db/db.module';
 import { EcommerceModule } from './ecommerce/ecommerce.module';
 import { PaymentsModule } from './payments/payments.module';
@@ -34,6 +35,7 @@ import { AppController } from './app.controller';
     PreguntaSeguridadModule,
     ProductosModule,
     ServiciosModule,
+    PaquetesModule,
     DbModule,
     EcommerceModule,
     PaymentsModule,

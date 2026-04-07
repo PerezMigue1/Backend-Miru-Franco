@@ -1,76 +1,48 @@
-import {
-  IsArray,
-  IsBoolean,
-  IsInt,
-  IsNotEmpty,
-  IsNumber,
-  IsOptional,
-  IsString,
-  Min,
-  ValidateNested,
-} from 'class-validator';
-import { Type } from 'class-transformer';
-import { CreateServicioProductoDto } from './servicio-producto.dto';
-import { AsignarEspecialistaDto } from './servicio-especialista.dto';
+import { IsArray, IsBoolean, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 
 export class CreateServicioDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsString() @IsNotEmpty()
   nombre: string;
 
-  @IsString()
-  @IsOptional()
+  @IsString() @IsOptional()
   descripcion?: string;
 
-  @IsString()
-  @IsOptional()
+  @IsString() @IsOptional()
   descripcionLarga?: string;
 
-  @IsNumber()
-  @Min(0)
+  @IsNumber() @Min(0)
   precio: number;
 
-  @IsInt()
-  @Min(1)
-  duracionMinutos: number;
-
-  @IsString()
-  @IsNotEmpty()
-  categoria: string;
-
-  @IsBoolean()
+  @IsInt() @Min(1)
   @IsOptional()
-  requiereEvaluacion?: boolean = false;
+  @Transform(({ value }) => typeof value === 'string' ? parseInt(value, 10) : value)
+  duracionMinutos?: number = 30;
 
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  imagen?: string[];
+  @IsString() @IsOptional()
+  categoria?: string;
 
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  incluye?: string[];
-
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  recomendaciones?: string[];
-
-  @IsBoolean()
-  @IsOptional()
+  @IsBoolean() @IsOptional()
   activo?: boolean = true;
 
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CreateServicioProductoDto)
-  @IsOptional()
-  productosAsociados?: CreateServicioProductoDto[];
+  @IsBoolean() @IsOptional()
+  requiereEvaluacion?: boolean = false;
 
-  /** IDs de usuarios (especialistas) que realizan este servicio */
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => AsignarEspecialistaDto)
   @IsOptional()
-  especialistas?: AsignarEspecialistaDto[];
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() !== '' ? [value.trim()] : value))
+  imagen?: string[];
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.split(',').map(i => i.trim()) : value))
+  incluye?: string[];
+
+  @IsArray() @IsOptional()
+  recomendaciones?: string[] = [];
+
+  @IsArray() @IsOptional()
+  productosAsociados?: any[] = [];
+
+  // ESTA LÍNEA ARREGLA EL ERROR TS2339 DE ESPECIALISTAS
+  @IsArray() @IsOptional()
+  especialistas?: any[] = []; 
 }

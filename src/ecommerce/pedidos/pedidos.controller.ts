@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -27,8 +28,39 @@ export class PedidosController {
   listar(
     @CurrentUser() user: { id: string },
     @Query('usuarioId') usuarioId?: string,
+    @Query('estado') estado?: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
+    @Query('metodoPago') metodoPago?: string,
+    @Query('q') q?: string,
+    @Query('sort') sort?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.service.listar(user.id, usuarioId);
+    const parsedPage =
+      page === undefined || page === '' ? 1 : Number.parseInt(page, 10);
+    const parsedLimit =
+      limit === undefined || limit === '' ? 20 : Number.parseInt(limit, 10);
+    if (
+      Number.isNaN(parsedPage) ||
+      Number.isNaN(parsedLimit) ||
+      parsedPage < 1 ||
+      parsedLimit < 1
+    ) {
+      throw new BadRequestException('page y limit deben ser enteros positivos');
+    }
+
+    return this.service.listar(user.id, {
+      usuarioId,
+      estado,
+      fechaDesde,
+      fechaHasta,
+      metodoPago,
+      q,
+      sort,
+      page: parsedPage,
+      limit: Math.min(parsedLimit, 100),
+    });
   }
 
   @Get(':id')

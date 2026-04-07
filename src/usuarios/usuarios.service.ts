@@ -388,9 +388,21 @@ export class UsuariosService {
     return { existe: false, message: 'Correo disponible' };
   }
 
-  async obtenerUsuarios() {
+  async obtenerUsuarios(q?: string) {
+    const term = q?.trim();
     const usuarios = await this.prisma.usuario.findMany({
-      where: { activo: true },
+      where: {
+        activo: true,
+        ...(term
+          ? {
+              OR: [
+                { nombre: { contains: term, mode: 'insensitive' } },
+                { email: { contains: term, mode: 'insensitive' } },
+                { telefono: { contains: term, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
       select: {
         id: true,
         nombre: true,

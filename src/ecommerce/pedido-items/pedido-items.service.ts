@@ -56,11 +56,10 @@ export class PedidoItemsService {
       where: { id: dto.presentacionId },
       include: { producto: true },
     });
-    if (!pres || pres.productoId !== dto.productoId) {
-      throw new BadRequestException(
-        'Presentación o producto inválido para la línea',
-      );
+    if (!pres) {
+      throw new BadRequestException('Presentación no encontrada');
     }
+    const productoId = pres.productoId;
     if (!pres.disponible || pres.stock < dto.cantidad) {
       throw new BadRequestException('Stock insuficiente');
     }
@@ -71,7 +70,7 @@ export class PedidoItemsService {
     const data = await this.prisma.pedidoItem.create({
       data: {
         pedidoId: dto.pedidoId,
-        productoId: dto.productoId,
+        productoId,
         presentacionId: dto.presentacionId,
         cantidad: dto.cantidad,
         precioUnitario,
