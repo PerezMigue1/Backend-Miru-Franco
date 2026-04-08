@@ -1,12 +1,51 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class SecurityService {
   private readonly MAX_LOGIN_ATTEMPTS = 5;
   private readonly LOCKOUT_DURATION_MINUTES = 15;
+  private readonly logger = new Logger(SecurityService.name);
+  private static lastDbWarningAt = 0;
 
   constructor(private prisma: PrismaService) {}
+
+  private isTransientDbError(error: unknown): boolean {
+    const code =
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in (error as Record<string, unknown>)
+        ? String((error as Record<string, unknown>).code)
+        : '';
+    const msg =
+      error instanceof Error ? error.message : String(error ?? '');
+    return (
+      code === 'P1001' ||
+      code === 'P1017' ||
+      msg.includes('Server has closed the connection') ||
+      msg.includes('Timed out fetching a new connection from the connection pool')
+    );
+  }
+
+  private async withReconnectRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!this.isTransientDbError(error)) {
+        throw error;
+      }
+      await this.prisma.$disconnect().catch(() => undefined);
+      await this.prisma.$connect().catch(() => undefined);
+      return fn();
+    }
+  }
+
+  private logTransientDbWarning(context: string): void {
+    const now = Date.now();
+    if (now - SecurityService.lastDbWarningAt < 10000) return;
+    SecurityService.lastDbWarningAt = now;
+    this.logger.warn(`${context}: conexión DB inestable (P1001/P1017).`);
+  }
 
   /**
    * Registra un intento de login fallido
@@ -96,9 +135,22 @@ export class SecurityService {
    * Verifica si un token JWT está en la blacklist
    */
   async isTokenRevoked(token: string): Promise<boolean> {
-    const tokenRevocado = await this.prisma.tokenRevocado.findUnique({
-      where: { token },
-    });
+    let tokenRevocado: { expiraEn: Date } | null = null;
+    try {
+      tokenRevocado = await this.withReconnectRetry(() =>
+        this.prisma.tokenRevocado.findUnique({
+          where: { token },
+          select: { expiraEn: true },
+        }),
+      );
+    } catch (error) {
+      if (this.isTransientDbError(error)) {
+        this.logTransientDbWarning('isTokenRevoked');
+        // Fail-closed: ante duda de revocación, tratar token como revocado.
+        return true;
+      }
+      throw error;
+    }
 
     if (!tokenRevocado) {
       return false;
@@ -157,12 +209,22 @@ export class SecurityService {
    * Se llama en cada petición autenticada para rastrear actividad
    */
   async updateLastActivity(userId: string): Promise<void> {
-    await this.prisma.usuario.update({
-      where: { id: userId },
-      data: {
-        ultimaActividad: new Date(),
-      },
-    });
+    try {
+      await this.withReconnectRetry(() =>
+        this.prisma.usuario.update({
+          where: { id: userId },
+          data: {
+            ultimaActividad: new Date(),
+          },
+        }),
+      );
+    } catch (error) {
+      if (this.isTransientDbError(error)) {
+        this.logTransientDbWarning('updateLastActivity');
+        return;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -173,12 +235,14 @@ export class SecurityService {
    */
   async isUserInactive(userId: string, inactivityTimeoutMinutes: number = 15): Promise<boolean> {
     try {
-      const usuario = await this.prisma.usuario.findUnique({
-        where: { id: userId },
-        select: {
-          ultimaActividad: true,
-        },
-      });
+      const usuario = await this.withReconnectRetry(() =>
+        this.prisma.usuario.findUnique({
+          where: { id: userId },
+          select: {
+            ultimaActividad: true,
+          },
+        }),
+      );
 
       if (!usuario) {
         // Usuario no encontrado, considerar inactivo
@@ -202,10 +266,12 @@ export class SecurityService {
     } catch (error: any) {
       // Si hay error (ej: columna no existe), no bloquear el acceso
       // Pero loggear el error para debugging
-      if (error.message?.includes('ultima_actividad') || error.message?.includes('ultimaActividad')) {
-        console.warn('⚠️ Campo ultima_actividad no existe. Ejecuta la migración SQL.');
+      if (this.isTransientDbError(error)) {
+        this.logTransientDbWarning('isUserInactive');
+      } else if (error.message?.includes('ultima_actividad') || error.message?.includes('ultimaActividad')) {
+        this.logger.warn('Campo ultima_actividad no existe. Ejecuta la migración SQL.');
       } else {
-        console.error('Error verificando inactividad:', error);
+        this.logger.warn(`Error verificando inactividad: ${error?.message || error}`);
       }
       // No bloquear acceso si hay error (fallback a comportamiento anterior)
       return false;
@@ -233,12 +299,14 @@ export class SecurityService {
    */
   async isTokenRevokedByGlobalLogout(userId: string, tokenIat: number): Promise<boolean> {
     try {
-      const usuario = await this.prisma.usuario.findUnique({
-        where: { id: userId },
-        select: {
-          tokensRevocadosDesde: true,
-        },
-      });
+      const usuario = await this.withReconnectRetry(() =>
+        this.prisma.usuario.findUnique({
+          where: { id: userId },
+          select: {
+            tokensRevocadosDesde: true,
+          },
+        }),
+      );
 
       if (!usuario || !usuario.tokensRevocadosDesde) {
         // No hay logout global, el token es válido
@@ -251,7 +319,11 @@ export class SecurityService {
       // Si el token fue emitido antes de tokensRevocadosDesde, está revocado
       return tokenIssuedAt < usuario.tokensRevocadosDesde;
     } catch (error) {
-      console.error('Error verificando logout global:', error);
+      if (this.isTransientDbError(error)) {
+        this.logTransientDbWarning('isTokenRevokedByGlobalLogout');
+      } else {
+        this.logger.warn(`Error verificando logout global: ${error instanceof Error ? error.message : String(error)}`);
+      }
       // En caso de error, no bloquear acceso
       return false;
     }

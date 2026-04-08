@@ -9,6 +9,7 @@ Módulo que permite a administradores **importar**, **exportar** y **visualizar 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | `GET` | `/api/db/diagram?formato=mermaid\|svg\|png` | Descarga el diagrama ER del schema Prisma |
+| `GET` | `/api/db/import/tables` | Lista tablas importables y modos disponibles |
 | `POST` | `/api/db/import` | Importa datos desde archivo CSV o JSON |
 | `GET` | `/api/db/export?tabla=&formato=csv\|json` | Exporta datos de una tabla a CSV o JSON |
 
@@ -51,30 +52,67 @@ Importa registros desde un archivo CSV o JSON a una tabla permitida.
 
 | Campo | Tipo | Requerido | Descripción |
 |-------|------|-----------|-------------|
-| `tabla` | string | Sí | `productos`, `usuarios` o `servicios` |
+| `tabla` | string | Sí | `productos`, `usuarios`, `servicios` o `direcciones_usuario` |
 | `archivo` | File | Sí | Archivo CSV o JSON (máx. 5 MB) |
 | `formato` | string | No | `csv` o `json` (se infiere por extensión si se omite) |
+| `modo` | string | No | `append` (default), `missing_only`, `upsert` |
+
+### Modos de importación
+
+- `append`: inserta con comportamiento actual (compatibilidad retroactiva).
+- `missing_only`: inserta solo faltantes por clave de conflicto.
+- `upsert`: inserta si no existe y actualiza si ya existe.
+
+> Nota: `missing_only` y `upsert` están soportados hoy para `servicios`.  
+> En `usuarios` se mantiene solo `append` por seguridad (hash de password).  
+> En `missing_only`/`upsert`, si falta clave de conflicto (ej. `id`) se responde 400.
 
 ### Tablas permitidas
 
-| Tabla | Import | Notas |
+| Tabla | Import | Modos |
 |-------|--------|-------|
-| `productos` | Sí | Campos: nombre, marca, descripcion, categoria, imagenes, etc. |
-| `usuarios` | Sí | `password` se hashea con bcrypt. No importar tokens ni OTP. |
-| `servicios` | Sí | Campos: nombre, precio, categoria, duracionMinutos, etc. |
+| `productos` | Sí | `append` |
+| `usuarios` | Sí | `append` |
+| `servicios` | Sí | `append`, `missing_only`, `upsert` |
+| `direcciones_usuario` | Sí | `append`, `missing_only`, `upsert` |
 
 ### Respuesta de éxito
 
 ```json
 {
   "success": true,
-  "importados": 15,
+  "modo": "missing_only",
+  "tabla": "servicios",
+  "totalFilasArchivo": 100,
+  "importados": 10,
+  "insertados": 10,
+  "actualizados": 0,
+  "omitidos": 90,
   "fallidos": 2,
   "errores": [
     { "fila": 3, "mensaje": "El campo 'precio' debe ser un número" },
     { "fila": 7, "mensaje": "El email ya está registrado" }
   ]
 }
+```
+
+### Ejemplos request
+
+```bash
+# CSV - solo faltantes
+curl -X POST "http://localhost:3001/api/db/import" \
+  -H "Authorization: Bearer <token-admin>" \
+  -F "tabla=servicios" \
+  -F "modo=missing_only" \
+  -F "archivo=@servicios_backup.csv"
+
+# JSON - upsert
+curl -X POST "http://localhost:3001/api/db/import" \
+  -H "Authorization: Bearer <token-admin>" \
+  -F "tabla=servicios" \
+  -F "formato=json" \
+  -F "modo=upsert" \
+  -F "archivo=@servicios_backup.json"
 ```
 
 ### Errores posibles
@@ -96,7 +134,7 @@ Exporta los datos de una tabla en formato CSV o JSON para descargar.
 
 | Parámetro | Tipo | Requerido | Descripción |
 |-----------|------|-----------|-------------|
-| `tabla` | string | Sí | `productos`, `usuarios` o `servicios` |
+| `tabla` | string | Sí | `productos`, `usuarios`, `servicios` o `direcciones_usuario` |
 | `formato` | string | Sí | `csv` o `json` |
 
 ### Ejemplo
@@ -154,7 +192,7 @@ Para formato `mermaid` no se requieren dependencias adicionales; para `svg` y `p
 |---------|----------------|
 | Autorización | Solo rol `admin` (JwtAuthGuard + RolesGuard) |
 | Tamaño de archivo | Límite 5 MB para importación |
-| SQL injection | Solo Prisma, sin SQL crudo |
+| SQL injection | SQL dinámico restringido a allowlist de tabla/columnas validadas |
 | Validación | Tipos, campos requeridos, formatos validados por registro |
 | Datos sensibles | No exportar passwords, tokens, OTP |
 

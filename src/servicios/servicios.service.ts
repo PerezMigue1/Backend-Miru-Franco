@@ -47,7 +47,7 @@ export class ServiciosService {
         data: servicios,
       };
     } catch (error) {
-      console.error('❌ Error al listar servicios:', error);
+      // Evitar duplicar stacks gigantes: HttpExceptionFilter ya registra el error global
       throw new BadRequestException(
         `No se pudieron obtener los servicios: ${(error as any)?.message || 'error desconocido'}`,
       );

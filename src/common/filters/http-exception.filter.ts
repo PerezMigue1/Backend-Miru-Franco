@@ -18,6 +18,8 @@ import { Response } from 'express';
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
+  private readonly logCooldownMs = 5000;
+  private readonly logDedup = new Map<string, number>();
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -121,10 +123,77 @@ export class HttpExceptionFilter implements ExceptionFilter {
   }
 
   private logError(exception: unknown, status: number, path: string): void {
-    if (status >= 500) {
-      this.logger.error(`[${status}] ${path}`, exception instanceof Error ? exception.stack : String(exception));
-    } else {
-      this.logger.warn(`[${status}] ${path} - ${exception instanceof Error ? exception.message : String(exception)}`);
+    const signature = this.buildLogSignature(exception, status, path);
+    if (this.shouldSkipLog(signature)) {
+      return;
     }
+
+    const summary = this.getLogSummary(exception);
+    if (status >= 500) {
+      this.logger.error(`[${status}] ${path} - ${summary}`);
+    } else {
+      this.logger.warn(`[${status}] ${path} - ${summary}`);
+    }
+  }
+
+  private buildLogSignature(
+    exception: unknown,
+    status: number,
+    path: string,
+  ): string {
+    const prismaCode =
+      typeof exception === 'object' &&
+      exception !== null &&
+      'code' in (exception as Record<string, unknown>) &&
+      typeof (exception as Record<string, unknown>).code === 'string'
+        ? (exception as Record<string, unknown>).code
+        : '';
+    const msg =
+      exception instanceof Error
+        ? exception.message
+        : typeof exception === 'string'
+          ? exception
+          : JSON.stringify(exception);
+    return `${status}|${path}|${prismaCode}|${msg}`;
+  }
+
+  private shouldSkipLog(signature: string): boolean {
+    const now = Date.now();
+    const lastTs = this.logDedup.get(signature);
+    if (lastTs && now - lastTs < this.logCooldownMs) {
+      return true;
+    }
+    this.logDedup.set(signature, now);
+
+    if (this.logDedup.size > 200) {
+      for (const [key, ts] of this.logDedup.entries()) {
+        if (now - ts > this.logCooldownMs * 10) {
+          this.logDedup.delete(key);
+        }
+      }
+    }
+    return false;
+  }
+
+  private getLogSummary(exception: unknown): string {
+    const prismaCode =
+      typeof exception === 'object' &&
+      exception !== null &&
+      'code' in (exception as Record<string, unknown>) &&
+      typeof (exception as Record<string, unknown>).code === 'string'
+        ? (exception as Record<string, unknown>).code
+        : undefined;
+
+    const msg =
+      exception instanceof Error
+        ? exception.message
+        : typeof exception === 'string'
+          ? exception
+          : JSON.stringify(exception);
+
+    if (prismaCode === 'P1001' || prismaCode === 'P1017') {
+      return `Prisma ${prismaCode} (conexión a DB inestable): ${msg}`;
+    }
+    return msg;
   }
 }

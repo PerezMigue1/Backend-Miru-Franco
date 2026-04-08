@@ -1,0 +1,60 @@
+# SAST con Semgrep AppSec Platform (semgrep.dev) — backend NestJS (TypeScript).
+# Las reglas y políticas (OWASP, TypeScript/JavaScript, Node, secretos, etc.) se configuran
+# en la web del proyecto Semgrep (Deployment / Policies), no en este archivo.
+# El token conecta el job con tu proyecto en Semgrep Cloud.
+#
+# Requisito: GitHub → Settings → Secrets → Actions → SEMGREP_APP_TOKEN
+# (Semgrep → Settings → Tokens, o "Add to CI" / "Scan new project").
+#
+# Alcance del escaneo: código de la API (src/), esquema Prisma (prisma/) y scripts (scripts/).
+
+name: SAST - Semgrep (backend)
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: semgrep/ci → Semgrep Cloud (NestJS)
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan (Semgrep Cloud + SARIF)
+        run: |
+          docker run --rm \
+            -e SEMGREP_APP_TOKEN \
+            -e SEMGREP_BRANCH="${GITHUB_REF_NAME}" \
+            -e SEMGREP_COMMIT="${GITHUB_SHA}" \
+            -e SEMGREP_JOB_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            -e SEMGREP_REPO_NAME="${GITHUB_REPOSITORY}" \
+            -e SEMGREP_REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            -e SEMGREP_PR_ID="${{ github.event.pull_request.number }}" \
+            -v "${GITHUB_WORKSPACE}:/src" \
+            --workdir /src \
+            semgrep/semgrep:latest \
+            semgrep ci --sarif --sarif-output=semgrep.sarif src prisma scripts
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif

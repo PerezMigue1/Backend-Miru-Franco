@@ -17,7 +17,11 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/guards/roles.guard';
 import { DbService, type ImportResult } from './db.service';
-import { TABLAS_PERMITIDAS } from './db.constants';
+import {
+  IMPORT_ALLOWED_TABLE_REGEX,
+  IMPORT_MODES_BY_TABLE,
+  TABLAS_PERMITIDAS,
+} from './db.constants';
 import { ExportDirectService } from './export-direct.service';
 
 @Controller('db')
@@ -52,12 +56,16 @@ export class DbController {
   )
   async importar(
     @UploadedFile() archivo: { buffer: Buffer; originalname?: string; size: number },
-    @Body() body: { tabla?: string; formato?: string },
+    @Body() body: { tabla?: string; formato?: string; modo?: string },
   ): Promise<ImportResult> {
     const tabla = body?.tabla;
     const formato = body?.formato;
+    const modo = body?.modo;
     if (!tabla || typeof tabla !== 'string') {
       throw new BadRequestException('El parámetro tabla es requerido');
+    }
+    if (!IMPORT_ALLOWED_TABLE_REGEX.test(tabla)) {
+      throw new BadRequestException('Nombre de tabla inválido');
     }
     if (!TABLAS_PERMITIDAS.includes(tabla as any)) {
       throw new BadRequestException(
@@ -68,7 +76,24 @@ export class DbController {
       throw new BadRequestException('El archivo es requerido');
     }
 
-    return this.dbService.importar(tabla, archivo, typeof formato === 'string' ? formato : undefined);
+    return this.dbService.importar(
+      tabla,
+      archivo,
+      typeof formato === 'string' ? formato : undefined,
+      typeof modo === 'string' ? modo : undefined,
+    );
+  }
+
+  @Get('import/tables')
+  tablasImportables() {
+    return {
+      success: true,
+      data: TABLAS_PERMITIDAS.map((tabla) => ({
+        tabla,
+        modosPermitidos: IMPORT_MODES_BY_TABLE[tabla].modosPermitidos,
+        conflictKeys: IMPORT_MODES_BY_TABLE[tabla].conflictKeys,
+      })),
+    };
   }
 
   /**

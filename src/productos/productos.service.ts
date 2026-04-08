@@ -200,10 +200,7 @@ export class ProductosService {
         data: productos,
       };
     } catch (error) {
-      // Log detallado para depuración
-      console.error('❌ Error al listar productos:', error);
-
-      // Devolvemos el detalle en el propio mensaje para poder verlo en el frontend
+      // Evitar duplicar stacks gigantes: HttpExceptionFilter ya registra el error global
       throw new BadRequestException(
         `No se pudieron obtener los productos: ${(error as any)?.message || 'error desconocido'}`,
       );
