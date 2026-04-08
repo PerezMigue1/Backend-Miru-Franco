@@ -1,88 +1,26 @@
-# SAST con Semgrep App Sec Platform (semgrep.dev) — backend NestJS (TypeScript).
-# Si en Semgrep ves "Nunca empezó": falta o es inválido SEMGREP_APP_TOKEN en ESTE repo,
-# o el workflow no ha llegado a ejecutar "semgrep ci" con éxito.
-#
-# 1) GitHub → repo Backend-Miru-Franco → Settings → Secrets → Actions
-#    Crea SEMGREP_APP_TOKEN (valor desde Semgrep → tu deployment → token / Add to CI).
-# 2) Actions → "SAST - Semgrep (backend)" → Run workflow (manual) y revisa el paso Scan.
-
-name: SAST - Semgrep (backend)
-
 on:
-  workflow_dispatch:
-  pull_request:
-    branches: [main, master]
+  workflow_dispatch: {}
+  pull_request: {}
   push:
-    branches: [main, master]
+    branches:
+    - main
+    - master
+    paths:
+    - .github/workflows/semgrep.yml
   schedule:
-    # HH:MM aleatorio para no coincidir con el pico de Actions a medianoche UTC
-    - cron: "25 17 * * *"
-
-permissions:
-  contents: read
-
+  # random HH:MM to avoid a load spike on GitHub Actions at 00:00
+  - cron: 25 17 * * *
+name: Semgrep
 jobs:
   semgrep:
-    name: semgrep/ci → Semgrep Cloud (NestJS)
+    name: semgrep/ci
     runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
     permissions:
       contents: read
-      security-events: write
     env:
       SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-
+    container:
+      image: semgrep/semgrep
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Comprobar secreto SEMGREP_APP_TOKEN
-        run: |
-          if [ -z "${SEMGREP_APP_TOKEN:-}" ]; then
-            echo "::error::Falta el secreto SEMGREP_APP_TOKEN en este repositorio (Settings → Secrets and variables → Actions). Usa el token del deployment de Semgrep donde agregaste este repo."
-            exit 1
-          fi
-          echo "SEMGREP_APP_TOKEN está definido (longitud oculta)."
-
-      - name: Scan (Semgrep Cloud + SARIF)
-        id: semgrep_scan
-        continue-on-error: true
-        run: |
-          docker run --rm \
-            -e SEMGREP_APP_TOKEN \
-            -e SEMGREP_BRANCH="${GITHUB_REF_NAME}" \
-            -e SEMGREP_COMMIT="${GITHUB_SHA}" \
-            -e SEMGREP_JOB_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            -e SEMGREP_REPO_NAME="${GITHUB_REPOSITORY}" \
-            -e SEMGREP_REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
-            -e SEMGREP_PR_ID="${{ github.event.pull_request.number }}" \
-            -v "${GITHUB_WORKSPACE}:/src" \
-            --workdir /src \
-            semgrep/semgrep:latest \
-            semgrep ci --sarif --sarif-output=/src/semgrep.sarif
-
-      - name: Check SARIF artifact
-        id: sarif_check
-        if: always()
-        run: |
-          if [ -f "${GITHUB_WORKSPACE}/semgrep.sarif" ]; then
-            echo "has_sarif=true" >> "$GITHUB_OUTPUT"
-            ls -la "${GITHUB_WORKSPACE}/semgrep.sarif"
-          else
-            echo "has_sarif=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No se generó semgrep.sarif. Revisa el log del escaneo y el token en Semgrep Cloud."
-          fi
-
-      - name: Upload SARIF to GitHub Security
-        if: always() && steps.sarif_check.outputs.has_sarif == 'true'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep.sarif
-
-      - name: Fallar si el escaneo Semgrep falló
-        if: always() && steps.semgrep_scan.outcome == 'failure'
-        run: |
-          echo "::error::El escaneo Semgrep falló. Revisa el paso anterior (token, red o políticas)."
-          exit 1
+    - uses: actions/checkout@v4
+    - run: semgrep ci
