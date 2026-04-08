@@ -1,13 +1,4 @@
-# SAST con Semgrep AppSec Platform (semgrep.dev) — backend NestJS (TypeScript).
-# Las reglas y políticas (OWASP, TypeScript/JavaScript, Node, secretos, etc.) se configuran
-# en la web del proyecto Semgrep (Deployment / Policies), no en este archivo.
-# El token conecta el job con tu proyecto en Semgrep Cloud.
-#
-# Requisito: GitHub → Settings → Secrets → Actions → SEMGREP_APP_TOKEN
-# (Semgrep → Settings → Tokens, o "Add to CI" / "Scan new project").
-#
-# Alcance: `semgrep ci` no acepta rutas posicionales (solo escanea el repo). Para acotar,
-# usa `.semgrepignore` (excluye doc/, markdown, etc.).
+
 
 name: SAST - Semgrep (backend)
 
@@ -37,6 +28,8 @@ jobs:
           fetch-depth: 0
 
       - name: Scan (Semgrep Cloud + SARIF)
+        id: semgrep_scan
+        continue-on-error: true
         run: |
           docker run --rm \
             -e SEMGREP_APP_TOKEN \
@@ -49,13 +42,30 @@ jobs:
             -v "${GITHUB_WORKSPACE}:/src" \
             --workdir /src \
             semgrep/semgrep:latest \
-            semgrep ci --sarif --sarif-output=semgrep.sarif
+            semgrep ci --sarif --sarif-output=/src/semgrep.sarif
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
-      - name: Upload SARIF to GitHub Security
+      - name: Check SARIF artifact
+        id: sarif_check
         if: always()
-        continue-on-error: true
+        run: |
+          if [ -f "${GITHUB_WORKSPACE}/semgrep.sarif" ]; then
+            echo "has_sarif=true" >> "$GITHUB_OUTPUT"
+            ls -la "${GITHUB_WORKSPACE}/semgrep.sarif"
+          else
+            echo "has_sarif=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No se generó semgrep.sarif. Revisa el log del escaneo, SEMGREP_APP_TOKEN y políticas en Semgrep Cloud."
+          fi
+
+      - name: Upload SARIF to GitHub Security
+        if: always() && steps.sarif_check.outputs.has_sarif == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
+
+      - name: Fail job if Semgrep scan failed
+        if: always() && steps.semgrep_scan.outcome == 'failure'
+        run: |
+          echo "::error::El escaneo Semgrep falló. Corrige el error anterior en este job."
+          exit 1
