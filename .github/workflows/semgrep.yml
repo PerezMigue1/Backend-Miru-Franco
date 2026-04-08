@@ -1,66 +1,26 @@
-# SAST con Semgrep App Sec Platform (semgrep.dev) — backend NestJS.
-#
-# Un solo job en ubuntu-latest: Docker ejecuta semgrep ci (compatible con Semgrep Cloud)
-# y, si existe semgrep.sarif, se sube a GitHub Code Scanning sin artefactos intermedios
-# (evita "Artifact not found: semgrep-sarif" cuando el scan no genera archivo).
-#
-# Token: Settings → Secrets → Actions → SEMGREP_APP_TOKEN
-
-name: SAST - Semgrep (backend)
-
 on:
-  pull_request: {}
   workflow_dispatch: {}
+  pull_request: {}
   push:
     branches:
-      - main
-      - master
+    - main
+    - master
+    paths:
+    - .github/workflows/semgrep.yml
   schedule:
-    - cron: "25 17 * * *"
-
-permissions:
-  contents: read
-
+  # random HH:MM to avoid a load spike on GitHub Actions at 00:00
+  - cron: 25 17 * * *
+name: Semgrep
 jobs:
   semgrep:
     name: semgrep/ci
     runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
     permissions:
       contents: read
-      security-events: write
-
+    env:
+      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+    container:
+      image: semgrep/semgrep
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Scan (Semgrep Cloud + SARIF)
-        id: semgrep_scan
-        run: |
-          set -e
-          if [ -z "${SEMGREP_APP_TOKEN}" ]; then
-            echo "::error::Falta el secreto SEMGREP_APP_TOKEN en GitHub (Settings → Secrets and variables → Actions)."
-            exit 1
-          fi
-          docker run --rm \
-            -e SEMGREP_APP_TOKEN \
-            -e SEMGREP_BRANCH="${GITHUB_REF_NAME}" \
-            -e SEMGREP_COMMIT="${GITHUB_SHA}" \
-            -e SEMGREP_JOB_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            -e SEMGREP_REPO_NAME="${GITHUB_REPOSITORY}" \
-            -e SEMGREP_REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
-            -e SEMGREP_PR_ID="${{ github.event.pull_request.number }}" \
-            -v "${GITHUB_WORKSPACE}:/src" \
-            --workdir /src \
-            semgrep/semgrep:latest \
-            semgrep ci --sarif --sarif-output=/src/semgrep.sarif
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-
-      - name: Upload SARIF to GitHub Security
-        if: always() && hashFiles('semgrep.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep.sarif
+    - uses: actions/checkout@v4
+    - run: semgrep ci
