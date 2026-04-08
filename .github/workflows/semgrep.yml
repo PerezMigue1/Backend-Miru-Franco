@@ -1,26 +1,85 @@
+# SAST con Semgrep App Sec Platform (semgrep.dev) — backend NestJS.
+#
+# Si en Semgrep sigue "Never started" / "Nunca empezó":
+# 1) Secreto SEMGREP_APP_TOKEN en ESTE repo (Settings → Secrets → Actions).
+# 2) Token generado en el MISMO deployment/proyecto donde agregaste el repo.
+# 3) En Semgrep: tras el primer run en Actions, usa "Check connection" (documentación oficial).
+#
+# Este YAML sigue el ejemplo oficial (container semgrep/semgrep + semgrep ci + token en el paso run).
+
+name: SAST - Semgrep (backend)
+
 on:
-  workflow_dispatch: {}
   pull_request: {}
+  workflow_dispatch: {}
   push:
     branches:
-    - main
-    - master
-    paths:
-    - .github/workflows/semgrep.yml
+      - main
+      - master
   schedule:
-  # random HH:MM to avoid a load spike on GitHub Actions at 00:00
-  - cron: 25 17 * * *
-name: Semgrep
+    - cron: "25 17 * * *"
+
+permissions:
+  contents: read
+
 jobs:
   semgrep:
+    # Nombre alineado con la plantilla de Semgrep (mejor reconocimiento en la plataforma).
     name: semgrep/ci
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
     container:
       image: semgrep/semgrep
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+
     steps:
-    - uses: actions/checkout@v4
-    - run: semgrep ci
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Token en el mismo paso que ejecuta semgrep (patrón oficial de semgrep.dev).
+      - name: Scan (Semgrep Cloud + SARIF)
+        id: semgrep_scan
+        run: |
+          set -e
+          if [ -z "${SEMGREP_APP_TOKEN}" ]; then
+            echo "::error::Falta el secreto SEMGREP_APP_TOKEN en GitHub (Settings → Secrets and variables → Actions de este repositorio)."
+            exit 1
+          fi
+          semgrep ci --sarif --sarif-output=semgrep.sarif
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+  upload-sarif:
+    name: Upload SARIF to GitHub Security
+    runs-on: ubuntu-latest
+    needs: semgrep
+    if: always() && needs.semgrep.result != 'cancelled'
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Download SARIF
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: semgrep-sarif
+
+      - name: Upload to code scanning
+        if: hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
