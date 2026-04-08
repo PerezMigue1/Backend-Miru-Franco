@@ -6,7 +6,8 @@
 # Requisito: GitHub → Settings → Secrets → Actions → SEMGREP_APP_TOKEN
 # (Semgrep → Settings → Tokens, o "Add to CI" / "Scan new project").
 #
-# Alcance del escaneo: código de la API (src/), esquema Prisma (prisma/) y scripts (scripts/).
+# Alcance: `semgrep ci` no acepta rutas posicionales (solo escanea el repo). Para acotar,
+# usa `.semgrepignore` (excluye doc/, markdown, etc.).
 
 name: SAST - Semgrep (backend)
 
@@ -48,7 +49,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}:/src" \
             --workdir /src \
             semgrep/semgrep:latest \
-            semgrep ci --sarif --sarif-output=semgrep.sarif src prisma scripts
+            semgrep ci --sarif --sarif-output=semgrep.sarif
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 

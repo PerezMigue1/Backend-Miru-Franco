@@ -1,0 +1,3 @@
+# Excluir documentación y ruido; el código NestJS vive en src/, prisma/, scripts/
+doc/
+*.md
