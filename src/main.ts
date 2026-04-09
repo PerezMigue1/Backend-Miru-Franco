@@ -24,6 +24,9 @@ function flattenValidationErrors(
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Evita exponer el framework en la cabecera X-Powered-By (alerta ZAP low)
+  app.getHttpAdapter().getInstance().disable('x-powered-by');
   
   // Cookie parser para CSRF tokens
   app.use(cookieParser());
@@ -88,6 +91,9 @@ async function bootstrap() {
 
   // Headers de seguridad HTTP
   app.use((req, res, next) => {
+    // Evita filtrar tecnología del servidor cuando el runtime la incluya
+    res.removeHeader('Server');
+
     // X-Content-Type-Options: previene MIME type sniffing
     res.setHeader('X-Content-Type-Options', 'nosniff');
     
