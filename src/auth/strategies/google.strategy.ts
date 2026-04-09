@@ -30,12 +30,6 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       clientSecret: clientSecret || 'dummy-client-secret',
       callbackURL: callbackURL,
       scope: ['email', 'profile'],
-      // Forzar siempre la pantalla de selección de cuenta, incluso si solo hay una cuenta
-      // Esto evita el login automático cuando el usuario solo tiene una cuenta
-      authorizationParams: {
-        prompt: 'select_account', // Fuerza la pantalla de selección de cuenta
-        access_type: 'offline', // Permite obtener refresh token
-      },
       // Asegurar que siempre se muestre la pantalla de selección
       passReqToCallback: false,
     });
