@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       target_url:
-        description: 'URL backend desplegada a escanear (ej. https://tu-backend.onrender.com/api)'
+        description: 'URL backend desplegada a escanear (default: https://api.mirufranco.com)'
         required: false
         type: string
   push:
@@ -28,7 +28,8 @@ jobs:
         run: |
           TARGET_INPUT="${{ github.event.inputs.target_url }}"
           TARGET_SECRET="${{ secrets.DAST_TARGET_URL }}"
-          TARGET_URL="${TARGET_INPUT:-$TARGET_SECRET}"
+          TARGET_DEFAULT="https://api.mirufranco.com"
+          TARGET_URL="${TARGET_INPUT:-${TARGET_SECRET:-$TARGET_DEFAULT}}"
 
           if [ -z "$TARGET_URL" ]; then
             echo "::error::No hay URL objetivo. Define workflow input target_url o el secreto DAST_TARGET_URL."
