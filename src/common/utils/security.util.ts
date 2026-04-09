@@ -161,6 +161,21 @@ export function generateSecureToken(length: number = 32): string {
 }
 
 /**
+ * Evita log injection en una sola cadena: quita CRLF y caracteres de control; trunca.
+ */
+export function sanitizeForLogOutput(
+  value: string | undefined | null,
+  maxLen = 500,
+): string {
+  if (value == null || typeof value !== 'string') {
+    return '';
+  }
+  return value
+    .replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ')
+    .slice(0, maxLen);
+}
+
+/**
  * Limpia datos sensibles de un objeto para logging
  */
 export function sanitizeForLogging(data: any): any {

@@ -19,6 +19,7 @@ import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 import { UpdateUsuarioDto } from '../usuarios/dto/update-usuario.dto';
+import { sanitizeForLogOutput } from '../common/utils/security.util';
 
 @Controller('auth')
 export class AuthController {
@@ -48,14 +49,23 @@ export class AuthController {
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
     try {
       console.log('🔍 Google OAuth callback recibido');
-      console.log('🔍 Usuario del request:', req.user ? { id: req.user.id, email: req.user.email } : 'NO HAY USUARIO');
+      console.log(
+        '🔍 Usuario del request:',
+        req.user
+          ? {
+              id: req.user.id,
+              email: sanitizeForLogOutput(req.user.email, 320),
+            }
+          : 'NO HAY USUARIO',
+      );
 
       if (!req.user) {
         console.error('❌ Error: req.user es undefined en el callback');
-        console.error('❌ Request completo:', {
-          url: req.url,
+        // No loguear headers ni URL cruda (log injection / datos sensibles)
+        console.error('❌ Request (resumido):', {
           method: req.method,
-          headers: req.headers,
+          path: sanitizeForLogOutput(req.url, 2048),
+          headerCount: Object.keys(req.headers ?? {}).length,
         });
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
@@ -68,8 +78,8 @@ export class AuthController {
       console.log('🔍 Redirigiendo al frontend (OAuth callback)');
       res.redirect(result.redirect);
     } catch (error: any) {
-      console.error('❌ Error en googleAuthRedirect:', error);
-      console.error('❌ Stack:', error.stack);
+      console.error('❌ Error en googleAuthRedirect:', error?.message ?? error);
+      console.error('❌ Stack:', sanitizeForLogOutput(error?.stack, 4000));
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
       res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed&message=${encodeURIComponent(error.message)}`);

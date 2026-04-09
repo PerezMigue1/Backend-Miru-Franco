@@ -140,7 +140,11 @@ async function migrateData() {
 
       } catch (error: any) {
         usuariosConError++;
-        console.error(`   ❌ Error migrando usuario ${usuarioMongo.email}:`, error.message);
+        console.error(
+          '   ❌ Error migrando usuario:',
+          usuarioMongo.email,
+          error?.message ?? error,
+        );
         
         // Si el error es por duplicado (email ya existe), continuar
         if (error.code === 'P2002' && error.meta?.target?.includes('email')) {
