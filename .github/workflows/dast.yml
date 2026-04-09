@@ -1,61 +1,117 @@
 # DAST = Dynamic Application Security Testing
 # Prueba la API backend DESPLEGADA (staging/producción) con OWASP ZAP.
 
-name: DAST Backend (OWASP ZAP)
+name: DAST - OWASP ZAP Baseline (backend)
 
 on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'URL backend desplegada a escanear (ej. https://tu-backend.onrender.com/api)'
+        required: false
+        type: string
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # Ejecutar manualmente cuando ya tengas la app desplegada
+    branches: [main]
 
 jobs:
   dast:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Clean previous ZAP report
-        run: rm -f report_html.html
-
-      - name: Check DAST target URL (backend)
+      - name: Resolve DAST target URL
+        id: resolve_target
         run: |
-          if [ -z "${{ secrets.DAST_TARGET_URL }}" ]; then
-            echo "::warning::No está configurado el secreto DAST_TARGET_URL. Añádelo en Settings → Secrets → Actions (ej. https://tu-backend-miru.onrender.com/api)"
+          TARGET_INPUT="${{ github.event.inputs.target_url }}"
+          TARGET_SECRET="${{ secrets.DAST_TARGET_URL }}"
+          TARGET_URL="${TARGET_INPUT:-$TARGET_SECRET}"
+
+          if [ -z "$TARGET_URL" ]; then
+            echo "::error::No hay URL objetivo. Define workflow input target_url o el secreto DAST_TARGET_URL."
             exit 1
           fi
-          echo "DAST apuntará a la URL del backend configurada en DAST_TARGET_URL"
+
+          if [[ ! "$TARGET_URL" =~ ^https?:// ]]; then
+            echo "::error::DAST_TARGET_URL debe iniciar con http:// o https://"
+            exit 1
+          fi
+
+          echo "target_url=$TARGET_URL" >> "$GITHUB_OUTPUT"
+          echo "DAST backend apuntará a: $TARGET_URL"
 
       - name: Validate target reachability
         run: |
-          echo "Probando conectividad con ${{ secrets.DAST_TARGET_URL }}"
-          curl -L --max-time 30 -I "${{ secrets.DAST_TARGET_URL }}"
+          TARGET_URL="${{ steps.resolve_target.outputs.target_url }}"
+          echo "Probando conectividad con: $TARGET_URL"
+          curl -L --retry 4 --retry-delay 8 --connect-timeout 20 --max-time 180 -I "$TARGET_URL"
 
-      # Escaneo DAST contra la URL del backend desplegado (definida en el secreto DAST_TARGET_URL)
-      - name: OWASP ZAP Baseline Scan (deployed backend)
-        uses: zaproxy/action-baseline@v0.14.0
-        with:
-          target: ${{ secrets.DAST_TARGET_URL }}
-          cmd_options: '-a -j'
-        continue-on-error: true
+      - name: Clean previous local reports
+        run: rm -f report_*
 
-      - name: Validate fresh ZAP report
-        id: validate_report
+      - name: Check if ZAP rules file exists
+        id: zap_rules
         run: |
-          if [ ! -f report_html.html ]; then
-            echo "::error::No se generó report_html.html. El escaneo ZAP falló o no alcanzó el objetivo."
+          if [ -f .zap/rules.tsv ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Usando .zap/rules.tsv"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No se encontró .zap/rules.tsv; se ejecutará ZAP sin reglas personalizadas."
+          fi
+
+      - name: OWASP ZAP Baseline Scan (Docker CLI)
+        run: |
+          set -o pipefail
+          TARGET_URL="${{ steps.resolve_target.outputs.target_url }}"
+          RULES_OPT=""
+          if [ "${{ steps.zap_rules.outputs.found }}" = "true" ]; then
+            RULES_OPT="-c /zap/wrk/.zap/rules.tsv"
+          fi
+
+          echo "Ejecutando ZAP baseline para backend: $TARGET_URL"
+          docker pull ghcr.io/zaproxy/zaproxy:stable
+          set +e
+          docker run --rm --user root -v "$(pwd):/zap/wrk/:rw" -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t "$TARGET_URL" \
+            -a -j \
+            -l WARN \
+            $RULES_OPT \
+            -r report_html.html
+          ZAP_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          # 0/1/2: scan completo con posibles alertas; >2: error operativo
+          if [ "$ZAP_EXIT" -le 2 ]; then
+            echo "ZAP finalizó con código $ZAP_EXIT (escaneo completado con alertas o warnings)."
+            exit 0
+          fi
+
+          echo "::error::ZAP falló por error operativo (exit code: $ZAP_EXIT)."
+          exit "$ZAP_EXIT"
+
+      - name: Inspect generated ZAP reports
+        id: reports
+        run: |
+          echo "Buscando reporte HTML generado por ZAP..."
+          ls -la report_html.html 2>/dev/null || true
+          if [ -f report_html.html ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Se encontró report_html.html."
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::error::ZAP no generó report_html.html en esta ejecución."
             exit 1
           fi
-          echo "report_ready=true" >> "$GITHUB_OUTPUT"
-          echo "Reporte DAST generado correctamente."
 
       - name: Upload ZAP report
         uses: actions/upload-artifact@v4
-        if: always() && steps.validate_report.outputs.report_ready == 'true'
+        if: always()
         with:
           name: zap-report
           path: report_html.html
+          if-no-files-found: warn
           retention-days: 30
