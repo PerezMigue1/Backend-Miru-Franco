@@ -7,8 +7,9 @@ tracer.init({
   env: process.env.DD_ENV || process.env.NODE_ENV || 'development',
   version: process.env.DD_VERSION || process.env.npm_package_version || '1.0.0',
   logInjection: true,
-  // Igual que el asistente de Datadog: activa AppSec en el tracer
   appsec: true,
+  runtimeMetrics: true,   // 👈 útil
+  profiling: true        // 👈 opcional pero recomendado
 });
 
 export default tracer;
