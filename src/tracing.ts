@@ -8,6 +8,7 @@ tracer.init({
   version: process.env.DD_VERSION || process.env.npm_package_version || '1.0.0',
   logInjection: true,
   appsec: true,
+  iast: true,
 });
 
 export default tracer;
