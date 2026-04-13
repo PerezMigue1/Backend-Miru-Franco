@@ -1,9 +1,10 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Paquete } from '@prisma/client';
+import { Paquete, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePaqueteDto } from './dto/create-paquete.dto';
 import { UpdatePaqueteDto } from './dto/update-paquete.dto';
@@ -11,7 +12,41 @@ import { sanitizeInput, containsSQLInjection } from '../common/utils/security.ut
 
 @Injectable()
 export class PaquetesService {
+  private readonly logger = new Logger(PaquetesService.name);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Mensaje legible para el cliente cuando Prisma falla al persistir. */
+  private mapPrismaPersistError(e: unknown): {
+    message: string;
+    code?: string;
+  } {
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      if (e.code === 'P2002') {
+        return { message: 'Violación de unicidad en base de datos.', code: e.code };
+      }
+      return {
+        message: `Error al guardar (${e.code}). Revisa que la base esté migrada y los datos sean válidos.`,
+        code: e.code,
+      };
+    }
+    if (e instanceof Prisma.PrismaClientValidationError) {
+      return {
+        message:
+          'Los datos no coinciden con el esquema de la base (¿falta la tabla paquetes o una columna?). Ejecuta prisma migrate deploy o prisma db push.',
+        code: 'VALIDATION',
+      };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/does not exist|relation|no existe la relación|42P01/i.test(msg)) {
+      return {
+        message:
+          'La tabla o relación de paquetes no existe en la base de datos. Aplica las migraciones de Prisma (migrate deploy / db push).',
+        code: 'TABLE_MISSING',
+      };
+    }
+    return { message: msg || 'No se pudo crear el paquete', code: 'UNKNOWN' };
+  }
 
   /** Serializa fila Prisma: Decimal → number para el admin. */
   private toRow(p: Paquete) {
@@ -49,8 +84,21 @@ export class PaquetesService {
 
   async create(dto: CreatePaqueteDto) {
     const tipoSanitizado = sanitizeInput(dto.tipo_evento);
+    if (!tipoSanitizado) {
+      throw new BadRequestException({
+        error: 'Datos inválidos',
+        message:
+          'El tipo de evento quedó vacío tras sanitizar. Evita solo caracteres filtrados (<, >, comillas, etc.).',
+      });
+    }
     if (containsSQLInjection(tipoSanitizado)) {
       throw new BadRequestException('Datos inválidos');
+    }
+    if (!Number.isFinite(dto.precio_especial)) {
+      throw new BadRequestException({
+        error: 'Datos inválidos',
+        message: 'precio_especial debe ser un número finito (ej. 15000 o 12999.5).',
+      });
     }
 
     try {
@@ -63,8 +111,17 @@ export class PaquetesService {
         },
       });
       return { data: this.toRow(created) };
-    } catch {
-      throw new BadRequestException('No se pudo crear el paquete');
+    } catch (e) {
+      if (e instanceof BadRequestException) throw e;
+      this.logger.warn(
+        `Paquete.create falló: ${e instanceof Error ? e.message : e}`,
+      );
+      const { message, code } = this.mapPrismaPersistError(e);
+      throw new BadRequestException({
+        error: 'Error creando paquete',
+        message,
+        ...(code ? { code } : {}),
+      });
     }
   }
 
@@ -108,8 +165,19 @@ export class PaquetesService {
         data,
       });
       return { data: this.toRow(updated) };
-    } catch {
-      throw new BadRequestException('Error al actualizar el paquete');
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+        throw new NotFoundException('Paquete no encontrado');
+      }
+      this.logger.warn(
+        `Paquete.update falló: ${e instanceof Error ? e.message : e}`,
+      );
+      const { message, code } = this.mapPrismaPersistError(e);
+      throw new BadRequestException({
+        error: 'Error al actualizar el paquete',
+        message,
+        ...(code ? { code } : {}),
+      });
     }
   }
 

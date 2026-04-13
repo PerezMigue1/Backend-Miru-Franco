@@ -11,6 +11,11 @@ import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
 import { PedidoItemLineDto } from './dto/pedido-item-line.dto';
 import { precioPresentacionANumero } from '../../common/utils/money.util';
+import {
+  cantidadPorPresentacion,
+  decrementarStockPresentaciones,
+  incrementarStockPorLineas,
+} from '../common/pedido-inventario.util';
 
 @Injectable()
 export class PedidosService {
@@ -229,6 +234,14 @@ export class PedidosService {
     const moneda = dto.moneda ?? 'MXN';
 
     const data = await this.prisma.$transaction(async (tx) => {
+      const cantidades = cantidadPorPresentacion(
+        detalles.map((d) => ({
+          presentacionId: d.presentacionId,
+          cantidad: d.cantidad,
+        })),
+      );
+      await decrementarStockPresentaciones(tx, cantidades);
+
       const pedido = await tx.pedido.create({
         data: {
           usuarioId,
@@ -299,6 +312,11 @@ export class PedidosService {
 
     const rol = await this.access.getRol(solicitanteId);
     const data = await this.prisma.$transaction(async (tx) => {
+      const itemsStock = await tx.pedidoItem.findMany({
+        where: { pedidoId: id },
+        select: { presentacionId: true, cantidad: true },
+      });
+
       const estadoAnterior = actual.estado;
       const updateData: Prisma.PedidoUpdateInput = {
         ...(dto.estado !== undefined && { estado: dto.estado }),
@@ -337,6 +355,27 @@ export class PedidosService {
         throw new BadRequestException('No hay campos permitidos para actualizar');
       }
 
+      if (
+        this.access.isAdmin(rol) &&
+        dto.estado !== undefined &&
+        dto.estado !== estadoAnterior
+      ) {
+        if (
+          dto.estado === EstadoPedido.cancelado &&
+          estadoAnterior !== EstadoPedido.cancelado
+        ) {
+          await incrementarStockPorLineas(tx, itemsStock);
+        } else if (
+          dto.estado !== EstadoPedido.cancelado &&
+          estadoAnterior === EstadoPedido.cancelado
+        ) {
+          await decrementarStockPresentaciones(
+            tx,
+            cantidadPorPresentacion(itemsStock),
+          );
+        }
+      }
+
       const updated = await tx.pedido.update({
         where: { id },
         data: updateData,
@@ -371,7 +410,20 @@ export class PedidosService {
       throw new ForbiddenException('Solo administradores pueden eliminar pedidos');
     }
     await this.access.assertPedido(solicitanteId, id);
-    await this.prisma.pedido.delete({ where: { id } });
+    const pedidoRow = await this.prisma.pedido.findUnique({
+      where: { id },
+      select: { estado: true },
+    });
+    await this.prisma.$transaction(async (tx) => {
+      const itemsStock = await tx.pedidoItem.findMany({
+        where: { pedidoId: id },
+        select: { presentacionId: true, cantidad: true },
+      });
+      if (pedidoRow?.estado !== EstadoPedido.cancelado) {
+        await incrementarStockPorLineas(tx, itemsStock);
+      }
+      await tx.pedido.delete({ where: { id } });
+    });
     return { success: true, message: 'Pedido eliminado' };
   }
 }

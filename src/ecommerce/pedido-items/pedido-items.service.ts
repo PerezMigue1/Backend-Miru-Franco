@@ -3,11 +3,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EstadoPedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { CreatePedidoItemDto } from './dto/create-pedido-item.dto';
 import { UpdatePedidoItemDto } from './dto/update-pedido-item.dto';
 import { precioPresentacionANumero } from '../../common/utils/money.util';
+import {
+  decrementarStockPresentaciones,
+  incrementarStockPresentaciones,
+} from '../common/pedido-inventario.util';
 
 @Injectable()
 export class PedidoItemsService {
@@ -16,8 +21,11 @@ export class PedidoItemsService {
     private readonly access: EcommerceAccessService,
   ) {}
 
-  private async recalcularTotalesPedido(pedidoId: number) {
-    const pedido = await this.prisma.pedido.findUnique({
+  private async recalcularTotalesPedido(
+    client: Prisma.TransactionClient | PrismaService,
+    pedidoId: number,
+  ) {
+    const pedido = await client.pedido.findUnique({
       where: { id: pedidoId },
       include: { items: true },
     });
@@ -34,7 +42,7 @@ export class PedidoItemsService {
           Number(pedido.descuento)) *
           100,
       ) / 100;
-    await this.prisma.pedido.update({
+    await client.pedido.update({
       where: { id: pedidoId },
       data: { subtotal, total },
     });
@@ -52,6 +60,16 @@ export class PedidoItemsService {
 
   async crear(solicitanteId: string, dto: CreatePedidoItemDto) {
     await this.access.assertPedido(solicitanteId, dto.pedidoId);
+    const pedido = await this.prisma.pedido.findUnique({
+      where: { id: dto.pedidoId },
+      select: { estado: true },
+    });
+    if (!pedido) throw new NotFoundException('Pedido no encontrado');
+    if (pedido.estado === EstadoPedido.cancelado) {
+      throw new BadRequestException(
+        'No se pueden añadir ítems a un pedido cancelado',
+      );
+    }
     const pres = await this.prisma.productoPresentacion.findUnique({
       where: { id: dto.presentacionId },
       include: { producto: true },
@@ -67,20 +85,27 @@ export class PedidoItemsService {
     const subtotal =
       Math.round(precioUnitario * dto.cantidad * 100) / 100;
 
-    const data = await this.prisma.pedidoItem.create({
-      data: {
-        pedidoId: dto.pedidoId,
-        productoId,
-        presentacionId: dto.presentacionId,
-        cantidad: dto.cantidad,
-        precioUnitario,
-        subtotal,
-        nombreProducto: pres.producto.nombre,
-        tamanio: pres.tamanio,
-      },
-      include: { producto: true, presentacion: true },
+    const data = await this.prisma.$transaction(async (tx) => {
+      await decrementarStockPresentaciones(
+        tx,
+        new Map([[dto.presentacionId, dto.cantidad]]),
+      );
+      const row = await tx.pedidoItem.create({
+        data: {
+          pedidoId: dto.pedidoId,
+          productoId,
+          presentacionId: dto.presentacionId,
+          cantidad: dto.cantidad,
+          precioUnitario,
+          subtotal,
+          nombreProducto: pres.producto.nombre,
+          tamanio: pres.tamanio,
+        },
+        include: { producto: true, presentacion: true },
+      });
+      await this.recalcularTotalesPedido(tx, dto.pedidoId);
+      return row;
     });
-    await this.recalcularTotalesPedido(dto.pedidoId);
     return { success: true, data };
   }
 
@@ -96,28 +121,58 @@ export class PedidoItemsService {
     if (!item) throw new NotFoundException('Ítem de pedido no encontrado');
     await this.access.assertPedido(solicitanteId, item.pedidoId);
 
+    const pedidoEstado = await this.prisma.pedido.findUnique({
+      where: { id: item.pedidoId },
+      select: { estado: true },
+    });
+    if (pedidoEstado?.estado === EstadoPedido.cancelado) {
+      throw new BadRequestException(
+        'No se pueden modificar ítems de un pedido cancelado',
+      );
+    }
+
     const cantidad =
       dto.cantidad !== undefined ? dto.cantidad : item.cantidad;
 
     if (dto.cantidad !== undefined) {
-      if (!item.presentacion.disponible || item.presentacion.stock < cantidad) {
-        throw new BadRequestException('Stock insuficiente');
+      const delta = cantidad - item.cantidad;
+      if (delta > 0) {
+        const pres = item.presentacion;
+        if (!pres.disponible || pres.stock < delta) {
+          throw new BadRequestException('Stock insuficiente');
+        }
       }
       const precioUnitario = Number(item.precioUnitario);
       const subtotal = Math.round(precioUnitario * cantidad * 100) / 100;
-      const data = await this.prisma.pedidoItem.update({
-        where: { id },
-        data: {
-          cantidad,
-          subtotal,
-          ...(dto.nombreProducto !== undefined && {
-            nombreProducto: dto.nombreProducto,
-          }),
-          ...(dto.tamanio !== undefined && { tamanio: dto.tamanio }),
-        },
-        include: { producto: true, presentacion: true },
+      const data = await this.prisma.$transaction(async (tx) => {
+        if (delta !== 0) {
+          if (delta > 0) {
+            await decrementarStockPresentaciones(
+              tx,
+              new Map([[item.presentacionId, delta]]),
+            );
+          } else {
+            await incrementarStockPresentaciones(
+              tx,
+              new Map([[item.presentacionId, -delta]]),
+            );
+          }
+        }
+        const row = await tx.pedidoItem.update({
+          where: { id },
+          data: {
+            cantidad,
+            subtotal,
+            ...(dto.nombreProducto !== undefined && {
+              nombreProducto: dto.nombreProducto,
+            }),
+            ...(dto.tamanio !== undefined && { tamanio: dto.tamanio }),
+          },
+          include: { producto: true, presentacion: true },
+        });
+        await this.recalcularTotalesPedido(tx, item.pedidoId);
+        return row;
       });
-      await this.recalcularTotalesPedido(item.pedidoId);
       return { success: true, data };
     }
 
@@ -138,9 +193,24 @@ export class PedidoItemsService {
     const item = await this.prisma.pedidoItem.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('Ítem de pedido no encontrado');
     await this.access.assertPedido(solicitanteId, item.pedidoId);
+    const pedidoRow = await this.prisma.pedido.findUnique({
+      where: { id: item.pedidoId },
+      select: { estado: true },
+    });
+    if (pedidoRow?.estado === EstadoPedido.cancelado) {
+      throw new BadRequestException(
+        'No se pueden eliminar ítems de un pedido cancelado',
+      );
+    }
     const pedidoId = item.pedidoId;
-    await this.prisma.pedidoItem.delete({ where: { id } });
-    await this.recalcularTotalesPedido(pedidoId);
+    await this.prisma.$transaction(async (tx) => {
+      await incrementarStockPresentaciones(
+        tx,
+        new Map([[item.presentacionId, item.cantidad]]),
+      );
+      await tx.pedidoItem.delete({ where: { id } });
+      await this.recalcularTotalesPedido(tx, pedidoId);
+    });
     return { success: true, message: 'Ítem eliminado' };
   }
 }
