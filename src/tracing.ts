@@ -9,6 +9,7 @@ tracer.init({
   logInjection: true,
   // Igual que el asistente de Datadog: activa AppSec en el tracer
   appsec: true,
+  iast: true,
 });
 
 export default tracer;
