@@ -3,7 +3,7 @@ services:
     name: backend-miru
     env: node
     buildCommand: npm install --include=dev && npm run build
-    startCommand: node -r dd-trace/init dist/main.js
+    startCommand: node dist/main.js
     healthCheckPath: /salud
     envVars:
       - key: NODE_ENV
@@ -27,4 +27,3 @@ services:
       # - DD_TRACE_ENABLED=true
       # - DD_APPSEC_ENABLED=true
       # - DD_IAST_ENABLED=true
-      # - DD_LOGS_INJECTION=true (equivalente a logInjection del antiguo tracing.ts)
