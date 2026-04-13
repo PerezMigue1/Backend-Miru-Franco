@@ -1,4 +1,3 @@
-import './tracing';
 import { NestFactory } from '@nestjs/core';
 import { BadRequestException, ValidationPipe, VersioningType } from '@nestjs/common';
 import { AppModule } from './app.module';
