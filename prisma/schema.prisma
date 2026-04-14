@@ -47,6 +47,12 @@ enum EstadoPago {
   reembolsado
 }
 
+enum MovimientoInventarioTipo {
+  entrada
+  salida
+  ajuste
+}
+
 // Tipo mostrado en UI (credito / debito), segun pasarela o BIN.
 enum TipoTarjetaGuardada {
   credito
@@ -101,6 +107,7 @@ model Usuario {
   historialCambiosEstadoPedido HistorialEstadoPedido[]
   // Metodos tokenizados guardados (perfil + checkout). No guardar PAN completo ni CVV.
   metodosPagoGuardados       MetodoPagoUsuario[]
+  movimientosInventario      InventarioMovimiento[]
 
   @@index([activo])
   @@index([email])
@@ -457,9 +464,33 @@ model ProductoPresentacion {
   productoId     Int       @map("producto_id")
   pedidoItems    PedidoItem[]
   carritoItems   CarritoItem[]
+  movimientosInventario InventarioMovimiento[]
 
   @@map("producto_presentaciones")
   @@index([productoId])
+}
+
+model InventarioMovimiento {
+  id            Int                     @id @default(autoincrement())
+  tipo          MovimientoInventarioTipo
+  motivo        String?
+  cantidad      Int
+  stockAntes    Int                     @map("stock_antes")
+  stockDespues  Int                     @map("stock_despues")
+  referenciaTipo String?                @map("referencia_tipo")
+  referenciaId   String?                @map("referencia_id")
+  creadoEn      DateTime                @default(now()) @map("creado_en")
+
+  presentacion   ProductoPresentacion   @relation(fields: [presentacionId], references: [id], onDelete: Restrict)
+  presentacionId Int                    @map("presentacion_id")
+  usuario        Usuario?               @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+  usuarioId      String?                @map("usuario_id")
+
+  @@index([presentacionId])
+  @@index([usuarioId])
+  @@index([tipo])
+  @@index([creadoEn])
+  @@map("inventario_movimientos")
 }
 
 // Servicios (corte, coloración, tratamientos, etc.)

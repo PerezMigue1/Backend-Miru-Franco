@@ -1,0 +1,113 @@
+name: IAST Traffic (Datadog)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "URL backend desplegada (default: https://api.mirufranco.com)"
+        required: false
+        type: string
+      iterations:
+        description: "Cantidad de iteraciones por bloque (default: 25)"
+        required: false
+        type: string
+  push:
+    branches: [main]
+
+jobs:
+  iast-traffic:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Resolve target URL and iterations
+        id: cfg
+        run: |
+          TARGET_INPUT="${{ github.event.inputs.target_url }}"
+          TARGET_SECRET="${{ secrets.IAST_TARGET_URL }}"
+          TARGET_DEFAULT="https://api.mirufranco.com"
+          TARGET_URL="${TARGET_INPUT:-${TARGET_SECRET:-$TARGET_DEFAULT}}"
+
+          ITER_INPUT="${{ github.event.inputs.iterations }}"
+          ITERATIONS="${ITER_INPUT:-25}"
+
+          if [ -z "$TARGET_URL" ]; then
+            echo "::error::No se definió URL objetivo."
+            exit 1
+          fi
+          if [[ ! "$TARGET_URL" =~ ^https?:// ]]; then
+            echo "::error::target_url debe iniciar con http:// o https://"
+            exit 1
+          fi
+          if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]]; then
+            echo "::error::iterations debe ser numérico."
+            exit 1
+          fi
+
+          echo "target_url=$TARGET_URL" >> "$GITHUB_OUTPUT"
+          echo "iterations=$ITERATIONS" >> "$GITHUB_OUTPUT"
+          echo "Target: $TARGET_URL | Iterations: $ITERATIONS"
+
+      - name: Reachability check
+        run: |
+          TARGET_URL="${{ steps.cfg.outputs.target_url }}"
+          curl -L --retry 4 --retry-delay 8 --connect-timeout 20 --max-time 180 -I "$TARGET_URL"
+
+      - name: Generate runtime traffic for IAST
+        run: |
+          set -euo pipefail
+          TARGET_URL="${{ steps.cfg.outputs.target_url }}"
+          ITERATIONS="${{ steps.cfg.outputs.iterations }}"
+          LOG_FILE="iast-traffic.log"
+
+          echo "Generando tráfico IAST en $TARGET_URL" | tee "$LOG_FILE"
+          echo "Inicio: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$LOG_FILE"
+
+          hit_get () {
+            local endpoint="$1"
+            local code
+            code=$(curl -sS -o /dev/null -w "%{http_code}" "$TARGET_URL$endpoint" || echo "000")
+            echo "GET  $endpoint -> $code" | tee -a "$LOG_FILE"
+          }
+
+          hit_post_json () {
+            local endpoint="$1"
+            local body="$2"
+            local code
+            code=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -H "Content-Type: application/json" \
+              -X POST "$TARGET_URL$endpoint" \
+              -d "$body" || echo "000")
+            echo "POST $endpoint -> $code" | tee -a "$LOG_FILE"
+          }
+
+          # Bloque 1: tráfico público GET
+          for i in $(seq 1 "$ITERATIONS"); do
+            hit_get "/salud"
+            hit_get "/api/auth/test"
+            hit_get "/api/productos"
+            hit_get "/api/servicios"
+          done
+
+          # Bloque 2: tráfico con body JSON (útil para IAST)
+          for i in $(seq 1 "$ITERATIONS"); do
+            hit_post_json "/api/auth/verificar-correo" '{"email":"prueba-iast@example.com"}'
+            hit_post_json "/api/usuarios/login" '{"email":"prueba-iast@example.com","password":"ClaveFalsa123!"}'
+          done
+
+          # Bloque 3: query params (exercise parsing paths)
+          for i in $(seq 1 "$ITERATIONS"); do
+            hit_get "/api/usuarios?q=prueba"
+          done
+
+          echo "Fin: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$LOG_FILE"
+
+      - name: Upload traffic log artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iast-traffic-log
+          path: iast-traffic.log
+          if-no-files-found: warn
+          retention-days: 30

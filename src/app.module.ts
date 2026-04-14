@@ -13,6 +13,7 @@ import { PaquetesModule } from './paquetes/paquetes.module';
 import { DbModule } from './db/db.module';
 import { EcommerceModule } from './ecommerce/ecommerce.module';
 import { PaymentsModule } from './payments/payments.module';
+import { InventarioModule } from './inventario/inventario.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -39,6 +40,7 @@ import { AppController } from './app.controller';
     DbModule,
     EcommerceModule,
     PaymentsModule,
+    InventarioModule,
   ],
   controllers: [AppController],
 })

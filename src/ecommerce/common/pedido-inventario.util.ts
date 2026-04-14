@@ -4,6 +4,13 @@ import { Prisma } from '@prisma/client';
 const MSG_STOCK = 'Stock insuficiente';
 
 export type LineaStock = { presentacionId: number; cantidad: number };
+export type MovimientoTipo = 'entrada' | 'salida' | 'ajuste';
+export type MovimientoMeta = {
+  usuarioId?: string;
+  referenciaTipo?: string;
+  referenciaId?: string;
+  motivo?: string;
+};
 
 /** Suma cantidades por presentación (misma presentación en varias líneas del pedido). */
 export function cantidadPorPresentacion(lines: LineaStock[]): Map<number, number> {
@@ -21,32 +28,59 @@ export function cantidadPorPresentacion(lines: LineaStock[]): Map<number, number
 export async function decrementarStockPresentaciones(
   tx: Prisma.TransactionClient,
   cantidades: Map<number, number>,
+  meta?: MovimientoMeta,
 ): Promise<void> {
   for (const [presentacionId, cantidad] of cantidades) {
     if (cantidad <= 0) continue;
-    const r = await tx.productoPresentacion.updateMany({
-      where: {
-        id: presentacionId,
-        disponible: true,
-        stock: { gte: cantidad },
-      },
-      data: { stock: { decrement: cantidad } },
-    });
-    if (r.count !== 1) {
+    const rows = await tx.$queryRaw<{ stock: number }[]>(
+      Prisma.sql`UPDATE "producto_presentaciones"
+                 SET "stock" = "stock" - ${cantidad}
+                 WHERE id = ${presentacionId}
+                   AND disponible = true
+                   AND stock >= ${cantidad}
+                 RETURNING stock`,
+    );
+    if (rows.length !== 1) {
       throw new BadRequestException(MSG_STOCK);
     }
+    const stockDespues = Number(rows[0].stock);
+    const stockAntes = stockDespues + cantidad;
+    await registrarMovimiento(tx, {
+      tipo: 'salida',
+      presentacionId,
+      cantidad,
+      stockAntes,
+      stockDespues,
+      ...meta,
+    });
   }
 }
 
 export async function incrementarStockPresentaciones(
   tx: Prisma.TransactionClient,
   cantidades: Map<number, number>,
+  meta?: MovimientoMeta,
 ): Promise<void> {
   for (const [presentacionId, cantidad] of cantidades) {
     if (cantidad <= 0) continue;
-    await tx.productoPresentacion.update({
-      where: { id: presentacionId },
-      data: { stock: { increment: cantidad } },
+    const rows = await tx.$queryRaw<{ stock: number }[]>(
+      Prisma.sql`UPDATE "producto_presentaciones"
+                 SET "stock" = "stock" + ${cantidad}
+                 WHERE id = ${presentacionId}
+                 RETURNING stock`,
+    );
+    if (rows.length !== 1) {
+      throw new BadRequestException('Presentación no encontrada');
+    }
+    const stockDespues = Number(rows[0].stock);
+    const stockAntes = stockDespues - cantidad;
+    await registrarMovimiento(tx, {
+      tipo: 'entrada',
+      presentacionId,
+      cantidad,
+      stockAntes,
+      stockDespues,
+      ...meta,
     });
   }
 }
@@ -54,6 +88,29 @@ export async function incrementarStockPresentaciones(
 export async function incrementarStockPorLineas(
   tx: Prisma.TransactionClient,
   lines: LineaStock[],
+  meta?: MovimientoMeta,
 ): Promise<void> {
-  await incrementarStockPresentaciones(tx, cantidadPorPresentacion(lines));
+  await incrementarStockPresentaciones(tx, cantidadPorPresentacion(lines), meta);
+}
+
+async function registrarMovimiento(
+  tx: Prisma.TransactionClient,
+  movimiento: {
+    tipo: MovimientoTipo;
+    presentacionId: number;
+    cantidad: number;
+    stockAntes: number;
+    stockDespues: number;
+    usuarioId?: string;
+    referenciaTipo?: string;
+    referenciaId?: string;
+    motivo?: string;
+  },
+) {
+  await tx.$executeRaw(
+    Prisma.sql`INSERT INTO "inventario_movimientos"
+      ("tipo", "motivo", "cantidad", "stock_antes", "stock_despues", "referencia_tipo", "referencia_id", "presentacion_id", "usuario_id")
+      VALUES
+      (${movimiento.tipo}::"MovimientoInventarioTipo", ${movimiento.motivo ?? null}, ${movimiento.cantidad}, ${movimiento.stockAntes}, ${movimiento.stockDespues}, ${movimiento.referenciaTipo ?? null}, ${movimiento.referenciaId ?? null}, ${movimiento.presentacionId}, ${movimiento.usuarioId ?? null})`,
+  );
 }

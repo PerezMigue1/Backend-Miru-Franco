@@ -89,6 +89,12 @@ export class PedidoItemsService {
       await decrementarStockPresentaciones(
         tx,
         new Map([[dto.presentacionId, dto.cantidad]]),
+        {
+          usuarioId: solicitanteId,
+          referenciaTipo: 'pedido_item',
+          referenciaId: String(dto.pedidoId),
+          motivo: 'pedido_item_creado',
+        },
       );
       const row = await tx.pedidoItem.create({
         data: {
@@ -150,11 +156,23 @@ export class PedidoItemsService {
             await decrementarStockPresentaciones(
               tx,
               new Map([[item.presentacionId, delta]]),
+              {
+                usuarioId: solicitanteId,
+                referenciaTipo: 'pedido_item',
+                referenciaId: String(id),
+                motivo: 'pedido_item_cantidad_incrementada',
+              },
             );
           } else {
             await incrementarStockPresentaciones(
               tx,
               new Map([[item.presentacionId, -delta]]),
+              {
+                usuarioId: solicitanteId,
+                referenciaTipo: 'pedido_item',
+                referenciaId: String(id),
+                motivo: 'pedido_item_cantidad_reducida',
+              },
             );
           }
         }
@@ -207,6 +225,12 @@ export class PedidoItemsService {
       await incrementarStockPresentaciones(
         tx,
         new Map([[item.presentacionId, item.cantidad]]),
+        {
+          usuarioId: solicitanteId,
+          referenciaTipo: 'pedido_item',
+          referenciaId: String(id),
+          motivo: 'pedido_item_eliminado',
+        },
       );
       await tx.pedidoItem.delete({ where: { id } });
       await this.recalcularTotalesPedido(tx, pedidoId);

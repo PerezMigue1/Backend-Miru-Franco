@@ -234,14 +234,6 @@ export class PedidosService {
     const moneda = dto.moneda ?? 'MXN';
 
     const data = await this.prisma.$transaction(async (tx) => {
-      const cantidades = cantidadPorPresentacion(
-        detalles.map((d) => ({
-          presentacionId: d.presentacionId,
-          cantidad: d.cantidad,
-        })),
-      );
-      await decrementarStockPresentaciones(tx, cantidades);
-
       const pedido = await tx.pedido.create({
         data: {
           usuarioId,
@@ -269,6 +261,19 @@ export class PedidosService {
           },
         },
         include: this.includeDefault(),
+      });
+
+      const cantidades = cantidadPorPresentacion(
+        detalles.map((d) => ({
+          presentacionId: d.presentacionId,
+          cantidad: d.cantidad,
+        })),
+      );
+      await decrementarStockPresentaciones(tx, cantidades, {
+        usuarioId: solicitanteId,
+        referenciaTipo: 'pedido',
+        referenciaId: String(pedido.id),
+        motivo: 'pedido_creado',
       });
 
       await tx.historialEstadoPedido.create({
@@ -364,7 +369,12 @@ export class PedidosService {
           dto.estado === EstadoPedido.cancelado &&
           estadoAnterior !== EstadoPedido.cancelado
         ) {
-          await incrementarStockPorLineas(tx, itemsStock);
+          await incrementarStockPorLineas(tx, itemsStock, {
+            usuarioId: solicitanteId,
+            referenciaTipo: 'pedido',
+            referenciaId: String(id),
+            motivo: 'pedido_cancelado',
+          });
         } else if (
           dto.estado !== EstadoPedido.cancelado &&
           estadoAnterior === EstadoPedido.cancelado
@@ -372,6 +382,12 @@ export class PedidosService {
           await decrementarStockPresentaciones(
             tx,
             cantidadPorPresentacion(itemsStock),
+            {
+              usuarioId: solicitanteId,
+              referenciaTipo: 'pedido',
+              referenciaId: String(id),
+              motivo: 'pedido_reactivado',
+            },
           );
         }
       }
@@ -420,7 +436,12 @@ export class PedidosService {
         select: { presentacionId: true, cantidad: true },
       });
       if (pedidoRow?.estado !== EstadoPedido.cancelado) {
-        await incrementarStockPorLineas(tx, itemsStock);
+        await incrementarStockPorLineas(tx, itemsStock, {
+          usuarioId: solicitanteId,
+          referenciaTipo: 'pedido',
+          referenciaId: String(id),
+          motivo: 'pedido_eliminado',
+        });
       }
       await tx.pedido.delete({ where: { id } });
     });
