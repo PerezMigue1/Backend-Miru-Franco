@@ -33,3 +33,5 @@ Thumbs.db
 
 # Backend folder (no commiteable según usuario)
 backend/
+
+.agents
