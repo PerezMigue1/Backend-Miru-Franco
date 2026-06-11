@@ -3,6 +3,9 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
 import { UpdateUsuarioDto } from '../usuarios/dto/update-usuario.dto';
+import { LoginDto } from '../usuarios/dto/login.dto';
+import { VerificarOtpDto } from '../usuarios/dto/verificar-otp.dto';
+import { ReenviarCodigoDto } from '../usuarios/dto/reenviar-codigo.dto';
 import { SecurityService } from '../common/services/security.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
@@ -139,7 +142,7 @@ export class AuthService {
     });
   }
 
-  async logout(token: string, logoutAll: boolean = false) {
+  async logout(token: string, _logoutAll: boolean = false) {
     try {
       // Decodificar token para obtener información
       const decoded: any = this.jwtService.decode(token);
@@ -217,6 +220,48 @@ export class AuthService {
   /** PATCH /auth/me: mismos campos permitidos que PUT usuarios/:id/perfil (incl. `foto`). */
   async updateProfileMe(userId: string, dto: UpdateUsuarioDto) {
     return this.usuariosService.actualizarPerfilUsuario(userId, dto);
+  }
+
+  // ===== Delegados: sesión y recuperación de contraseña =====
+
+  login(loginDto: LoginDto) {
+    return this.usuariosService.login(loginDto);
+  }
+
+  verificarOTP(verificarOtpDto: VerificarOtpDto) {
+    return this.usuariosService.verificarOTP(verificarOtpDto);
+  }
+
+  reenviarCodigo(reenviarCodigoDto: ReenviarCodigoDto) {
+    return this.usuariosService.reenviarCodigo(reenviarCodigoDto);
+  }
+
+  obtenerPreguntaSeguridad(email: string) {
+    return this.usuariosService.obtenerPreguntaSeguridad(email);
+  }
+
+  verificarRespuestaSeguridad(email: string, respuesta: string) {
+    return this.usuariosService.validarRespuestaSeguridad(email, respuesta);
+  }
+
+  solicitarEnlaceRecuperacion(email: string) {
+    return this.usuariosService.solicitarEnlaceRecuperacion(email);
+  }
+
+  enviarCodigoRecuperacionSMS(phone: string) {
+    return this.usuariosService.enviarCodigoRecuperacionSMS(phone);
+  }
+
+  verificarCodigoRecuperacionSMS(phone: string, codigo: string) {
+    return this.usuariosService.verificarCodigoRecuperacionSMS(phone, codigo);
+  }
+
+  validarTokenRecuperacion(email: string, token: string) {
+    return this.usuariosService.validarTokenRecuperacion(email, token);
+  }
+
+  cambiarPassword(email: string, token: string, nuevaPassword: string) {
+    return this.usuariosService.cambiarPassword(email, token, nuevaPassword);
   }
 }
 

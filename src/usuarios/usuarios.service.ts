@@ -9,7 +9,7 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
-import { sanitizeInput, containsSQLInjection, sanitizeForLogging, isCommonAnswer, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone } from '../common/utils/security.util';
+import { sanitizeInput, containsSQLInjection, sanitizeForLogging, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
 
@@ -158,10 +158,8 @@ export class UsuariosService {
     // Log seguro (sin datos sensibles)
     console.log('✅ Usuario registrado:', sanitizeForLogging({ email, id: nuevoUsuario.id }));
 
-    // Objeto usuario creado para la respuesta (panel admin puede mostrarlo en la lista)
     const usuarioCreado = {
       id: nuevoUsuario.id,
-      _id: nuevoUsuario.id,
       nombre: nuevoUsuario.nombre,
       email: nuevoUsuario.email,
       rol: nuevoUsuario.rol,
@@ -175,16 +173,15 @@ export class UsuariosService {
         success: true,
         message: 'Ingresa el código para activar tu cuenta. El código expira en 2 minutos.',
         requiereVerificacion: true,
-        data: usuarioCreado,
+        usuario: usuarioCreado,
       };
     } catch (err) {
       console.error('Error al enviar correo de activación:', err);
-      // Usuario ya creado; devolverlo para que el panel admin pueda mostrarlo
       return {
         success: true,
         message: 'Usuario registrado. No se pudo enviar el correo de activación.',
         requiereVerificacion: true,
-        data: usuarioCreado,
+        usuario: usuarioCreado,
       };
     }
   }
@@ -277,7 +274,6 @@ export class UsuariosService {
       token,
       usuario: {
         id: usuario.id,
-        _id: usuario.id, // alias por compatibilidad con frontend
         nombre: usuario.nombre,
         email: usuario.email,
         rol: usuario.rol,

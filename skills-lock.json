@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "api-design": {
+      "source": "aaronontheweb/dotnet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/csharp-api-design/SKILL.md",
+      "computedHash": "9b627f15b93e77f017dd7b649503baa32895fa081e8379934aa63038bb90a689"
+    },
+    "nestjs": {
+      "source": "giuseppe-trisciuoglio/developer-kit",
+      "sourceType": "github",
+      "skillPath": "plugins/developer-kit-typescript/skills/nestjs/SKILL.md",
+      "computedHash": "c9771be6c8e742c4451a127005cf45b60c02c0e06f1e61f72b5c0db1dfb21595"
+    },
+    "senior-backend": {
+      "source": "alirezarezvani/claude-skills",
+      "sourceType": "github",
+      "skillPath": "engineering-team/skills/senior-backend/SKILL.md",
+      "computedHash": "a6b153be472ee0eb8d650635e0131f36de895370f3d74a24688b331479fc815e"
+    }
+  }
+}

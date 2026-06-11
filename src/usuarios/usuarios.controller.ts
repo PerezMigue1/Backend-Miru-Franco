@@ -16,16 +16,9 @@ import {
 } from '@nestjs/common';
 import { UsuariosService } from './usuarios.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
-import { LoginDto } from './dto/login.dto';
-import { VerificarOtpDto } from './dto/verificar-otp.dto';
-import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
-import { EnviarCodigoRecuperacionSmsDto } from './dto/enviar-codigo-recuperacion-sms.dto';
-import { VerificarCodigoRecuperacionSmsDto } from './dto/verificar-codigo-recuperacion-sms.dto';
 import { UpdateUsuarioDto } from './dto/update-usuario.dto';
-import { CambiarPasswordDto } from './dto/cambiar-password.dto';
 import { CambiarPasswordPerfilDto } from './dto/cambiar-password-perfil.dto';
 import { UpdateEstadoUsuarioDto } from './dto/update-estado-usuario.dto';
 import { UpdateRolUsuarioDto } from './dto/update-rol-usuario.dto';
@@ -66,91 +59,10 @@ export class UsuariosController {
   }
 
   // ===== POST ROUTES (rutas específicas ANTES de rutas con parámetros) =====
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  async crearUsuario(@Body() createUsuarioDto: CreateUsuarioDto) {
-    return this.usuariosService.crearUsuario(createUsuarioDto);
-  }
-
   @Post('registro')
   @HttpCode(HttpStatus.CREATED)
   async registro(@Body() createUsuarioDto: CreateUsuarioDto) {
-    // Alias para compatibilidad con frontend - DEBE ir antes de rutas con parámetros
     return this.usuariosService.crearUsuario(createUsuarioDto);
-  }
-
-  @Post('registrar')
-  @HttpCode(HttpStatus.CREATED)
-  async registrar(@Body() createUsuarioDto: CreateUsuarioDto) {
-    return this.usuariosService.crearUsuario(createUsuarioDto);
-  }
-
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  // Rate limiting: 5 intentos por minuto por IP
-  async login(@Body() loginDto: LoginDto) {
-    return this.usuariosService.login(loginDto);
-  }
-
-  @Post('verificar-otp')
-  @HttpCode(HttpStatus.OK)
-  async verificarOTP(@Body() verificarOtpDto: VerificarOtpDto) {
-    return this.usuariosService.verificarOTP(verificarOtpDto);
-  }
-
-  @Post('reenviar-codigo')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms)
-  async reenviarCodigo(@Body() reenviarCodigoDto: ReenviarCodigoDto) {
-    return this.usuariosService.reenviarCodigo(reenviarCodigoDto);
-  }
-
-  @Post('pregunta-seguridad')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms) - previene enumeración de usuarios
-  async obtenerPreguntaSeguridad(@Body() body: { email: string }) {
-    return this.usuariosService.obtenerPreguntaSeguridad(body.email);
-  }
-
-  @Post('verificar-respuesta')
-  async validarRespuestaSeguridad(@Body() body: { email: string; respuesta: string }) {
-    return this.usuariosService.validarRespuestaSeguridad(body.email, body.respuesta);
-  }
-
-  @Post('solicitar-enlace-recuperacion')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms) - previene spam
-  async solicitarEnlaceRecuperacion(@Body() body: { email: string }) {
-    return this.usuariosService.solicitarEnlaceRecuperacion(body.email);
-  }
-
-  @Post('enviar-codigo-recuperacion-sms')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(new RateLimitGuard(3, 60000)) // 3 intentos por minuto (60000 ms)
-  async enviarCodigoRecuperacionSMS(@Body() body: EnviarCodigoRecuperacionSmsDto) {
-    return this.usuariosService.enviarCodigoRecuperacionSMS(body.phone);
-  }
-
-  @Post('verificar-codigo-recuperacion-sms')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(new RateLimitGuard(5, 60000)) // 5 intentos por minuto (60000 ms)
-  async verificarCodigoRecuperacionSMS(@Body() body: VerificarCodigoRecuperacionSmsDto) {
-    return this.usuariosService.verificarCodigoRecuperacionSMS(body.phone, body.codigo);
-  }
-
-  @Post('validar-token-recuperacion')
-  @HttpCode(HttpStatus.OK)
-  async validarTokenRecuperacion(@Body() body: { email: string; token: string }) {
-    return this.usuariosService.validarTokenRecuperacion(body.email, body.token);
-  }
-
-  @Post('cambiar-password')
-  async cambiarPassword(@Body() cambiarPasswordDto: CambiarPasswordDto) {
-    return this.usuariosService.cambiarPassword(
-      cambiarPasswordDto.email,
-      cambiarPasswordDto.token,
-      cambiarPasswordDto.nuevaPassword,
-    );
   }
 
   // ===== ROUTES CON PARÁMETROS DINÁMICOS (al final) =====

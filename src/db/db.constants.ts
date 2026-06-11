@@ -8,7 +8,23 @@ export const TABLAS_PERMITIDAS = [
 export type TablaPermitida = (typeof TABLAS_PERMITIDAS)[number];
 export type ImportMode = 'append' | 'missing_only' | 'upsert';
 
-export const IMPORT_ALLOWED_TABLE_REGEX = /^[a-z_][a-z0-9_]*$/;
+export const IMPORT_ALLOWED_TABLE_REGEX = /^[a-zA-Z0-9_.]+$/;
+export const IMPORT_BLOCKED_TABLES = [
+  '_prisma_migrations',
+  'usuarios',
+  'tokens_revocados',
+  'codigos_oauth',
+  'preguntas_disponibles',
+  'metodos_pago_usuario',
+] as const;
+export const TRUNCATE_ALLOWED_TABLE_REGEX = /^[a-zA-Z0-9_.]+$/;
+export const TRUNCATE_BLOCKED_TABLES = [
+  '_prisma_migrations',
+  'usuarios',
+  'tokens_revocados',
+  'codigos_oauth',
+  'preguntas_disponibles',
+] as const;
 
 export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 export const MAX_IMPORT_ERROR_DETAILS = 50;

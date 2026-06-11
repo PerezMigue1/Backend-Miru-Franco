@@ -2,7 +2,10 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
+  HttpException,
+  HttpStatus,
   Post,
   Query,
   Res,
@@ -18,11 +21,12 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/guards/roles.guard';
 import { DbService, type ImportResult } from './db.service';
 import {
+  IMPORT_BLOCKED_TABLES,
   IMPORT_ALLOWED_TABLE_REGEX,
-  IMPORT_MODES_BY_TABLE,
   TABLAS_PERMITIDAS,
 } from './db.constants';
 import { ExportDirectService } from './export-direct.service';
+import { TruncateTableDto } from './dto/truncate-table.dto';
 
 @Controller('db')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -58,41 +62,32 @@ export class DbController {
     @UploadedFile() archivo: { buffer: Buffer; originalname?: string; size: number },
     @Body() body: { tabla?: string; formato?: string; modo?: string },
   ): Promise<ImportResult> {
-    const tabla = body?.tabla;
+    const tabla = this.normalizeImportTable(body?.tabla);
     const formato = body?.formato;
     const modo = body?.modo;
-    if (!tabla || typeof tabla !== 'string') {
-      throw new BadRequestException('El parámetro tabla es requerido');
-    }
-    if (!IMPORT_ALLOWED_TABLE_REGEX.test(tabla)) {
-      throw new BadRequestException('Nombre de tabla inválido');
-    }
-    if (!TABLAS_PERMITIDAS.includes(tabla as any)) {
-      throw new BadRequestException(
-        `tabla debe ser una de: ${TABLAS_PERMITIDAS.join(', ')}`,
-      );
-    }
     if (!archivo || !archivo.buffer) {
       throw new BadRequestException('El archivo es requerido');
     }
 
-    return this.dbService.importar(
-      tabla,
-      archivo,
-      typeof formato === 'string' ? formato : undefined,
-      typeof modo === 'string' ? modo : undefined,
-    );
+    try {
+      return await this.dbService.importar(
+        tabla,
+        archivo,
+        typeof formato === 'string' ? formato : undefined,
+        typeof modo === 'string' ? modo : undefined,
+      );
+    } catch (error: any) {
+      this.rethrowImportError(error);
+    }
   }
 
   @Get('import/tables')
-  tablasImportables() {
+  async tablasImportables() {
+    const tablas = await this.dbService.getImportTablesMetadata();
     return {
       success: true,
-      data: TABLAS_PERMITIDAS.map((tabla) => ({
-        tabla,
-        modosPermitidos: IMPORT_MODES_BY_TABLE[tabla].modosPermitidos,
-        conflictKeys: IMPORT_MODES_BY_TABLE[tabla].conflictKeys,
-      })),
+      tablas,
+      data: tablas,
     };
   }
 
@@ -144,5 +139,79 @@ export class DbController {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
+  }
+
+  @Post('truncate')
+  async truncate(@Body() dto: TruncateTableDto) {
+    return this.dbService.truncateTable(dto);
+  }
+
+  private normalizeImportTable(tabla?: string): string {
+    if (!tabla || typeof tabla !== 'string') {
+      throw new BadRequestException({
+        success: false,
+        error: 'El parámetro tabla es requerido',
+        message: 'El parámetro tabla es requerido',
+      });
+    }
+    const raw = tabla.trim();
+    if (!IMPORT_ALLOWED_TABLE_REGEX.test(raw)) {
+      throw new BadRequestException({
+        success: false,
+        error: 'tabla inválida',
+        message: 'tabla inválida',
+      });
+    }
+
+    const [schemaPart, tablePart] = raw.includes('.') ? raw.split('.', 2) : ['public', raw];
+    const schema = (schemaPart || 'public').trim();
+    const table = (tablePart || '').trim();
+    if (schema !== 'public' || !table || !/^[a-zA-Z0-9_]+$/.test(table)) {
+      throw new BadRequestException({
+        success: false,
+        error: 'Solo se permite importar tablas del schema public',
+        message: 'Solo se permite importar tablas del schema public',
+      });
+    }
+
+    if (IMPORT_BLOCKED_TABLES.includes(table as any)) {
+      throw new ForbiddenException({
+        success: false,
+        error: 'tabla bloqueada por seguridad',
+        message: 'tabla bloqueada por seguridad',
+      });
+    }
+    return table;
+  }
+
+  private rethrowImportError(error: any): never {
+    if (error instanceof HttpException) {
+      const status = error.getStatus();
+      const response = error.getResponse() as any;
+      if (response && typeof response === 'object' && 'success' in response && 'error' in response) {
+        throw error;
+      }
+
+      let message = 'error interno';
+      if (typeof response === 'string') {
+        message = response;
+      } else if (Array.isArray(response?.message)) {
+        message = response.message.join(', ');
+      } else if (typeof response?.message === 'string') {
+        message = response.message;
+      }
+      throw new HttpException(
+        { success: false, error: message, message },
+        status,
+      );
+    }
+    const fallbackMessage =
+      error instanceof Error && typeof error.message === 'string' && error.message.trim()
+        ? error.message
+        : 'error interno';
+    throw new HttpException(
+      { success: false, error: fallbackMessage, message: fallbackMessage },
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
   }
 }

@@ -71,8 +71,7 @@ export class PreguntaSeguridadService {
     }
   }
 
-  async obtenerPorId(id: string) {
-    // Implementar si se necesita una colección separada
+  async obtenerPorId(_id: string) {
     throw new NotFoundException('Pregunta no encontrada');
   }
 
@@ -94,13 +93,11 @@ export class PreguntaSeguridadService {
     };
   }
 
-  async actualizarPregunta(id: string, updateData: any) {
-    // Implementar si se necesita
+  async actualizarPregunta(_id: string, _updateData: any) {
     throw new BadRequestException('Funcionalidad en desarrollo');
   }
 
-  async eliminarPregunta(id: string) {
-    // Implementar si se necesita
+  async eliminarPregunta(_id: string) {
     throw new BadRequestException('Funcionalidad en desarrollo');
   }
 
@@ -138,7 +135,7 @@ export class PreguntaSeguridadService {
       success: true,
       data: [
         {
-          _id: usuario.id,
+          id: usuario.id,
           pregunta: usuario.preguntaSeguridad,
         },
       ],

@@ -8,14 +8,18 @@ import * as bcrypt from 'bcryptjs';
 import { Decimal } from '@prisma/client/runtime/library';
 import {
   TABLAS_PERMITIDAS,
+  IMPORT_BLOCKED_TABLES,
   IMPORT_ALLOWED_TABLE_REGEX,
   IMPORT_MODES_BY_TABLE,
   MAX_IMPORT_ERROR_DETAILS,
   MAX_FILE_SIZE_BYTES,
+  TRUNCATE_ALLOWED_TABLE_REGEX,
+  TRUNCATE_BLOCKED_TABLES,
   type ImportMode,
   type TablaPermitida,
 } from './db.constants';
 import { generateMermaidFromSchema } from './schema-to-mermaid';
+import { TruncateTableDto } from './dto/truncate-table.dto';
 
 const SALT_ROUNDS = 10;
 
@@ -28,7 +32,7 @@ export interface ImportError {
 export interface ImportResult {
   success: boolean;
   modo: ImportMode;
-  tabla: TablaPermitida;
+  tabla: string;
   totalFilasArchivo: number;
   importados: number;
   insertados: number;
@@ -101,18 +105,92 @@ function parseJSON(content: string): Record<string, any>[] {
 export class DbService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async getImportTablesMetadata(): Promise<
+    Array<{ tabla: string; modosPermitidos: ImportMode[]; conflictKeys: string[] }>
+  > {
+    const tables = await this.prisma.$queryRawUnsafe<Array<{ table_name: string }>>(
+      `SELECT table_name
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_type = 'BASE TABLE'
+       ORDER BY table_name ASC`,
+    );
+    const blocked = new Set<string>(IMPORT_BLOCKED_TABLES as readonly string[]);
+    const safeTables = tables.map((t) => t.table_name).filter((t) => !blocked.has(t));
+    return safeTables.map((tabla) => {
+      const cfg = IMPORT_MODES_BY_TABLE[tabla as TablaPermitida];
+      return {
+        tabla,
+        modosPermitidos: cfg?.modosPermitidos ?? ['append', 'missing_only', 'upsert'],
+        conflictKeys: cfg?.conflictKeys ?? ['id'],
+      };
+    });
+  }
+
+  async truncateTable(dto: TruncateTableDto): Promise<{
+    success: boolean;
+    tabla: string;
+    restartIdentity: boolean;
+    cascade: boolean;
+    message: string;
+  }> {
+    const rawTabla = String(dto?.tabla ?? '').trim();
+    if (!rawTabla) {
+      throw new BadRequestException('tabla es obligatoria');
+    }
+    if (!TRUNCATE_ALLOWED_TABLE_REGEX.test(rawTabla)) {
+      throw new BadRequestException('Nombre de tabla inválido');
+    }
+
+    const [schemaPart, tablePart] = rawTabla.includes('.')
+      ? rawTabla.split('.', 2)
+      : ['public', rawTabla];
+    const schema = (schemaPart || 'public').trim();
+    const table = (tablePart || '').trim();
+    if (schema !== 'public' || !table) {
+      throw new BadRequestException('Solo se permite truncar tablas del schema public');
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(table)) {
+      throw new BadRequestException('Nombre de tabla inválido');
+    }
+    if (TRUNCATE_BLOCKED_TABLES.includes(table as any)) {
+      throw new BadRequestException(`No se permite truncar la tabla sensible: ${table}`);
+    }
+
+    const exists = await this.prisma.$queryRawUnsafe<Array<{ exists: boolean }>>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM information_schema.tables
+         WHERE table_schema = 'public'
+           AND table_name = $1
+       ) AS "exists"`,
+      table,
+    );
+    if (!exists?.[0]?.exists) {
+      throw new BadRequestException(`La tabla public.${table} no existe`);
+    }
+
+    const restartIdentity = dto.restartIdentity !== false;
+    const cascade = dto.cascade === true;
+    const sql = `TRUNCATE TABLE "public"."${table}"${restartIdentity ? ' RESTART IDENTITY' : ''}${cascade ? ' CASCADE' : ''};`;
+    await this.prisma.$executeRawUnsafe(sql);
+
+    return {
+      success: true,
+      tabla: table,
+      restartIdentity,
+      cascade,
+      message: 'truncate ok',
+    };
+  }
+
   async importar(
     tabla: string,
     archivo: { buffer: Buffer; originalname?: string; size: number },
     formato?: string,
     modo?: string,
   ): Promise<ImportResult> {
-    if (!IMPORT_ALLOWED_TABLE_REGEX.test(tabla)) {
-      throw new BadRequestException('Nombre de tabla inválido');
-    }
-    if (!TABLAS_PERMITIDAS.includes(tabla as TablaPermitida)) {
-      throw new BadRequestException(`Tabla no permitida: ${tabla}`);
-    }
+    const normalizedTable = await this.normalizeAndValidateImportTable(tabla);
 
     if (archivo.size > MAX_FILE_SIZE_BYTES) {
       throw new PayloadTooLargeException(
@@ -144,17 +222,24 @@ export class DbService {
       throw new BadRequestException('No hay registros para importar');
     }
 
-    const table = tabla as TablaPermitida;
-    const tableModes = IMPORT_MODES_BY_TABLE[table];
-    if (!tableModes.modosPermitidos.includes(importMode)) {
+    const tableCfg = IMPORT_MODES_BY_TABLE[normalizedTable as TablaPermitida];
+    const allowedModes = tableCfg?.modosPermitidos ?? ['append', 'missing_only', 'upsert'];
+    if (!allowedModes.includes(importMode)) {
       throw new BadRequestException(
-        `Para tabla ${table}, solo se permite modo=${tableModes.modosPermitidos.join('|')}`,
+        `Para tabla ${normalizedTable}, solo se permite modo=${allowedModes.join('|')}`,
       );
     }
     if (importMode === 'append') {
-      return this.importarAppend(table, registros);
+      return this.importarAppend(normalizedTable, registros);
     }
-    return this.importarSqlConflictMode(table, registros, importMode);
+    if (tableCfg) {
+      return this.importarSqlConflictMode(
+        normalizedTable as TablaPermitida,
+        registros,
+        importMode,
+      );
+    }
+    return this.importarGenericConflictMode(normalizedTable, registros, importMode);
   }
 
   private parseImportMode(modo?: string): ImportMode {
@@ -167,10 +252,58 @@ export class DbService {
     );
   }
 
+  private async normalizeAndValidateImportTable(tabla: string): Promise<string> {
+    const raw = String(tabla ?? '').trim();
+    if (!raw) {
+      throw new BadRequestException('tabla inválida');
+    }
+    if (!IMPORT_ALLOWED_TABLE_REGEX.test(raw)) {
+      throw new BadRequestException('tabla inválida');
+    }
+
+    const [schemaPart, tablePart] = raw.includes('.') ? raw.split('.', 2) : ['public', raw];
+    const schema = (schemaPart || 'public').trim();
+    const table = (tablePart || '').trim();
+    if (schema !== 'public' || !table || !/^[a-zA-Z0-9_]+$/.test(table)) {
+      throw new BadRequestException('Solo se permite importar tablas del schema public');
+    }
+    if (IMPORT_BLOCKED_TABLES.includes(table as any)) {
+      throw new BadRequestException('tabla bloqueada por seguridad');
+    }
+
+    const rawQueryUnsafe = (this.prisma as any).$queryRawUnsafe as
+      | ((sql: string, ...args: unknown[]) => Promise<Array<{ exists: boolean }>>)
+      | undefined;
+    if (rawQueryUnsafe) {
+      const exists = await rawQueryUnsafe.call(
+        this.prisma,
+        `SELECT EXISTS (
+           SELECT 1
+           FROM information_schema.tables
+           WHERE table_schema = 'public'
+             AND table_name = $1
+         ) AS "exists"`,
+        table,
+      );
+      if (!exists?.[0]?.exists) {
+        throw new BadRequestException(`La tabla public.${table} no existe`);
+      }
+    }
+    return table;
+  }
+
+  private quoteIdentifier(identifier: string): string {
+    return `"${identifier.replace(/"/g, '""')}"`;
+  }
+
   private async importarAppend(
-    tabla: TablaPermitida,
+    tabla: string,
     registros: Record<string, any>[],
   ): Promise<ImportResult> {
+    if (!IMPORT_MODES_BY_TABLE[tabla as TablaPermitida]) {
+      return this.importarGenericAppend(tabla, registros);
+    }
+
     const errores: ImportError[] = [];
     let insertados = 0;
 
@@ -198,6 +331,238 @@ export class DbService {
       fallidos: errores.length,
       errores: errores.slice(0, MAX_IMPORT_ERROR_DETAILS),
     };
+  }
+
+  private async importarGenericAppend(
+    tabla: string,
+    registros: Record<string, any>[],
+  ): Promise<ImportResult> {
+    const errores: ImportError[] = [];
+    let insertados = 0;
+    const columns = await this.getImportableColumns(tabla);
+    const columnMap = new Map(columns.map((c) => [c.column_name, c]));
+    const allowed = new Set(columns.map((c) => c.column_name));
+    const sqlTable = `${this.quoteIdentifier('public')}.${this.quoteIdentifier(tabla)}`;
+
+    for (let i = 0; i < registros.length; i++) {
+      const fila = i + 2;
+      try {
+        const row = this.normalizeRowKeysToSnake(registros[i]);
+        const entries = Object.entries(row).filter(([key, value]) => allowed.has(key) && value !== undefined);
+        if (entries.length === 0) {
+          throw new Error('No hay columnas válidas para insertar');
+        }
+        const cols = entries.map(([key]) => key);
+        const { values, placeholders } = this.prepareGenericValuesAndPlaceholders(
+          entries,
+          columnMap,
+        );
+        const colSql = cols.map((c) => this.quoteIdentifier(c)).join(', ');
+        const valSql = placeholders.join(', ');
+        const sql = `INSERT INTO ${sqlTable} (${colSql}) VALUES (${valSql})`;
+        await this.prisma.$executeRawUnsafe(sql, ...values);
+        insertados++;
+      } catch (e: any) {
+        errores.push({ fila, mensaje: e.message || String(e) });
+      }
+    }
+
+    return {
+      success: errores.length === 0,
+      modo: 'append',
+      tabla,
+      totalFilasArchivo: registros.length,
+      importados: insertados,
+      insertados,
+      actualizados: 0,
+      omitidos: 0,
+      fallidos: errores.length,
+      errores: errores.slice(0, MAX_IMPORT_ERROR_DETAILS),
+    };
+  }
+
+  private async importarGenericConflictMode(
+    tabla: string,
+    registros: Record<string, any>[],
+    modo: 'missing_only' | 'upsert',
+  ): Promise<ImportResult> {
+    const columns = await this.getImportableColumns(tabla);
+    const columnMap = new Map(columns.map((c) => [c.column_name, c]));
+    const allowed = new Set(columns.map((c) => c.column_name));
+    const conflictKeys = await this.getPrimaryKeyColumns(tabla);
+    if (conflictKeys.length === 0) {
+      throw new BadRequestException(
+        `La tabla ${tabla} no tiene clave primaria para modo=${modo}. Usa append`,
+      );
+    }
+
+    const sqlTable = `${this.quoteIdentifier('public')}.${this.quoteIdentifier(tabla)}`;
+    const errores: ImportError[] = [];
+    let insertados = 0;
+    let actualizados = 0;
+    let omitidos = 0;
+
+    for (let i = 0; i < registros.length; i++) {
+      const fila = i + 2;
+      try {
+        const row = this.normalizeRowKeysToSnake(registros[i]);
+        const entries = Object.entries(row).filter(([key, value]) => allowed.has(key) && value !== undefined);
+        if (entries.length === 0) {
+          throw new Error('No hay columnas válidas para importar');
+        }
+
+        for (const key of conflictKeys) {
+          if (!entries.some(([k, v]) => k === key && v !== null && String(v).trim() !== '')) {
+            throw new Error(`Para modo=${modo}, falta la clave de conflicto requerida: ${key}`);
+          }
+        }
+
+        const cols = entries.map(([key]) => key);
+        const { values, placeholders } = this.prepareGenericValuesAndPlaceholders(
+          entries,
+          columnMap,
+        );
+        const colSql = cols.map((c) => this.quoteIdentifier(c)).join(', ');
+        const valSql = placeholders.join(', ');
+        const conflictSql = conflictKeys.map((k) => this.quoteIdentifier(k)).join(', ');
+
+        if (modo === 'missing_only') {
+          const sql = `INSERT INTO ${sqlTable} (${colSql}) VALUES (${valSql}) ON CONFLICT (${conflictSql}) DO NOTHING`;
+          const n = await this.prisma.$executeRawUnsafe(sql, ...values);
+          if (n > 0) insertados += n;
+          else omitidos++;
+          continue;
+        }
+
+        const updatable = cols.filter((c) => !conflictKeys.includes(c));
+        const setClause = updatable
+          .map((c) => `${this.quoteIdentifier(c)} = EXCLUDED.${this.quoteIdentifier(c)}`)
+          .join(', ');
+        const sql =
+          updatable.length === 0
+            ? `INSERT INTO ${sqlTable} (${colSql}) VALUES (${valSql}) ON CONFLICT (${conflictSql}) DO NOTHING`
+            : `INSERT INTO ${sqlTable} (${colSql}) VALUES (${valSql}) ON CONFLICT (${conflictSql}) DO UPDATE SET ${setClause}`;
+        await this.prisma.$executeRawUnsafe(sql, ...values);
+
+        if (updatable.length === 0) {
+          omitidos++;
+        } else {
+          actualizados++;
+        }
+      } catch (e: any) {
+        errores.push({ fila, mensaje: e.message || String(e) });
+      }
+    }
+
+    return {
+      success: errores.length === 0,
+      modo,
+      tabla,
+      totalFilasArchivo: registros.length,
+      importados: insertados + actualizados,
+      insertados,
+      actualizados,
+      omitidos,
+      fallidos: errores.length,
+      errores: errores.slice(0, MAX_IMPORT_ERROR_DETAILS),
+    };
+  }
+
+  private normalizeRowKeysToSnake(row: Record<string, any>): Record<string, any> {
+    const normalized: Record<string, any> = {};
+    for (const [key, value] of Object.entries(row ?? {})) {
+      const camel = toCamelCase(String(key));
+      const snake = camel.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+      normalized[snake] = value;
+    }
+    return normalized;
+  }
+
+  private async getImportableColumns(
+    tabla: string,
+  ): Promise<Array<{ column_name: string; data_type: string; udt_name: string }>> {
+    const cols = await this.prisma.$queryRawUnsafe<
+      Array<{ column_name: string; data_type: string; udt_name: string }>
+    >(
+      `SELECT c.column_name, c.data_type, c.udt_name
+       FROM information_schema.columns c
+       WHERE c.table_schema = 'public'
+         AND c.table_name = $1
+         AND c.is_generated = 'NEVER'
+       ORDER BY c.ordinal_position ASC`,
+      tabla,
+    );
+    if (!cols.length) {
+      throw new BadRequestException(`La tabla public.${tabla} no tiene columnas importables`);
+    }
+    return cols;
+  }
+
+  private prepareGenericValuesAndPlaceholders(
+    entries: Array<[string, unknown]>,
+    columnMap: Map<string, { column_name: string; data_type: string; udt_name: string }>,
+  ): { values: unknown[]; placeholders: string[] } {
+    const values: unknown[] = [];
+    const placeholders: string[] = [];
+
+    entries.forEach(([column, rawValue], idx) => {
+      const meta = columnMap.get(column);
+      const value = this.normalizeGenericValue(rawValue, meta);
+      values.push(value);
+      placeholders.push(this.buildGenericPlaceholder(idx + 1, meta));
+    });
+
+    return { values, placeholders };
+  }
+
+  private normalizeGenericValue(
+    value: unknown,
+    meta?: { column_name: string; data_type: string; udt_name: string },
+  ): unknown {
+    if (value === undefined || value === null || value === '') return null;
+    if (!meta) return value;
+
+    const type = meta.data_type.toLowerCase();
+    if (type.includes('timestamp') || type === 'date' || type.includes('time')) {
+      const d = new Date(String(value));
+      if (Number.isNaN(d.getTime())) {
+        throw new BadRequestException(
+          `Valor inválido para columna ${meta.column_name}: se esperaba fecha/hora válida`,
+        );
+      }
+      return d.toISOString();
+    }
+    return value;
+  }
+
+  private buildGenericPlaceholder(
+    position: number,
+    meta?: { data_type: string; udt_name: string },
+  ): string {
+    if (!meta) return `$${position}`;
+    const type = meta.data_type.toLowerCase();
+    if (type.includes('timestamp')) return `$${position}::timestamp`;
+    if (type === 'date') return `$${position}::date`;
+    if (type === 'time without time zone' || type === 'time with time zone') {
+      return `$${position}::time`;
+    }
+    return `$${position}`;
+  }
+
+  private async getPrimaryKeyColumns(tabla: string): Promise<string[]> {
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ column_name: string }>>(
+      `SELECT kcu.column_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON tc.constraint_name = kcu.constraint_name
+        AND tc.table_schema = kcu.table_schema
+       WHERE tc.table_schema = 'public'
+         AND tc.table_name = $1
+         AND tc.constraint_type = 'PRIMARY KEY'
+       ORDER BY kcu.ordinal_position`,
+      tabla,
+    );
+    return rows.map((r) => r.column_name);
   }
 
   private async importarSqlConflictMode(
@@ -252,61 +617,67 @@ export class DbService {
     let actualizados = 0;
     let omitidos = 0;
 
-    await this.prisma.$transaction(async (tx) => {
-      for (const row of parsedRows) {
-        const now = new Date();
-        if (!('actualizadoEn' in row) && cfg.allowUpdatedAt) {
-          row.actualizadoEn = now.toISOString();
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const row of parsedRows) {
+          const now = new Date();
+          if (!('actualizadoEn' in row) && cfg.allowUpdatedAt) {
+            row.actualizadoEn = now.toISOString();
+          }
+
+          const cols = Object.keys(row);
+          const dbCols = cols.map((c) => cfg.columns[c].db);
+          const values = cols.map((c) => this.toDbValue(row[c], cfg.columns[c].type));
+
+          const placeholders = cols
+            .map((c, idx) => {
+              const cast = (cfg.columns[c] as any).cast as string | undefined;
+              if (cast) return `$${idx + 1}::${cast}`;
+              if (cfg.columns[c].type === 'date') return `$${idx + 1}::timestamp`;
+              return `$${idx + 1}`;
+            })
+            .join(', ');
+          const insertCols = dbCols.map((c) => `"${c}"`).join(', ');
+          const conflictCols = cfg.conflictKeys.map((k) => `"${cfg.columns[k].db}"`).join(', ');
+
+          if (modo === 'missing_only') {
+            const sql = `INSERT INTO "${cfg.table}" (${insertCols}) VALUES (${placeholders}) ON CONFLICT (${conflictCols}) DO NOTHING`;
+            const n = await tx.$executeRawUnsafe(sql, ...values);
+            if (n > 0) insertados += n;
+            else omitidos += 1;
+            continue;
+          }
+
+          const conflictWhere = cfg.conflictKeys
+            .map((k, idx) => `"${cfg.columns[k].db}" = $${idx + 1}`)
+            .join(' AND ');
+          const conflictVals = cfg.conflictKeys.map((k) =>
+            this.toDbValue(row[k], cfg.columns[k].type),
+          );
+          const found = await tx.$queryRawUnsafe<Array<{ one: number }>>(
+            `SELECT 1 as one FROM "${cfg.table}" WHERE ${conflictWhere} LIMIT 1`,
+            ...conflictVals,
+          );
+          const existed = found.length > 0;
+
+          const updatable = dbCols
+            .filter((c) => !cfg.conflictKeys.map((k) => cfg.columns[k].db).includes(c));
+          const setClause = updatable.map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ');
+          const sql =
+            updatable.length === 0
+              ? `INSERT INTO "${cfg.table}" (${insertCols}) VALUES (${placeholders}) ON CONFLICT (${conflictCols}) DO NOTHING`
+              : `INSERT INTO "${cfg.table}" (${insertCols}) VALUES (${placeholders}) ON CONFLICT (${conflictCols}) DO UPDATE SET ${setClause}`;
+
+          await tx.$executeRawUnsafe(sql, ...values);
+          if (existed) actualizados++;
+          else insertados++;
         }
-
-        const cols = Object.keys(row);
-        const dbCols = cols.map((c) => cfg.columns[c].db);
-        const values = cols.map((c) => this.toDbValue(row[c], cfg.columns[c].type));
-
-        const placeholders = cols
-          .map((c, idx) => {
-            const cast = (cfg.columns[c] as any).cast as string | undefined;
-            if (cast) return `$${idx + 1}::${cast}`;
-            if (cfg.columns[c].type === 'date') return `$${idx + 1}::timestamp`;
-            return `$${idx + 1}`;
-          })
-          .join(', ');
-        const insertCols = dbCols.map((c) => `"${c}"`).join(', ');
-        const conflictCols = cfg.conflictKeys.map((k) => `"${cfg.columns[k].db}"`).join(', ');
-
-        if (modo === 'missing_only') {
-          const sql = `INSERT INTO "${cfg.table}" (${insertCols}) VALUES (${placeholders}) ON CONFLICT (${conflictCols}) DO NOTHING`;
-          const n = await tx.$executeRawUnsafe(sql, ...values);
-          if (n > 0) insertados += n;
-          else omitidos += 1;
-          continue;
-        }
-
-        const conflictWhere = cfg.conflictKeys
-          .map((k, idx) => `"${cfg.columns[k].db}" = $${idx + 1}`)
-          .join(' AND ');
-        const conflictVals = cfg.conflictKeys.map((k) =>
-          this.toDbValue(row[k], cfg.columns[k].type),
-        );
-        const found = await tx.$queryRawUnsafe<Array<{ one: number }>>(
-          `SELECT 1 as one FROM "${cfg.table}" WHERE ${conflictWhere} LIMIT 1`,
-          ...conflictVals,
-        );
-        const existed = found.length > 0;
-
-        const updatable = dbCols
-          .filter((c) => !cfg.conflictKeys.map((k) => cfg.columns[k].db).includes(c));
-        const setClause = updatable.map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ');
-        const sql =
-          updatable.length === 0
-            ? `INSERT INTO "${cfg.table}" (${insertCols}) VALUES (${placeholders}) ON CONFLICT (${conflictCols}) DO NOTHING`
-            : `INSERT INTO "${cfg.table}" (${insertCols}) VALUES (${placeholders}) ON CONFLICT (${conflictCols}) DO UPDATE SET ${setClause}`;
-
-        await tx.$executeRawUnsafe(sql, ...values);
-        if (existed) actualizados++;
-        else insertados++;
-      }
-    });
+      });
+    } catch (e: any) {
+      throw new BadRequestException(
+        `Error al importar en ${cfg.table}: ${this.getImportFailureMessage(e)}`,
+      );
+    }
 
     return {
       success: errores.length === 0,
@@ -535,8 +906,25 @@ export class DbService {
     return value;
   }
 
+  private getImportFailureMessage(error: unknown): string {
+    const e = error as { code?: string; message?: string };
+    if (e?.code === 'P2003') {
+      return 'Violación de llave foránea (revisa referencias relacionadas)';
+    }
+    if (e?.code === 'P2002') {
+      return 'Violación de unicidad (registro duplicado)';
+    }
+    if (e?.code === 'P2025') {
+      return 'Registro relacionado no encontrado';
+    }
+    if (typeof e?.message === 'string' && e.message.trim()) {
+      return e.message;
+    }
+    return 'No se pudo completar la importación';
+  }
+
   private async insertarRegistro(
-    tabla: TablaPermitida,
+    tabla: string,
     row: Record<string, any>,
   ): Promise<void> {
     if (tabla === 'productos') {

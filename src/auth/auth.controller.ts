@@ -11,14 +11,20 @@ import {
   HttpStatus,
   UnauthorizedException,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 import { UpdateUsuarioDto } from '../usuarios/dto/update-usuario.dto';
+import { LoginDto } from '../usuarios/dto/login.dto';
+import { VerificarOtpDto } from '../usuarios/dto/verificar-otp.dto';
+import { ReenviarCodigoDto } from '../usuarios/dto/reenviar-codigo.dto';
+import { CambiarPasswordDto } from '../usuarios/dto/cambiar-password.dto';
+import { EnviarCodigoRecuperacionSmsDto } from '../usuarios/dto/enviar-codigo-recuperacion-sms.dto';
+import { VerificarCodigoRecuperacionSmsDto } from '../usuarios/dto/verificar-codigo-recuperacion-sms.dto';
 import { sanitizeForLogOutput } from '../common/utils/security.util';
 
 @Controller('auth')
@@ -137,6 +143,81 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async patchMe(@CurrentUser() user: any, @Body() dto: UpdateUsuarioDto) {
     return this.authService.updateProfileMe(user.id, dto);
+  }
+
+  // ===== SESIÓN =====
+
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  async login(@Body() loginDto: LoginDto) {
+    return this.authService.login(loginDto);
+  }
+
+  // ===== VERIFICACIÓN DE CUENTA =====
+
+  @Post('verificar-otp')
+  @HttpCode(HttpStatus.OK)
+  async verificarOTP(@Body() verificarOtpDto: VerificarOtpDto) {
+    return this.authService.verificarOTP(verificarOtpDto);
+  }
+
+  @Post('reenviar-codigo')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000))
+  async reenviarCodigo(@Body() reenviarCodigoDto: ReenviarCodigoDto) {
+    return this.authService.reenviarCodigo(reenviarCodigoDto);
+  }
+
+  // ===== RECUPERACIÓN DE CONTRASEÑA =====
+
+  @Post('pregunta-seguridad')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000))
+  async obtenerPreguntaSeguridad(@Body() body: { email: string }) {
+    return this.authService.obtenerPreguntaSeguridad(body.email);
+  }
+
+  @Post('verificar-respuesta')
+  @HttpCode(HttpStatus.OK)
+  async verificarRespuesta(@Body() body: { email: string; respuesta: string }) {
+    return this.authService.verificarRespuestaSeguridad(body.email, body.respuesta);
+  }
+
+  @Post('solicitar-enlace-recuperacion')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000))
+  async solicitarEnlaceRecuperacion(@Body() body: { email: string }) {
+    return this.authService.solicitarEnlaceRecuperacion(body.email);
+  }
+
+  @Post('enviar-codigo-recuperacion-sms')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000))
+  async enviarCodigoRecuperacionSMS(@Body() body: EnviarCodigoRecuperacionSmsDto) {
+    return this.authService.enviarCodigoRecuperacionSMS(body.phone);
+  }
+
+  @Post('verificar-codigo-recuperacion-sms')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(5, 60000))
+  async verificarCodigoRecuperacionSMS(@Body() body: VerificarCodigoRecuperacionSmsDto) {
+    return this.authService.verificarCodigoRecuperacionSMS(body.phone, body.codigo);
+  }
+
+  @Post('validar-token-recuperacion')
+  @HttpCode(HttpStatus.OK)
+  async validarTokenRecuperacion(@Body() body: { email: string; token: string }) {
+    return this.authService.validarTokenRecuperacion(body.email, body.token);
+  }
+
+  @Post('cambiar-password')
+  @HttpCode(HttpStatus.OK)
+  async cambiarPassword(@Body() cambiarPasswordDto: CambiarPasswordDto) {
+    return this.authService.cambiarPassword(
+      cambiarPasswordDto.email,
+      cambiarPasswordDto.token,
+      cambiarPasswordDto.nuevaPassword,
+    );
   }
 
   /**
