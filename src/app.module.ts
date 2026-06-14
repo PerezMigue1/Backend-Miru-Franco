@@ -14,6 +14,13 @@ import { DbModule } from './db/db.module';
 import { EcommerceModule } from './ecommerce/ecommerce.module';
 import { PaymentsModule } from './payments/payments.module';
 import { InventarioModule } from './inventario/inventario.module';
+import { EmpleadosModule } from './empleados/empleados.module';
+import { PermisosModule } from './permisos/permisos.module';
+import { ClientesModule } from './clientes/clientes.module';
+import { QuejasModule } from './quejas/quejas.module';
+import { SeguimientosModule } from './seguimientos/seguimientos.module';
+import { CitasModule } from './citas/citas.module';
+import { PosModule } from './pos/pos.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -41,6 +48,13 @@ import { AppController } from './app.controller';
     EcommerceModule,
     PaymentsModule,
     InventarioModule,
+    EmpleadosModule,
+    PermisosModule,
+    ClientesModule,
+    QuejasModule,
+    SeguimientosModule,
+    CitasModule,
+    PosModule,
   ],
   controllers: [AppController],
 })

@@ -1,7 +1,14 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ListMovimientosDto } from './dto/list-movimientos.dto';
+import { AlertasStockDto } from './dto/alertas-stock.dto';
+import { CaducidadesDto } from './dto/caducidades.dto';
+import { ConteoFisicoDto } from './dto/conteo-fisico.dto';
+import { CreateAjusteDto } from './dto/create-ajuste.dto';
+import { CreateEntradaDto } from './dto/create-entrada.dto';
+import { CreateSalidaDto } from './dto/create-salida.dto';
+import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
 
 type MovimientoRow = {
   id: number;
@@ -131,6 +138,288 @@ export class InventarioService {
         tamanio: r.tamanio,
         usuarioId: r.usuario_id,
         usuarioNombre: r.usuario_nombre,
+      })),
+    };
+  }
+
+  async registrarEntrada(dto: CreateEntradaDto, usuarioId?: string) {
+    const motivoLimpio = dto.motivo ? sanitizeInput(dto.motivo) : undefined;
+    if (motivoLimpio && containsSQLInjection(motivoLimpio)) {
+      throw new BadRequestException('Motivo contiene caracteres no permitidos');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const presentacion = await tx.productoPresentacion.findUnique({
+        where: { id: dto.presentacionId },
+        select: { id: true, stock: true },
+      });
+      if (!presentacion) {
+        throw new NotFoundException(`Presentación ${dto.presentacionId} no encontrada`);
+      }
+
+      const stockAntes = presentacion.stock;
+      const stockDespues = stockAntes + dto.cantidad;
+
+      await tx.productoPresentacion.update({
+        where: { id: dto.presentacionId },
+        data: { stock: stockDespues },
+      });
+
+      const movimiento = await tx.inventarioMovimiento.create({
+        data: {
+          tipo: 'entrada',
+          motivo: motivoLimpio ?? null,
+          cantidad: dto.cantidad,
+          stockAntes,
+          stockDespues,
+          referenciaTipo: dto.referenciaTipo ?? null,
+          referenciaId: dto.referenciaId ?? null,
+          presentacionId: dto.presentacionId,
+          usuarioId: usuarioId ?? null,
+        },
+      });
+
+      return { success: true, data: { movimientoId: movimiento.id, stockAntes, stockDespues } };
+    });
+  }
+
+  async registrarSalida(dto: CreateSalidaDto, usuarioId?: string) {
+    const motivoLimpio = dto.motivo ? sanitizeInput(dto.motivo) : undefined;
+    if (motivoLimpio && containsSQLInjection(motivoLimpio)) {
+      throw new BadRequestException('Motivo contiene caracteres no permitidos');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const presentacion = await tx.productoPresentacion.findUnique({
+        where: { id: dto.presentacionId },
+        select: { id: true, stock: true },
+      });
+      if (!presentacion) {
+        throw new NotFoundException(`Presentación ${dto.presentacionId} no encontrada`);
+      }
+      if (dto.cantidad > presentacion.stock) {
+        throw new BadRequestException(
+          `Stock insuficiente. Disponible: ${presentacion.stock}, solicitado: ${dto.cantidad}`,
+        );
+      }
+
+      const stockAntes = presentacion.stock;
+      const stockDespues = stockAntes - dto.cantidad;
+
+      await tx.productoPresentacion.update({
+        where: { id: dto.presentacionId },
+        data: { stock: stockDespues },
+      });
+
+      const movimiento = await tx.inventarioMovimiento.create({
+        data: {
+          tipo: 'salida',
+          motivo: motivoLimpio ?? null,
+          cantidad: dto.cantidad,
+          stockAntes,
+          stockDespues,
+          referenciaTipo: dto.referenciaTipo ?? null,
+          referenciaId: dto.referenciaId ?? null,
+          presentacionId: dto.presentacionId,
+          usuarioId: usuarioId ?? null,
+        },
+      });
+
+      return { success: true, data: { movimientoId: movimiento.id, stockAntes, stockDespues } };
+    });
+  }
+
+  async registrarAjuste(dto: CreateAjusteDto, usuarioId?: string) {
+    const motivoLimpio = sanitizeInput(dto.motivo);
+    if (containsSQLInjection(motivoLimpio)) {
+      throw new BadRequestException('Motivo contiene caracteres no permitidos');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const presentacion = await tx.productoPresentacion.findUnique({
+        where: { id: dto.presentacionId },
+        select: { id: true, stock: true },
+      });
+      if (!presentacion) {
+        throw new NotFoundException(`Presentación ${dto.presentacionId} no encontrada`);
+      }
+
+      const stockAntes = presentacion.stock;
+      const cantidad = Math.abs(dto.stockReal - stockAntes);
+
+      await tx.productoPresentacion.update({
+        where: { id: dto.presentacionId },
+        data: { stock: dto.stockReal },
+      });
+
+      const movimiento = await tx.inventarioMovimiento.create({
+        data: {
+          tipo: 'ajuste',
+          motivo: motivoLimpio,
+          cantidad,
+          stockAntes,
+          stockDespues: dto.stockReal,
+          referenciaTipo: dto.referenciaTipo ?? null,
+          referenciaId: dto.referenciaId ?? null,
+          presentacionId: dto.presentacionId,
+          usuarioId: usuarioId ?? null,
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          movimientoId: movimiento.id,
+          stockAntes,
+          stockDespues: dto.stockReal,
+          diferencia: dto.stockReal - stockAntes,
+        },
+      };
+    });
+  }
+
+  async conteoFisico(dto: ConteoFisicoDto, usuarioId?: string) {
+    const motivoLimpio = dto.motivo ? sanitizeInput(dto.motivo) : 'Conteo físico';
+
+    return this.prisma.$transaction(async (tx) => {
+      const resultados: Array<{
+        presentacionId: number;
+        stockAntes: number;
+        stockDespues: number;
+        movimientoId: number;
+      }> = [];
+
+      for (const item of dto.items) {
+        const presentacion = await tx.productoPresentacion.findUnique({
+          where: { id: item.presentacionId },
+          select: { id: true, stock: true },
+        });
+        if (!presentacion) {
+          throw new NotFoundException(`Presentación ${item.presentacionId} no encontrada`);
+        }
+
+        const stockAntes = presentacion.stock;
+        const cantidad = Math.abs(item.stockReal - stockAntes);
+
+        await tx.productoPresentacion.update({
+          where: { id: item.presentacionId },
+          data: { stock: item.stockReal },
+        });
+
+        const movimiento = await tx.inventarioMovimiento.create({
+          data: {
+            tipo: 'ajuste',
+            motivo: motivoLimpio,
+            cantidad,
+            stockAntes,
+            stockDespues: item.stockReal,
+            presentacionId: item.presentacionId,
+            usuarioId: usuarioId ?? null,
+          },
+        });
+
+        resultados.push({
+          presentacionId: item.presentacionId,
+          stockAntes,
+          stockDespues: item.stockReal,
+          movimientoId: movimiento.id,
+        });
+      }
+
+      return { success: true, count: resultados.length, data: resultados };
+    });
+  }
+
+  async kardex(presentacionId: number) {
+    const presentacion = await this.prisma.productoPresentacion.findUnique({
+      where: { id: presentacionId },
+      select: {
+        id: true,
+        tamanio: true,
+        stock: true,
+        producto: { select: { id: true, nombre: true, marca: true } },
+      },
+    });
+    if (!presentacion) {
+      throw new NotFoundException(`Presentación ${presentacionId} no encontrada`);
+    }
+
+    const movimientos = await this.prisma.inventarioMovimiento.findMany({
+      where: { presentacionId },
+      orderBy: [{ creadoEn: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        tipo: true,
+        cantidad: true,
+        stockAntes: true,
+        stockDespues: true,
+        motivo: true,
+        referenciaTipo: true,
+        referenciaId: true,
+        creadoEn: true,
+        usuario: { select: { id: true, nombre: true } },
+      },
+    });
+
+    return {
+      success: true,
+      presentacion: {
+        id: presentacion.id,
+        tamanio: presentacion.tamanio,
+        stockActual: presentacion.stock,
+        producto: presentacion.producto,
+      },
+      count: movimientos.length,
+      data: movimientos,
+    };
+  }
+
+  async alertasStock(query: AlertasStockDto) {
+    const umbral = query.umbral ?? 5;
+
+    const presentaciones = await this.prisma.productoPresentacion.findMany({
+      where: { stock: { lte: umbral } },
+      orderBy: { stock: 'asc' },
+      select: {
+        id: true,
+        tamanio: true,
+        stock: true,
+        disponible: true,
+        producto: { select: { id: true, nombre: true, marca: true, categoria: true } },
+      },
+    });
+
+    return { success: true, umbral, count: presentaciones.length, data: presentaciones };
+  }
+
+  async caducidades(query: CaducidadesDto) {
+    const dias = query.dias ?? 30;
+    const ahora = new Date();
+    const limite = new Date(ahora.getTime() + dias * 24 * 60 * 60 * 1000);
+
+    const presentaciones = await this.prisma.productoPresentacion.findMany({
+      where: { fechaCaducidad: { lte: limite } },
+      orderBy: { fechaCaducidad: 'asc' },
+      select: {
+        id: true,
+        tamanio: true,
+        stock: true,
+        fechaCaducidad: true,
+        producto: { select: { id: true, nombre: true, marca: true, categoria: true } },
+      },
+    });
+
+    const ahora2 = new Date();
+    return {
+      success: true,
+      dias,
+      count: presentaciones.length,
+      data: presentaciones.map((p) => ({
+        ...p,
+        vencida: p.fechaCaducidad! < ahora2,
+        diasRestantes: Math.ceil(
+          (p.fechaCaducidad!.getTime() - ahora2.getTime()) / (1000 * 60 * 60 * 24),
+        ),
       })),
     };
   }

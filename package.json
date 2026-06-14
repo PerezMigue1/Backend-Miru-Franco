@@ -21,6 +21,9 @@
     "postinstall": "prisma generate",
     "migrate:data": "ts-node scripts/migrate-mongodb-to-postgresql.ts"
   },
+  "prisma": {
+    "seed": "ts-node -r tsconfig-paths/register prisma/seed.ts"
+  },
   "keywords": [
     "nestjs",
     "typescript",

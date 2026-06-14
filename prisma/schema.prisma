@@ -108,6 +108,14 @@ model Usuario {
   // Metodos tokenizados guardados (perfil + checkout). No guardar PAN completo ni CVV.
   metodosPagoGuardados       MetodoPagoUsuario[]
   movimientosInventario      InventarioMovimiento[]
+  perfilEmpleado             PerfilEmpleado?
+  quejas                     Queja[]
+  seguimientos               SeguimientoPostServicio[]
+  citasComoCliente           Cita[]  @relation("CitasComoCliente")
+  citasComoEspecialista      Cita[]  @relation("CitasComoEspecialista")
+  ventasComoCajero           VentaLocal[] @relation("VentasComoCajero")
+  ventasComoCliente          VentaLocal[] @relation("VentasComoCliente")
+  cortesCaja                 CorteCaja[]  @relation("CortesComoCajero")
 
   @@index([activo])
   @@index([email])
@@ -465,6 +473,7 @@ model ProductoPresentacion {
   pedidoItems    PedidoItem[]
   carritoItems   CarritoItem[]
   movimientosInventario InventarioMovimiento[]
+  ventasLocalItems      VentaLocalItem[]
 
   @@map("producto_presentaciones")
   @@index([productoId])
@@ -512,6 +521,7 @@ model Servicio {
 
   productosAsociados  ServicioProducto[]
   especialistas       ServicioEspecialista[]
+  citas               Cita[]
 
   @@index([categoria])
   @@index([activo])
@@ -549,6 +559,31 @@ model ServicioEspecialista {
   @@index([usuarioId])
 }
 
+model PerfilEmpleado {
+  id                 Int       @id @default(autoincrement())
+  puesto             String
+  especialidades     String[]  @default([])
+  telefono           String?
+  fechaIngreso       DateTime? @map("fecha_ingreso")
+  comisionPorcentaje Decimal?  @map("comision_porcentaje") @db.Decimal(5, 2)
+  activo             Boolean   @default(true)
+  creadoEn           DateTime  @default(now()) @map("creado_en")
+  actualizadoEn      DateTime  @updatedAt @map("actualizado_en")
+
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @unique @map("usuario_id")
+
+  @@map("perfiles_empleado")
+}
+
+model PermisoRol {
+  id     Int      @id @default(autoincrement())
+  rol    String   @unique
+  claves String[]
+
+  @@map("permisos_rol")
+}
+
 // Paquetes promocionales (tabla existente en BD)
 model Paquete {
   id                   Int      @id @default(autoincrement())
@@ -558,4 +593,171 @@ model Paquete {
   precio_especial      Decimal  @db.Decimal(10, 2)
 
   @@map("paquetes")
+}
+
+// ─── Módulo 3: Clientes / Quejas / Seguimientos ───────────────────────────────
+
+enum EstadoQueja {
+  abierta
+  en_proceso
+  resuelta
+  cerrada
+}
+
+model Queja {
+  id            Int         @id @default(autoincrement())
+  asunto        String
+  descripcion   String      @db.Text
+  estado        EstadoQueja @default(abierta)
+  creadoEn      DateTime    @default(now()) @map("creado_en")
+  resueltaEn    DateTime?   @map("resuelta_en")
+  actualizadoEn DateTime    @updatedAt @map("actualizado_en")
+
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @map("usuario_id")
+
+  @@index([usuarioId])
+  @@index([estado])
+  @@map("quejas")
+}
+
+model SeguimientoPostServicio {
+  id             Int      @id @default(autoincrement())
+  notas          String   @db.Text
+  fechaContacto  DateTime @map("fecha_contacto")
+  satisfaccion   Int?
+  requiereAccion Boolean  @default(false) @map("requiere_accion")
+  citaId         Int?     @map("cita_id")
+  cita           Cita?    @relation(fields: [citaId], references: [id], onDelete: SetNull)
+  creadoEn       DateTime @default(now()) @map("creado_en")
+  actualizadoEn  DateTime @updatedAt @map("actualizado_en")
+
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @map("usuario_id")
+
+  @@index([usuarioId])
+  @@map("seguimientos_post_servicio")
+}
+
+// ─── Módulo 4: Citas ──────────────────────────────────────────────────────────
+
+enum EstadoCita {
+  pendiente
+  confirmada
+  en_curso
+  completada
+  cancelada
+  reprogramada
+  no_asistio
+}
+
+model Cita {
+  id                Int        @id @default(autoincrement())
+  fechaHoraInicio   DateTime   @map("fecha_hora_inicio")
+  fechaHoraFin      DateTime   @map("fecha_hora_fin")
+  estado            EstadoCita @default(pendiente)
+  notas             String?    @db.Text
+  motivoCancelacion String?    @map("motivo_cancelacion") @db.Text
+  creadoEn          DateTime   @default(now()) @map("creado_en")
+  actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
+
+  cliente        Usuario  @relation("CitasComoCliente",      fields: [clienteId],      references: [id], onDelete: Restrict)
+  clienteId      String   @map("cliente_id")
+  especialista   Usuario  @relation("CitasComoEspecialista", fields: [especialistaId], references: [id], onDelete: Restrict)
+  especialistaId String   @map("especialista_id")
+  servicio       Servicio @relation(fields: [servicioId], references: [id], onDelete: Restrict)
+  servicioId     Int      @map("servicio_id")
+
+  seguimientos SeguimientoPostServicio[]
+
+  @@index([clienteId])
+  @@index([especialistaId])
+  @@index([fechaHoraInicio])
+  @@index([estado])
+  @@map("citas")
+}
+
+// ─── Módulo 5: POS / Ventas Local ────────────────────────────────────────────
+
+enum EstadoVentaLocal {
+  pendiente
+  pagada
+  cancelada
+}
+
+enum MetodoPagoLocal {
+  efectivo
+  tarjeta
+  transferencia
+  mixto
+}
+
+model VentaLocal {
+  id                Int              @id @default(autoincrement())
+  folio             String           @unique
+  estado            EstadoVentaLocal @default(pendiente)
+  metodoPago        MetodoPagoLocal  @map("metodo_pago")
+  subtotal          Decimal          @db.Decimal(10, 2)
+  descuento         Decimal          @default(0) @db.Decimal(10, 2)
+  total             Decimal          @db.Decimal(10, 2)
+  notas             String?          @db.Text
+  motivoCancelacion String?          @map("motivo_cancelacion") @db.Text
+  creadoEn          DateTime         @default(now()) @map("creado_en")
+  actualizadoEn     DateTime         @updatedAt @map("actualizado_en")
+
+  cajero   Usuario @relation("VentasComoCajero", fields: [cajeroId], references: [id], onDelete: Restrict)
+  cajeroId String  @map("cajero_id")
+
+  cliente   Usuario? @relation("VentasComoCliente", fields: [clienteId], references: [id], onDelete: SetNull)
+  clienteId String?  @map("cliente_id")
+
+  corte   CorteCaja? @relation(fields: [corteId], references: [id], onDelete: SetNull)
+  corteId Int?       @map("corte_id")
+
+  items VentaLocalItem[]
+
+  @@index([cajeroId])
+  @@index([clienteId])
+  @@index([estado])
+  @@index([creadoEn])
+  @@map("ventas_local")
+}
+
+model VentaLocalItem {
+  id             Int     @id @default(autoincrement())
+  cantidad       Int
+  precioUnitario Decimal @map("precio_unitario") @db.Decimal(10, 2)
+  subtotal       Decimal @db.Decimal(10, 2)
+
+  venta          VentaLocal          @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  ventaId        Int                 @map("venta_id")
+  presentacion   ProductoPresentacion @relation(fields: [presentacionId], references: [id], onDelete: Restrict)
+  presentacionId Int                 @map("presentacion_id")
+
+  @@index([ventaId])
+  @@map("ventas_local_items")
+}
+
+model CorteCaja {
+  id                 Int      @id @default(autoincrement())
+  fecha              DateTime
+  efectivoInicial    Decimal  @map("efectivo_inicial") @db.Decimal(10, 2)
+  efectivoFinal      Decimal  @map("efectivo_final") @db.Decimal(10, 2)
+  totalVentas        Decimal  @map("total_ventas") @db.Decimal(10, 2)
+  totalEfectivo      Decimal  @map("total_efectivo") @db.Decimal(10, 2)
+  totalTarjeta       Decimal  @map("total_tarjeta") @db.Decimal(10, 2)
+  totalTransferencia Decimal  @map("total_transferencia") @db.Decimal(10, 2)
+  diferencia         Decimal  @db.Decimal(10, 2)
+  notas              String?  @db.Text
+  creadoEn           DateTime @default(now()) @map("creado_en")
+  actualizadoEn      DateTime @updatedAt @map("actualizado_en")
+
+  cajero   Usuario @relation("CortesComoCajero", fields: [cajeroId], references: [id], onDelete: Restrict)
+  cajeroId String  @map("cajero_id")
+
+  ventas VentaLocal[]
+
+  @@index([cajeroId])
+  @@index([fecha])
+  @@map("cortes_caja")
 }

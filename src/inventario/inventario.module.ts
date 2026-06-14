@@ -7,5 +7,6 @@ import { InventarioService } from './inventario.service';
   imports: [PrismaModule],
   controllers: [InventarioController],
   providers: [InventarioService],
+  exports: [InventarioService],
 })
 export class InventarioModule {}
