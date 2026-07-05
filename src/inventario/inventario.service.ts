@@ -142,91 +142,125 @@ export class InventarioService {
     };
   }
 
-  async registrarEntrada(dto: CreateEntradaDto, usuarioId?: string) {
+  /**
+   * Registra una entrada de stock. Si se pasa `tx`, se ejecuta dentro de esa
+   * transacción (para operaciones compuestas como cancelar venta); si no, abre una propia.
+   */
+  async registrarEntrada(
+    dto: CreateEntradaDto,
+    usuarioId?: string,
+    tx?: Prisma.TransactionClient,
+  ) {
     const motivoLimpio = dto.motivo ? sanitizeInput(dto.motivo) : undefined;
     if (motivoLimpio && containsSQLInjection(motivoLimpio)) {
       throw new BadRequestException('Motivo contiene caracteres no permitidos');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const presentacion = await tx.productoPresentacion.findUnique({
-        where: { id: dto.presentacionId },
-        select: { id: true, stock: true },
-      });
-      if (!presentacion) {
-        throw new NotFoundException(`Presentación ${dto.presentacionId} no encontrada`);
-      }
-
-      const stockAntes = presentacion.stock;
-      const stockDespues = stockAntes + dto.cantidad;
-
-      await tx.productoPresentacion.update({
-        where: { id: dto.presentacionId },
-        data: { stock: stockDespues },
-      });
-
-      const movimiento = await tx.inventarioMovimiento.create({
-        data: {
-          tipo: 'entrada',
-          motivo: motivoLimpio ?? null,
-          cantidad: dto.cantidad,
-          stockAntes,
-          stockDespues,
-          referenciaTipo: dto.referenciaTipo ?? null,
-          referenciaId: dto.referenciaId ?? null,
-          presentacionId: dto.presentacionId,
-          usuarioId: usuarioId ?? null,
-        },
-      });
-
-      return { success: true, data: { movimientoId: movimiento.id, stockAntes, stockDespues } };
-    });
+    if (tx) return this.aplicarEntrada(tx, dto, usuarioId, motivoLimpio);
+    return this.prisma.$transaction((t) => this.aplicarEntrada(t, dto, usuarioId, motivoLimpio));
   }
 
-  async registrarSalida(dto: CreateSalidaDto, usuarioId?: string) {
+  private async aplicarEntrada(
+    tx: Prisma.TransactionClient,
+    dto: CreateEntradaDto,
+    usuarioId: string | undefined,
+    motivoLimpio: string | undefined,
+  ) {
+    const presentacion = await tx.productoPresentacion.findUnique({
+      where: { id: dto.presentacionId },
+      select: { id: true, stock: true },
+    });
+    if (!presentacion) {
+      throw new NotFoundException(`Presentación ${dto.presentacionId} no encontrada`);
+    }
+
+    const stockAntes = presentacion.stock;
+    const stockDespues = stockAntes + dto.cantidad;
+
+    await tx.productoPresentacion.update({
+      where: { id: dto.presentacionId },
+      data: { stock: { increment: dto.cantidad } },
+    });
+
+    const movimiento = await tx.inventarioMovimiento.create({
+      data: {
+        tipo: 'entrada',
+        motivo: motivoLimpio ?? null,
+        cantidad: dto.cantidad,
+        stockAntes,
+        stockDespues,
+        referenciaTipo: dto.referenciaTipo ?? null,
+        referenciaId: dto.referenciaId ?? null,
+        presentacionId: dto.presentacionId,
+        usuarioId: usuarioId ?? null,
+      },
+    });
+
+    return { success: true, data: { movimientoId: movimiento.id, stockAntes, stockDespues } };
+  }
+
+  /**
+   * Registra una salida de stock. Si se pasa `tx`, se ejecuta dentro de esa
+   * transacción (para descontar inventario junto con la venta POS / materiales de cita).
+   */
+  async registrarSalida(
+    dto: CreateSalidaDto,
+    usuarioId?: string,
+    tx?: Prisma.TransactionClient,
+  ) {
     const motivoLimpio = dto.motivo ? sanitizeInput(dto.motivo) : undefined;
     if (motivoLimpio && containsSQLInjection(motivoLimpio)) {
       throw new BadRequestException('Motivo contiene caracteres no permitidos');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const presentacion = await tx.productoPresentacion.findUnique({
-        where: { id: dto.presentacionId },
-        select: { id: true, stock: true },
-      });
-      if (!presentacion) {
-        throw new NotFoundException(`Presentación ${dto.presentacionId} no encontrada`);
-      }
-      if (dto.cantidad > presentacion.stock) {
-        throw new BadRequestException(
-          `Stock insuficiente. Disponible: ${presentacion.stock}, solicitado: ${dto.cantidad}`,
-        );
-      }
+    if (tx) return this.aplicarSalida(tx, dto, usuarioId, motivoLimpio);
+    return this.prisma.$transaction((t) => this.aplicarSalida(t, dto, usuarioId, motivoLimpio));
+  }
 
-      const stockAntes = presentacion.stock;
-      const stockDespues = stockAntes - dto.cantidad;
-
-      await tx.productoPresentacion.update({
-        where: { id: dto.presentacionId },
-        data: { stock: stockDespues },
-      });
-
-      const movimiento = await tx.inventarioMovimiento.create({
-        data: {
-          tipo: 'salida',
-          motivo: motivoLimpio ?? null,
-          cantidad: dto.cantidad,
-          stockAntes,
-          stockDespues,
-          referenciaTipo: dto.referenciaTipo ?? null,
-          referenciaId: dto.referenciaId ?? null,
-          presentacionId: dto.presentacionId,
-          usuarioId: usuarioId ?? null,
-        },
-      });
-
-      return { success: true, data: { movimientoId: movimiento.id, stockAntes, stockDespues } };
+  private async aplicarSalida(
+    tx: Prisma.TransactionClient,
+    dto: CreateSalidaDto,
+    usuarioId: string | undefined,
+    motivoLimpio: string | undefined,
+  ) {
+    const presentacion = await tx.productoPresentacion.findUnique({
+      where: { id: dto.presentacionId },
+      select: { id: true, stock: true },
     });
+    if (!presentacion) {
+      throw new NotFoundException(`Presentación ${dto.presentacionId} no encontrada`);
+    }
+
+    const stockAntes = presentacion.stock;
+    const stockDespues = stockAntes - dto.cantidad;
+
+    // Decremento atómico guardado: sólo descuenta si aún hay stock suficiente.
+    // Previene sobreventa por concurrencia (dos salidas simultáneas de la misma presentación).
+    const res = await tx.productoPresentacion.updateMany({
+      where: { id: dto.presentacionId, stock: { gte: dto.cantidad } },
+      data: { stock: { decrement: dto.cantidad } },
+    });
+    if (res.count === 0) {
+      throw new BadRequestException(
+        `Stock insuficiente. Disponible: ${presentacion.stock}, solicitado: ${dto.cantidad}`,
+      );
+    }
+
+    const movimiento = await tx.inventarioMovimiento.create({
+      data: {
+        tipo: 'salida',
+        motivo: motivoLimpio ?? null,
+        cantidad: dto.cantidad,
+        stockAntes,
+        stockDespues,
+        referenciaTipo: dto.referenciaTipo ?? null,
+        referenciaId: dto.referenciaId ?? null,
+        presentacionId: dto.presentacionId,
+        usuarioId: usuarioId ?? null,
+      },
+    });
+
+    return { success: true, data: { movimientoId: movimiento.id, stockAntes, stockDespues } };
   }
 
   async registrarAjuste(dto: CreateAjusteDto, usuarioId?: string) {

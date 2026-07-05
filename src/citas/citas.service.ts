@@ -341,20 +341,26 @@ export class CitasService {
       );
     }
 
-    const resultados = [];
-    for (const material of dto.materiales) {
-      const res = await this.inventarioService.registrarSalida(
-        {
-          presentacionId: material.presentacionId,
-          cantidad:       material.cantidad,
-          motivo:         'uso en cita',
-          referenciaTipo: 'cita',
-          referenciaId:   cita.id.toString(),
-        },
-        usuarioId,
-      );
-      resultados.push(res.data);
-    }
+    // Todas las salidas en una sola transacción: si una falla (stock insuficiente),
+    // no queda inventario parcialmente descontado.
+    const resultados = await this.prisma.$transaction(async (tx) => {
+      const acc = [];
+      for (const material of dto.materiales) {
+        const res = await this.inventarioService.registrarSalida(
+          {
+            presentacionId: material.presentacionId,
+            cantidad:       material.cantidad,
+            motivo:         'uso en cita',
+            referenciaTipo: 'cita',
+            referenciaId:   cita.id.toString(),
+          },
+          usuarioId,
+          tx,
+        );
+        acc.push(res.data);
+      }
+      return acc;
+    });
 
     return { success: true, count: resultados.length, data: resultados };
   }

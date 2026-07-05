@@ -34,6 +34,9 @@ export class PosService {
               producto: { select: { id: true, nombre: true, marca: true } },
             },
           },
+          servicio: {
+            select: { id: true, nombre: true, precio: true, duracionMinutos: true },
+          },
         },
       },
     } as const;
@@ -92,38 +95,66 @@ export class PosService {
   }
 
   async crearVenta(dto: CreateVentaDto, cajeroId: string) {
-    // 1. Validar cada presentación y calcular precios
+    // 1. Validar cada ítem (producto O servicio) y calcular precios
     const itemsValidados: Array<{
-      presentacionId: number;
+      presentacionId: number | null;
+      servicioId: number | null;
       cantidad: number;
       precioUnitario: Decimal;
       subtotal: Decimal;
-      stock: number;
     }> = [];
 
     for (const item of dto.items) {
-      const presentacion = await this.prisma.productoPresentacion.findUnique({
-        where: { id: item.presentacionId },
-        select: { id: true, precio: true, stock: true, disponible: true },
-      });
-      if (!presentacion || !presentacion.disponible) {
-        throw new NotFoundException(`Presentación ${item.presentacionId} no encontrada o no disponible`);
-      }
-      if (presentacion.stock < item.cantidad) {
+      const tienePresentacion = item.presentacionId !== undefined && item.presentacionId !== null;
+      const tieneServicio     = item.servicioId !== undefined && item.servicioId !== null;
+      if (tienePresentacion === tieneServicio) {
         throw new BadRequestException(
-          `Stock insuficiente para presentación ${item.presentacionId}: disponible ${presentacion.stock}, solicitado ${item.cantidad}`,
+          'Cada ítem debe tener exactamente uno: presentacionId (producto) o servicioId (servicio)',
         );
       }
-      const precioUnitario = item.precioUnitario !== undefined
-        ? new Decimal(item.precioUnitario)
-        : presentacion.precio;
-      itemsValidados.push({
-        presentacionId: item.presentacionId,
-        cantidad:       item.cantidad,
-        precioUnitario,
-        subtotal:       precioUnitario.mul(item.cantidad),
-        stock:          presentacion.stock,
-      });
+
+      if (tienePresentacion) {
+        const presentacion = await this.prisma.productoPresentacion.findUnique({
+          where: { id: item.presentacionId },
+          select: { id: true, precio: true, stock: true, disponible: true },
+        });
+        if (!presentacion || !presentacion.disponible) {
+          throw new NotFoundException(`Presentación ${item.presentacionId} no encontrada o no disponible`);
+        }
+        if (presentacion.stock < item.cantidad) {
+          throw new BadRequestException(
+            `Stock insuficiente para presentación ${item.presentacionId}: disponible ${presentacion.stock}, solicitado ${item.cantidad}`,
+          );
+        }
+        const precioUnitario = item.precioUnitario !== undefined
+          ? new Decimal(item.precioUnitario)
+          : presentacion.precio;
+        itemsValidados.push({
+          presentacionId: item.presentacionId!,
+          servicioId:     null,
+          cantidad:       item.cantidad,
+          precioUnitario,
+          subtotal:       precioUnitario.mul(item.cantidad),
+        });
+      } else {
+        const servicio = await this.prisma.servicio.findUnique({
+          where: { id: item.servicioId },
+          select: { id: true, precio: true, activo: true },
+        });
+        if (!servicio || !servicio.activo) {
+          throw new NotFoundException(`Servicio ${item.servicioId} no encontrado o inactivo`);
+        }
+        const precioUnitario = item.precioUnitario !== undefined
+          ? new Decimal(item.precioUnitario)
+          : servicio.precio;
+        itemsValidados.push({
+          presentacionId: null,
+          servicioId:     item.servicioId!,
+          cantidad:       item.cantidad,
+          precioUnitario,
+          subtotal:       precioUnitario.mul(item.cantidad),
+        });
+      }
     }
 
     // 2. Calcular totales
@@ -136,7 +167,8 @@ export class PosService {
       throw new BadRequestException('Las notas contienen caracteres no permitidos');
     }
 
-    // 3. Crear venta + items en transacción, luego actualizar folio
+    // 3. Crear venta + items + descuento de inventario, TODO en una transacción.
+    //    Si alguna salida falla (stock insuficiente por concurrencia), se revierte la venta completa.
     const venta = await this.prisma.$transaction(async (tx) => {
       const nueva = await tx.ventaLocal.create({
         data: {
@@ -152,36 +184,40 @@ export class PosService {
           items: {
             create: itemsValidados.map((i) => ({
               presentacionId: i.presentacionId,
+              servicioId:     i.servicioId,
               cantidad:       i.cantidad,
               precioUnitario: i.precioUnitario,
               subtotal:       i.subtotal,
             })),
           },
         },
-        include: this.incluirVentaRelaciones(),
       });
 
       const folio = this.generarFolio(nueva.id);
+
+      // Descontar inventario dentro de la misma transacción (atómico con la venta).
+      // Solo los ítems de producto (presentacionId) mueven inventario; los servicios no.
+      for (const item of itemsValidados) {
+        if (item.presentacionId == null) continue;
+        await this.inventarioService.registrarSalida(
+          {
+            presentacionId: item.presentacionId,
+            cantidad:       item.cantidad,
+            motivo:         'venta en mostrador',
+            referenciaTipo: 'venta_local',
+            referenciaId:   nueva.id.toString(),
+          },
+          cajeroId,
+          tx,
+        );
+      }
+
       return tx.ventaLocal.update({
         where: { id: nueva.id },
         data: { folio },
         include: this.incluirVentaRelaciones(),
       });
     });
-
-    // 4. Registrar salidas de inventario (post-transaction; stock pre-validado)
-    for (const item of itemsValidados) {
-      await this.inventarioService.registrarSalida(
-        {
-          presentacionId: item.presentacionId,
-          cantidad:       item.cantidad,
-          motivo:         'venta en mostrador',
-          referenciaTipo: 'venta_local',
-          referenciaId:   venta.id.toString(),
-        },
-        cajeroId,
-      );
-    }
 
     return { success: true, data: venta };
   }
@@ -201,29 +237,35 @@ export class PosService {
       throw new BadRequestException('El motivo contiene caracteres no permitidos');
     }
 
-    await this.prisma.ventaLocal.update({
-      where: { id },
-      data: { estado: 'cancelada', motivoCancelacion: motivoLimpio },
+    // Cancelar y revertir inventario en una sola transacción (atómico).
+    const ventaActualizada = await this.prisma.$transaction(async (tx) => {
+      await tx.ventaLocal.update({
+        where: { id },
+        data: { estado: 'cancelada', motivoCancelacion: motivoLimpio },
+      });
+
+      // Revertir inventario: una entrada por cada item de producto (los servicios no mueven stock)
+      for (const item of venta.items) {
+        if (item.presentacionId == null) continue;
+        await this.inventarioService.registrarEntrada(
+          {
+            presentacionId: item.presentacionId,
+            cantidad:       item.cantidad,
+            motivo:         'cancelación de venta',
+            referenciaTipo: 'venta_local',
+            referenciaId:   id.toString(),
+          },
+          cajeroId,
+          tx,
+        );
+      }
+
+      return tx.ventaLocal.findUnique({
+        where: { id },
+        include: this.incluirVentaRelaciones(),
+      });
     });
 
-    // Revertir inventario: una entrada por cada item
-    for (const item of venta.items) {
-      await this.inventarioService.registrarEntrada(
-        {
-          presentacionId: item.presentacionId,
-          cantidad:       item.cantidad,
-          motivo:         'cancelación de venta',
-          referenciaTipo: 'venta_local',
-          referenciaId:   id.toString(),
-        },
-        cajeroId,
-      );
-    }
-
-    const ventaActualizada = await this.prisma.ventaLocal.findUnique({
-      where: { id },
-      include: this.incluirVentaRelaciones(),
-    });
     return { success: true, data: ventaActualizada };
   }
 

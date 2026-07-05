@@ -522,6 +522,7 @@ model Servicio {
   productosAsociados  ServicioProducto[]
   especialistas       ServicioEspecialista[]
   citas               Cita[]
+  ventasLocalItems    VentaLocalItem[]
 
   @@index([categoria])
   @@index([activo])
@@ -731,10 +732,15 @@ model VentaLocalItem {
 
   venta          VentaLocal          @relation(fields: [ventaId], references: [id], onDelete: Cascade)
   ventaId        Int                 @map("venta_id")
-  presentacion   ProductoPresentacion @relation(fields: [presentacionId], references: [id], onDelete: Restrict)
-  presentacionId Int                 @map("presentacion_id")
+  // Un ítem es de producto (presentacionId) O de servicio (servicioId). Uno de los dos.
+  presentacion   ProductoPresentacion? @relation(fields: [presentacionId], references: [id], onDelete: Restrict)
+  presentacionId Int?                @map("presentacion_id")
+  servicio       Servicio?           @relation(fields: [servicioId], references: [id], onDelete: Restrict)
+  servicioId     Int?                @map("servicio_id")
 
   @@index([ventaId])
+  @@index([presentacionId])
+  @@index([servicioId])
   @@map("ventas_local_items")
 }
 

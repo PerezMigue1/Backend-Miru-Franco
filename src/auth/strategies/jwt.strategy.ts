@@ -80,9 +80,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       });
     }
     
-    return { 
-      id: payload.id, 
+    // El payload del JWT no incluye el rol; se obtiene de BD para que req.user.rol
+    // esté disponible en los controladores (ej. quejas: crear/actualizar).
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: payload.id },
+      select: { rol: true },
+    });
+
+    return {
+      id: payload.id,
       email: payload.email,
+      rol: usuario?.rol ?? null,
       lastActivity: Math.floor(Date.now() / 1000), // Mantener compatibilidad con código existente
     };
   }

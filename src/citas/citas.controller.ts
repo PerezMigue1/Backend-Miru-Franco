@@ -20,7 +20,7 @@ import { ReprogramarCitaDto } from './dto/reprogramar-cita.dto';
 import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 
-@Controller('api/citas')
+@Controller('citas')
 @UseGuards(JwtAuthGuard, PermisosGuard)
 export class CitasController {
   constructor(private readonly citasService: CitasService) {}

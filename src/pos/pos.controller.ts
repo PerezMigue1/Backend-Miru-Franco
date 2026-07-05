@@ -19,7 +19,7 @@ import { ListVentasDto } from './dto/list-ventas.dto';
 import { CreateCorteDto } from './dto/create-corte.dto';
 import { ListCortesDto } from './dto/list-cortes.dto';
 
-@Controller('api/pos')
+@Controller('pos')
 @UseGuards(JwtAuthGuard, PermisosGuard)
 @Permisos('ventas:escritura')
 export class PosController {

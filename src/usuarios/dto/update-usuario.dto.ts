@@ -31,6 +31,32 @@ export class UpdateUsuarioDto {
   @IsOptional()
   perfilCapilar?: any;
 
+  // Campos de perfil capilar embebidos (edición directa desde clientes-crm).
+  // El service (actualizarUsuario) los persiste tal cual en las columnas del Usuario.
+  @IsOptional()
+  @IsIn(['liso', 'ondulado', 'rizado'])
+  tipoCabello?: 'liso' | 'ondulado' | 'rizado';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  colorNatural?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  colorActual?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  productosUsados?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  alergias?: string;
+
   @IsBoolean()
   @IsOptional()
   recibePromociones?: boolean;

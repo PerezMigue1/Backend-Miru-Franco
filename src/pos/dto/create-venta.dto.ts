@@ -15,10 +15,19 @@ import { Type } from 'class-transformer';
 const METODOS_PAGO = ['efectivo', 'tarjeta', 'transferencia', 'mixto'] as const;
 
 export class ItemVentaDto {
+  // Un ítem es de producto (presentacionId) O de servicio (servicioId).
+  // La validación de "exactamente uno" se hace en el service.
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  presentacionId: number;
+  presentacionId?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  servicioId?: number;
 
   @Type(() => Number)
   @IsInt()
