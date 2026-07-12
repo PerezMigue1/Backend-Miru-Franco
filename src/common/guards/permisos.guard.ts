@@ -31,7 +31,12 @@ export class PermisosGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const clavesRequeridas = this.reflector.get<string[]>('permisos', context.getHandler());
+    // Leer metadata de @Permisos tanto a nivel de método como de CLASE.
+    // (getHandler solo veía la del método → los @Permisos a nivel de clase, ej. PosController, se ignoraban.)
+    const clavesRequeridas = this.reflector.getAllAndOverride<string[]>('permisos', [
+      context.getHandler(),
+      context.getClass(),
+    ]);
 
     if (!clavesRequeridas || clavesRequeridas.length === 0) {
       return true;

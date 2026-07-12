@@ -26,6 +26,20 @@ export class ServiciosController {
     return this.serviciosService.listar(categoria);
   }
 
+  /**
+   * Listado para el panel admin: puede incluir servicios inactivos con ?incluirInactivos=true.
+   * Debe declararse ANTES de @Get(':id') para que Nest no lo capture como :id.
+   */
+  @Get('admin')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  async listarAdmin(
+    @Query('categoria') categoria?: string,
+    @Query('incluirInactivos') incluirInactivos?: string,
+  ) {
+    return this.serviciosService.listar(categoria, incluirInactivos === 'true');
+  }
+
   @Get(':id')
   async obtenerPorId(@Param('id') id: string) {
     return this.serviciosService.obtenerPorId(Number(id));

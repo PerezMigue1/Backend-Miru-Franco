@@ -17,6 +17,7 @@ import {
 import { UsuariosService } from './usuarios.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../common/guards/roles.guard';
+import { OwnerOrAdminGuard } from '../common/guards/owner-or-admin.guard';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { UpdateUsuarioDto } from './dto/update-usuario.dto';
 import { CambiarPasswordPerfilDto } from './dto/cambiar-password-perfil.dto';
@@ -36,8 +37,11 @@ export class UsuariosController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  async obtenerUsuarios(@Query('q') q?: string) {
-    return this.usuariosService.obtenerUsuarios(q);
+  async obtenerUsuarios(
+    @Query('q') q?: string,
+    @Query('incluirInactivos') incluirInactivos?: string,
+  ) {
+    return this.usuariosService.obtenerUsuarios(q, incluirInactivos === 'true');
   }
 
   /**
@@ -67,19 +71,19 @@ export class UsuariosController {
 
   // ===== ROUTES CON PARÁMETROS DINÁMICOS (al final) =====
   @Get(':id/perfil')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, OwnerOrAdminGuard)
   async obtenerPerfilUsuario(@Param('id') id: string) {
     return this.usuariosService.obtenerPerfilUsuario(id);
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, OwnerOrAdminGuard)
   async obtenerUsuarioPorId(@Param('id') id: string) {
     return this.usuariosService.obtenerUsuarioPorId(id);
   }
 
   @Put(':id/perfil')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, OwnerOrAdminGuard)
   async actualizarPerfilUsuario(
     @Param('id') id: string,
     @Body() updateUsuarioDto: UpdateUsuarioDto,
@@ -88,7 +92,7 @@ export class UsuariosController {
   }
 
   @Put(':id/cambiar-password')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, OwnerOrAdminGuard)
   async cambiarPasswordDesdePerfil(
     @Param('id') id: string,
     @Body() cambiarPasswordPerfilDto: CambiarPasswordPerfilDto,

@@ -8,8 +8,12 @@ import { sanitizeInput, containsSQLInjection, sanitizeForLogging } from '../comm
 export class ServiciosService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async listar(categoria?: string) {
-    const where: any = { activo: true };
+  /**
+   * @param incluirInactivos Solo debe ser true desde la ruta admin protegida
+   * (GET /api/servicios/admin). La ruta pública NUNCA lo pasa como true.
+   */
+  async listar(categoria?: string, incluirInactivos = false) {
+    const where: any = incluirInactivos ? {} : { activo: true };
 
     if (categoria) {
       const categoriaSanitizada = sanitizeInput(categoria);

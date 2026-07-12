@@ -13,6 +13,35 @@ import { sanitizeInput, containsSQLInjection, sanitizeForLogging, sanitizeRegist
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
 
+/**
+ * Select seguro y único para cualquier respuesta que exponga un Usuario al cliente.
+ * NUNCA incluir: password, codigoOTP, otpExpira, respuestaSeguridad, preguntaSeguridad,
+ * resetPasswordToken, resetPasswordExpires, tokensRevocadosDesde, intentosLoginFallidos,
+ * cuentaBloqueadaHasta, ultimoIntentoLogin.
+ * `googleId` se conserva (no es secreto: es el id de cuenta de Google, no un token).
+ */
+const SELECT_USUARIO_SEGURO = {
+  id: true,
+  nombre: true,
+  email: true,
+  telefono: true,
+  fechaNacimiento: true,
+  rol: true,
+  tipoCabello: true,
+  colorNatural: true,
+  colorActual: true,
+  productosUsados: true,
+  alergias: true,
+  googleId: true,
+  foto: true,
+  aceptaAvisoPrivacidad: true,
+  recibePromociones: true,
+  confirmado: true,
+  creadoEn: true,
+  actualizadoEn: true,
+  activo: true,
+} as const;
+
 @Injectable()
 export class UsuariosService {
   private readonly twilioClient: ReturnType<typeof twilio> | null;
@@ -384,11 +413,15 @@ export class UsuariosService {
     return { existe: false, message: 'Correo disponible' };
   }
 
-  async obtenerUsuarios(q?: string) {
+  /**
+   * @param incluirInactivos Solo debe ser true desde el panel admin (ruta ya protegida
+   * con @Roles('admin')). Sin el flag, comportamiento idéntico a antes: solo activos.
+   */
+  async obtenerUsuarios(q?: string, incluirInactivos = false) {
     const term = q?.trim();
     const usuarios = await this.prisma.usuario.findMany({
       where: {
-        activo: true,
+        ...(incluirInactivos ? {} : { activo: true }),
         ...(term
           ? {
               OR: [
@@ -399,29 +432,7 @@ export class UsuariosService {
             }
           : {}),
       },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        telefono: true,
-        fechaNacimiento: true,
-        // NO incluir preguntaSeguridad (información sensible)
-        // Campos de perfil capilar embebidos
-        tipoCabello: true,
-        colorNatural: true,
-        colorActual: true,
-        productosUsados: true,
-        alergias: true,
-        googleId: true,
-        foto: true,
-        aceptaAvisoPrivacidad: true,
-        recibePromociones: true,
-        confirmado: true,
-        creadoEn: true,
-        actualizadoEn: true,
-        activo: true,
-        // NO incluir: password, respuestaSeguridad, codigoOTP, resetPasswordToken
-      },
+      select: SELECT_USUARIO_SEGURO,
     });
 
     return {
@@ -434,36 +445,12 @@ export class UsuariosService {
   async obtenerUsuarioPorId(id: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { id },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        telefono: true,
-        fechaNacimiento: true,
-        preguntaSeguridad: true,
-        // Campos de perfil capilar embebidos
-        tipoCabello: true,
-        colorNatural: true,
-        colorActual: true,
-        productosUsados: true,
-        alergias: true,
-        googleId: true,
-        foto: true,
-        aceptaAvisoPrivacidad: true,
-        recibePromociones: true,
-        confirmado: true,
-        creadoEn: true,
-        actualizadoEn: true,
-        activo: true,
-        rol: true,
-      },
+      select: SELECT_USUARIO_SEGURO,
     });
 
     if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');
     }
-
-    // Las respuestas ya no se incluyen en el select, no hay nada que ocultar
 
     return {
       success: true,
@@ -471,12 +458,33 @@ export class UsuariosService {
     };
   }
 
+  /**
+   * Normaliza fechaNacimiento a Date para Prisma. Acepta "YYYY-MM-DD" (lo que envía
+   * <input type="date">) o ISO-8601 completo. `null`/'' limpia el campo.
+   * Lanza BadRequestException si el valor no es una fecha válida.
+   */
+  private normalizarFechaNacimiento(valor: unknown): Date | null {
+    if (valor === null || valor === '') return null;
+    const fecha = new Date(valor as string);
+    if (isNaN(fecha.getTime())) {
+      throw new BadRequestException('Fecha de nacimiento inválida');
+    }
+    return fecha;
+  }
+
   async actualizarUsuario(id: string, updateData: any) {
     const { email, password, ...camposActualizables } = updateData;
+
+    if (camposActualizables.fechaNacimiento !== undefined) {
+      camposActualizables.fechaNacimiento = this.normalizarFechaNacimiento(
+        camposActualizables.fechaNacimiento,
+      );
+    }
 
     const usuarioActualizado = await this.prisma.usuario.update({
       where: { id },
       data: camposActualizables,
+      select: SELECT_USUARIO_SEGURO,
     });
 
     if (!usuarioActualizado) {
@@ -507,6 +515,22 @@ export class UsuariosService {
   }
 
   /**
+   * Verifica que, excluyendo a `idExcluido`, siga quedando al menos un admin activo.
+   * Se usa antes de degradar el rol de un admin o de desactivarlo, para no dejar
+   * el sistema sin nadie que pueda gestionar roles.
+   */
+  private async assertNoDejaSinAdmins(idExcluido: string): Promise<void> {
+    const adminsRestantes = await this.prisma.usuario.count({
+      where: { rol: 'admin', activo: true, id: { not: idExcluido } },
+    });
+    if (adminsRestantes === 0) {
+      throw new BadRequestException(
+        'No se puede completar la acción: dejaría al sistema sin administradores activos',
+      );
+    }
+  }
+
+  /**
    * Cambiar estado activo/inactivo de un usuario (solo admin).
    * PATCH /usuarios/:id/estado con body { activo: true | false }
    */
@@ -514,6 +538,10 @@ export class UsuariosService {
     const usuario = await this.prisma.usuario.findUnique({ where: { id } });
     if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');
+    }
+
+    if (!activo && usuario.rol === 'admin' && usuario.activo) {
+      await this.assertNoDejaSinAdmins(id);
     }
 
     await this.prisma.usuario.update({
@@ -533,6 +561,10 @@ export class UsuariosService {
     const usuario = await this.prisma.usuario.findUnique({ where: { id } });
     if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');
+    }
+
+    if (usuario.rol === 'admin' && rol !== 'admin') {
+      await this.assertNoDejaSinAdmins(id);
     }
 
     await this.prisma.usuario.update({
@@ -1054,8 +1086,10 @@ export class UsuariosService {
           actualizaciones[campo] = sanitizePhone(updateData[campo]);
         } else if (typeof updateData[campo] === 'string' && ['nombre', 'colorNatural', 'colorActual', 'productosUsados', 'alergias'].includes(campo)) {
           actualizaciones[campo] = sanitizeInput(updateData[campo]);
+        } else if (campo === 'fechaNacimiento') {
+          actualizaciones.fechaNacimiento = this.normalizarFechaNacimiento(updateData.fechaNacimiento);
         } else {
-          // Para campos no string (fechaNacimiento, recibePromociones, tipoCabello)
+          // Para campos no string restantes (recibePromociones, tipoCabello)
           actualizaciones[campo] = updateData[campo];
         }
       }
@@ -1073,6 +1107,7 @@ export class UsuariosService {
     const usuario = await this.prisma.usuario.update({
       where: { id },
       data: actualizaciones,
+      select: SELECT_USUARIO_SEGURO,
     });
 
     if (!usuario) {
