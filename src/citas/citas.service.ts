@@ -34,11 +34,15 @@ export class CitasService {
     } as const;
   }
 
-  /** Devuelve filtro WHERE de scope según el rol del solicitante. */
+  /**
+   * Devuelve filtro WHERE de scope según el rol del solicitante.
+   * Clientes solo ven sus propias citas. Staff (estilista/empleado/becario) y
+   * admin ven todas las citas del salón — pueden acotar por especialista vía
+   * el query param `especialistaId` (ver `listar`/`listarDia`/`listarCalendario`).
+   */
   private aplicarScope(usuarioId: string, rolUsuario?: string): Record<string, unknown> {
     if (rolUsuario === 'cliente') return { clienteId: usuarioId };
-    if (ROLES_ESPECIALISTA.includes(rolUsuario as any)) return { especialistaId: usuarioId };
-    return {}; // admin: sin restricción
+    return {};
   }
 
   /** Valida que no haya solapamiento de horario para el especialista. */
@@ -82,13 +86,18 @@ export class CitasService {
       where.fechaHoraInicio = rango;
     }
 
+    const orderBy =
+      query.orden === 'creadoEn'
+        ? { creadoEn: 'desc' as const }
+        : { fechaHoraInicio: 'asc' as const };
+
     const [total, citas] = await this.prisma.$transaction([
       this.prisma.cita.count({ where }),
       this.prisma.cita.findMany({
         where,
         skip,
         take: limit,
-        orderBy: { fechaHoraInicio: 'asc' },
+        orderBy,
         include: this.incluirRelaciones(),
       }),
     ]);
@@ -103,7 +112,7 @@ export class CitasService {
     };
   }
 
-  async listarDia(fecha: string, usuarioId: string, rolUsuario?: string) {
+  async listarDia(fecha: string, usuarioId: string, rolUsuario?: string, especialistaId?: string) {
     if (!fecha) throw new BadRequestException('El parámetro fecha es requerido (YYYY-MM-DD)');
     const dia = new Date(fecha);
     if (isNaN(dia.getTime())) throw new BadRequestException('Fecha inválida');
@@ -114,6 +123,7 @@ export class CitasService {
     const citas = await this.prisma.cita.findMany({
       where: {
         ...this.aplicarScope(usuarioId, rolUsuario),
+        ...(especialistaId ? { especialistaId } : {}),
         fechaHoraInicio: { gte: inicio, lte: fin },
       },
       orderBy: { fechaHoraInicio: 'asc' },
@@ -123,7 +133,7 @@ export class CitasService {
     return { success: true, count: citas.length, data: citas };
   }
 
-  async listarCalendario(desde: string, hasta: string, usuarioId: string, rolUsuario?: string) {
+  async listarCalendario(desde: string, hasta: string, usuarioId: string, rolUsuario?: string, especialistaId?: string) {
     if (!desde || !hasta) {
       throw new BadRequestException('Los parámetros desde y hasta son requeridos');
     }
@@ -136,6 +146,7 @@ export class CitasService {
     const citas = await this.prisma.cita.findMany({
       where: {
         ...this.aplicarScope(usuarioId, rolUsuario),
+        ...(especialistaId ? { especialistaId } : {}),
         fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
       },
       orderBy: { fechaHoraInicio: 'asc' },
@@ -153,9 +164,6 @@ export class CitasService {
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
 
     if (rolUsuario === 'cliente' && cita.clienteId !== usuarioId) {
-      throw new ForbiddenException('No tienes acceso a esta cita');
-    }
-    if (ROLES_ESPECIALISTA.includes(rolUsuario as any) && cita.especialistaId !== usuarioId) {
       throw new ForbiddenException('No tienes acceso a esta cita');
     }
 

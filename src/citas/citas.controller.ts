@@ -32,22 +32,27 @@ export class CitasController {
     return this.citasService.listar(query, req.user.id, req.rolUsuario);
   }
 
-  /** GET /api/citas/dia?fecha=YYYY-MM-DD — citas del día */
+  /** GET /api/citas/dia?fecha=YYYY-MM-DD&especialistaId=... — citas del día */
   @Get('dia')
   @Permisos('citas:propias', 'citas:asignadas', 'citas:escritura', 'citas:propia')
-  listarDia(@Query('fecha') fecha: string, @Request() req: any) {
-    return this.citasService.listarDia(fecha, req.user.id, req.rolUsuario);
+  listarDia(
+    @Query('fecha') fecha: string,
+    @Query('especialistaId') especialistaId: string,
+    @Request() req: any,
+  ) {
+    return this.citasService.listarDia(fecha, req.user.id, req.rolUsuario, especialistaId);
   }
 
-  /** GET /api/citas/calendario?desde=YYYY-MM-DD&hasta=YYYY-MM-DD */
+  /** GET /api/citas/calendario?desde=YYYY-MM-DD&hasta=YYYY-MM-DD&especialistaId=... */
   @Get('calendario')
   @Permisos('citas:propias', 'citas:asignadas', 'citas:escritura', 'citas:propia')
   listarCalendario(
     @Query('desde') desde: string,
     @Query('hasta') hasta: string,
+    @Query('especialistaId') especialistaId: string,
     @Request() req: any,
   ) {
-    return this.citasService.listarCalendario(desde, hasta, req.user.id, req.rolUsuario);
+    return this.citasService.listarCalendario(desde, hasta, req.user.id, req.rolUsuario, especialistaId);
   }
 
   /** GET /api/citas/:id */

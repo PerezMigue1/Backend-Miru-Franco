@@ -24,6 +24,11 @@ export class ListCitasDto {
   @IsIn(ESTADOS_CITA)
   estado?: string;
 
+  /** Campo de orden. Por defecto 'fechaHoraInicio' (asc, comportamiento histórico). */
+  @IsOptional()
+  @IsIn(['fechaHoraInicio', 'creadoEn'])
+  orden?: 'fechaHoraInicio' | 'creadoEn';
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()
