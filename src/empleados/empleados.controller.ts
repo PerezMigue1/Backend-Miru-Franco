@@ -16,31 +16,35 @@ import { UpdateEmpleadoDto } from './dto/update-empleado.dto';
 
 @Controller('empleados')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin')
 export class EmpleadosController {
   constructor(private readonly empleadosService: EmpleadosService) {}
 
   @Get()
+  @Roles('admin', 'estilista', 'empleado', 'becario', 'becado')
   listar() {
     return this.empleadosService.listar();
   }
 
   @Get(':usuarioId')
+  @Roles('admin', 'estilista', 'empleado', 'becario', 'becado')
   obtenerPorUsuario(@Param('usuarioId') usuarioId: string) {
     return this.empleadosService.obtenerPorUsuario(usuarioId);
   }
 
   @Post()
+  @Roles('admin')
   crear(@Body() dto: CreateEmpleadoDto) {
     return this.empleadosService.crear(dto);
   }
 
   @Put(':usuarioId')
+  @Roles('admin')
   actualizar(@Param('usuarioId') usuarioId: string, @Body() dto: UpdateEmpleadoDto) {
     return this.empleadosService.actualizar(usuarioId, dto);
   }
 
   @Delete(':usuarioId')
+  @Roles('admin')
   eliminar(@Param('usuarioId') usuarioId: string) {
     return this.empleadosService.eliminar(usuarioId);
   }

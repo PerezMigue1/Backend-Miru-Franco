@@ -7,6 +7,7 @@ import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
+import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { ListVentasDto } from './dto/list-ventas.dto';
@@ -58,10 +59,7 @@ export class PosService {
     if (query.cajeroId) where.cajeroId = query.cajeroId;
     if (query.clienteId) where.clienteId = query.clienteId;
     if (query.desde || query.hasta) {
-      const rango: Record<string, Date> = {};
-      if (query.desde) rango.gte = new Date(query.desde);
-      if (query.hasta) rango.lte = new Date(query.hasta);
-      where.creadoEn = rango;
+      where.creadoEn = normalizarRangoFechas(query.desde, query.hasta);
     }
 
     const [total, ventas] = await this.prisma.$transaction([
@@ -274,10 +272,7 @@ export class PosService {
   async resumen(desde?: string, hasta?: string) {
     const where: Record<string, unknown> = { estado: 'pagada' };
     if (desde || hasta) {
-      const rango: Record<string, Date> = {};
-      if (desde) rango.gte = new Date(desde);
-      if (hasta) rango.lte = new Date(hasta);
-      where.creadoEn = rango;
+      where.creadoEn = normalizarRangoFechas(desde, hasta);
     }
 
     const ventas = await this.prisma.ventaLocal.findMany({
@@ -312,10 +307,7 @@ export class PosService {
     const where: Record<string, unknown> = {};
     if (query.cajeroId) where.cajeroId = query.cajeroId;
     if (query.desde || query.hasta) {
-      const rango: Record<string, Date> = {};
-      if (query.desde) rango.gte = new Date(query.desde);
-      if (query.hasta) rango.lte = new Date(query.hasta);
-      where.fecha = rango;
+      where.fecha = normalizarRangoFechas(query.desde, query.hasta);
     }
 
     const [total, cortes] = await this.prisma.$transaction([

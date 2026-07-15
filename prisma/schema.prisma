@@ -659,6 +659,7 @@ model Cita {
   estado            EstadoCita @default(pendiente)
   notas             String?    @db.Text
   motivoCancelacion String?    @map("motivo_cancelacion") @db.Text
+  horaCheckIn       DateTime?  @map("hora_check_in")
   creadoEn          DateTime   @default(now()) @map("creado_en")
   actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
 

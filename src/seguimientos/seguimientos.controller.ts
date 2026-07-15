@@ -18,7 +18,7 @@ import { ListSeguimientosDto } from './dto/list-seguimientos.dto';
 
 @Controller('seguimientos')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin')
+@Roles('admin', 'estilista', 'empleado', 'becario', 'becado')
 export class SeguimientosController {
   constructor(private readonly seguimientosService: SeguimientosService) {}
 

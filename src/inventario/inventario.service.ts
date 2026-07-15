@@ -9,6 +9,7 @@ import { CreateAjusteDto } from './dto/create-ajuste.dto';
 import { CreateEntradaDto } from './dto/create-entrada.dto';
 import { CreateSalidaDto } from './dto/create-salida.dto';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
+import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
 
 type MovimientoRow = {
   id: number;
@@ -50,19 +51,16 @@ export class InventarioService {
     if (filtros.productoId) {
       whereParts.push(Prisma.sql`pp.producto_id = ${filtros.productoId}`);
     }
-    if (filtros.desde) {
-      const desde = new Date(filtros.desde);
-      if (Number.isNaN(desde.getTime())) {
+    if (filtros.desde || filtros.hasta) {
+      const { gte: desde, lte: hasta } = normalizarRangoFechas(filtros.desde, filtros.hasta);
+      if (filtros.desde && !desde) {
         throw new BadRequestException('desde debe ser una fecha ISO válida');
       }
-      whereParts.push(Prisma.sql`m.creado_en >= ${desde}::timestamp`);
-    }
-    if (filtros.hasta) {
-      const hasta = new Date(filtros.hasta);
-      if (Number.isNaN(hasta.getTime())) {
+      if (filtros.hasta && !hasta) {
         throw new BadRequestException('hasta debe ser una fecha ISO válida');
       }
-      whereParts.push(Prisma.sql`m.creado_en <= ${hasta}::timestamp`);
+      if (desde) whereParts.push(Prisma.sql`m.creado_en >= ${desde}::timestamp`);
+      if (hasta) whereParts.push(Prisma.sql`m.creado_en <= ${hasta}::timestamp`);
     }
     if (filtros.q?.trim()) {
       const q = `%${filtros.q.trim()}%`;

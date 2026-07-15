@@ -11,6 +11,7 @@ import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
 import { PedidoItemLineDto } from './dto/pedido-item-line.dto';
 import { precioPresentacionANumero } from '../../common/utils/money.util';
+import { normalizarRangoFechas } from '../../common/utils/fecha-rango.util';
 import {
   cantidadPorPresentacion,
   decrementarStockPresentaciones,
@@ -83,9 +84,8 @@ export class PedidosService {
     }
 
     if (fechaDesde || fechaHasta) {
-      const gte = fechaDesde ? new Date(fechaDesde) : undefined;
-      const lte = fechaHasta ? new Date(fechaHasta) : undefined;
-      if ((gte && Number.isNaN(gte.getTime())) || (lte && Number.isNaN(lte.getTime()))) {
+      const { gte, lte } = normalizarRangoFechas(fechaDesde, fechaHasta);
+      if ((fechaDesde && !gte) || (fechaHasta && !lte)) {
         throw new BadRequestException('fechaDesde/fechaHasta deben ser fechas ISO válidas');
       }
       where.creadoEn = {

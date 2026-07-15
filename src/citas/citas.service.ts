@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
+import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
 import { CreateCitaDto } from './dto/create-cita.dto';
 import { UpdateCitaDto } from './dto/update-cita.dto';
 import { ListCitasDto } from './dto/list-citas.dto';
@@ -80,10 +81,7 @@ export class CitasService {
     if (query.especialistaId) where.especialistaId = query.especialistaId;
     if (query.clienteId)     where.clienteId     = query.clienteId;
     if (query.desde || query.hasta) {
-      const rango: Record<string, Date> = {};
-      if (query.desde) rango.gte = new Date(query.desde);
-      if (query.hasta) rango.lte = new Date(query.hasta);
-      where.fechaHoraInicio = rango;
+      where.fechaHoraInicio = normalizarRangoFechas(query.desde, query.hasta);
     }
 
     const orderBy =
@@ -114,11 +112,8 @@ export class CitasService {
 
   async listarDia(fecha: string, usuarioId: string, rolUsuario?: string, especialistaId?: string) {
     if (!fecha) throw new BadRequestException('El parámetro fecha es requerido (YYYY-MM-DD)');
-    const dia = new Date(fecha);
-    if (isNaN(dia.getTime())) throw new BadRequestException('Fecha inválida');
-
-    const inicio = new Date(fecha + 'T00:00:00.000Z');
-    const fin    = new Date(fecha + 'T23:59:59.999Z');
+    const { gte: inicio, lte: fin } = normalizarRangoFechas(fecha, fecha);
+    if (!inicio || !fin) throw new BadRequestException('Fecha inválida');
 
     const citas = await this.prisma.cita.findMany({
       where: {
@@ -137,9 +132,8 @@ export class CitasService {
     if (!desde || !hasta) {
       throw new BadRequestException('Los parámetros desde y hasta son requeridos');
     }
-    const fechaDesde = new Date(desde);
-    const fechaHasta = new Date(hasta);
-    if (isNaN(fechaDesde.getTime()) || isNaN(fechaHasta.getTime())) {
+    const { gte: fechaDesde, lte: fechaHasta } = normalizarRangoFechas(desde, hasta);
+    if (!fechaDesde || !fechaHasta) {
       throw new BadRequestException('Fechas inválidas');
     }
 
@@ -272,7 +266,7 @@ export class CitasService {
     }
     const actualizada = await this.prisma.cita.update({
       where: { id },
-      data: { estado: 'en_curso' },
+      data: { estado: 'en_curso', horaCheckIn: new Date() },
       include: this.incluirRelaciones(),
     });
     return { success: true, data: actualizada };
