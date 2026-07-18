@@ -22,6 +22,10 @@ import { SeguimientosModule } from './seguimientos/seguimientos.module';
 import { CitasModule } from './citas/citas.module';
 import { PosModule } from './pos/pos.module';
 import { OauthModule } from './oauth/oauth.module';
+import { ProveedoresModule } from './proveedores/proveedores.module';
+import { ComprasModule } from './compras/compras.module';
+import { CotizacionesModule } from './cotizaciones/cotizaciones.module';
+import { ReportesModule } from './reportes/reportes.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -45,6 +49,10 @@ import { AppController } from './app.controller';
     ProductosModule,
     ServiciosModule,
     PaquetesModule,
+    ProveedoresModule,
+    ComprasModule,
+    CotizacionesModule,
+    ReportesModule,
     DbModule,
     EcommerceModule,
     PaymentsModule,

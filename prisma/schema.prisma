@@ -116,6 +116,8 @@ model Usuario {
   ventasComoCajero           VentaLocal[] @relation("VentasComoCajero")
   ventasComoCliente          VentaLocal[] @relation("VentasComoCliente")
   cortesCaja                 CorteCaja[]  @relation("CortesComoCajero")
+  comprasRegistradas         Compra[]
+  cotizaciones               Cotizacion[]
 
   @@index([activo])
   @@index([email])
@@ -474,6 +476,7 @@ model ProductoPresentacion {
   carritoItems   CarritoItem[]
   movimientosInventario InventarioMovimiento[]
   ventasLocalItems      VentaLocalItem[]
+  comprasItems          CompraItem[]
 
   @@map("producto_presentaciones")
   @@index([productoId])
@@ -592,6 +595,8 @@ model Paquete {
   descripcion          String   @db.Text
   servicios_vinculados String[] @default([])
   precio_especial      Decimal  @db.Decimal(10, 2)
+
+  cotizaciones Cotizacion[]
 
   @@map("paquetes")
 }
@@ -767,4 +772,89 @@ model CorteCaja {
   @@index([cajeroId])
   @@index([fecha])
   @@map("cortes_caja")
+}
+
+// ─── Módulo: Proveedores ──────────────────────────────────────────────────────
+
+model Proveedor {
+  id            Int       @id @default(autoincrement())
+  nombre        String
+  contacto      String?
+  productos     String?
+  direccion     String?
+  compras       Int       @default(0)
+  ultimaCompra  DateTime? @map("ultima_compra")
+  activo        Boolean   @default(true)
+  creadoEn      DateTime  @default(now()) @map("creado_en")
+  actualizadoEn DateTime  @updatedAt @map("actualizado_en")
+
+  ordenesCompra Compra[]
+
+  @@map("proveedores")
+}
+
+// ─── Módulo: Compras a proveedores ───────────────────────────────────────────
+
+model Compra {
+  id            Int      @id @default(autoincrement())
+  proveedorId   Int      @map("proveedor_id")
+  usuarioId     String?  @map("usuario_id")
+  fecha         DateTime @default(now())
+  total         Decimal  @db.Decimal(10, 2)
+  notas         String?  @db.Text
+  creadoEn      DateTime @default(now()) @map("creado_en")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  proveedor Proveedor    @relation(fields: [proveedorId], references: [id], onDelete: Restrict)
+  usuario   Usuario?     @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+  items     CompraItem[]
+
+  @@index([proveedorId])
+  @@map("compras")
+}
+
+model CompraItem {
+  id             Int     @id @default(autoincrement())
+  compraId       Int     @map("compra_id")
+  presentacionId Int     @map("presentacion_id")
+  cantidad       Int
+  costoUnitario  Decimal @map("costo_unitario") @db.Decimal(10, 2)
+  subtotal       Decimal @db.Decimal(10, 2)
+
+  compra       Compra               @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  presentacion ProductoPresentacion @relation(fields: [presentacionId], references: [id], onDelete: Restrict)
+
+  @@index([compraId])
+  @@index([presentacionId])
+  @@map("compra_items")
+}
+
+// ─── Módulo: Cotizaciones de eventos ─────────────────────────────────────────
+
+enum EstadoCotizacion {
+  pendiente
+  confirmada
+  cancelada
+}
+
+model Cotizacion {
+  id               Int              @id @default(autoincrement())
+  clienteNombre    String           @map("cliente_nombre")
+  clienteId        String?          @map("cliente_id")
+  fechaEvento      DateTime         @map("fecha_evento")
+  cantidadPersonas Int?             @map("cantidad_personas")
+  monto            Decimal          @db.Decimal(10, 2)
+  anticipo         Decimal          @default(0) @db.Decimal(10, 2)
+  estado           EstadoCotizacion @default(pendiente)
+  notas            String?          @db.Text
+  creadoEn         DateTime         @default(now()) @map("creado_en")
+  actualizadoEn    DateTime         @updatedAt @map("actualizado_en")
+
+  paquete   Paquete  @relation(fields: [paqueteId], references: [id], onDelete: Restrict)
+  paqueteId Int      @map("paquete_id")
+  cliente   Usuario? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
+
+  @@index([paqueteId])
+  @@index([estado])
+  @@map("cotizaciones")
 }
