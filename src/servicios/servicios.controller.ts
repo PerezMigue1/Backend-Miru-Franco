@@ -15,7 +15,7 @@ import { ServiciosService } from './servicios.service';
 import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { Roles, RolesGuard } from '../common/guards/roles.guard';
+import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
 
 @Controller('servicios')
 export class ServiciosController {
@@ -31,8 +31,8 @@ export class ServiciosController {
    * Debe declararse ANTES de @Get(':id') para que Nest no lo capture como :id.
    */
   @Get('admin')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:lectura')
   async listarAdmin(
     @Query('categoria') categoria?: string,
     @Query('incluirInactivos') incluirInactivos?: string,
@@ -47,22 +47,22 @@ export class ServiciosController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:escritura')
   async crear(@Body() dto: CreateServicioDto) {
     return this.serviciosService.crear(dto);
   }
 
   @Put(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:escritura')
   async actualizar(@Param('id') id: string, @Body() dto: UpdateServicioDto) {
     return this.serviciosService.actualizar(Number(id), dto);
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:escritura')
   async eliminar(@Param('id') id: string) {
     return this.serviciosService.eliminar(Number(id));
   }

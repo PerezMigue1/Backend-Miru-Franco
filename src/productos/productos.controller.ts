@@ -15,7 +15,7 @@ import { ProductosService } from './productos.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { Roles, RolesGuard } from '../common/guards/roles.guard';
+import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
 
 @Controller('productos')
 export class ProductosController {
@@ -44,8 +44,8 @@ export class ProductosController {
    */
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:escritura')
   async crear(@Body() dto: CreateProductoDto) {
     return this.productosService.crear(dto);
   }
@@ -55,8 +55,8 @@ export class ProductosController {
    * ✅ Solo para administradores (rol = 'admin')
    */
   @Put(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:escritura')
   async actualizar(@Param('id') id: string, @Body() dto: UpdateProductoDto) {
     return this.productosService.actualizar(Number(id), dto);
   }
@@ -66,8 +66,8 @@ export class ProductosController {
    * ✅ Solo para administradores (rol = 'admin')
    */
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:escritura')
   async eliminar(@Param('id') id: string) {
     return this.productosService.eliminar(Number(id));
   }

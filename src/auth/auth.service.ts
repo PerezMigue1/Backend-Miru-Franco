@@ -213,8 +213,26 @@ export class AuthService {
     return this.usuariosService.verificarCorreoExistente(correo);
   }
 
+  /**
+   * GET /auth/me: además del perfil, incluye `permisos` (claves de permisos_rol para el
+   * rol del usuario) para que el frontend arme el sidebar y los guards de página sin
+   * listas de roles hardcodeadas. No se firma en el JWT a propósito: se resuelve en cada
+   * request (misma consulta que PermisosGuard) para que un cambio en permisos_rol aplique
+   * al instante, sin esperar a que expire/rote el token.
+   */
   async getProfile(user: any) {
-    return this.usuariosService.obtenerUsuarioPorId(user.id);
+    const resultado = await this.usuariosService.obtenerUsuarioPorId(user.id);
+    const rol = resultado?.data?.rol;
+    const permisoRol = rol
+      ? await this.prisma.permisoRol.findUnique({ where: { rol }, select: { claves: true } })
+      : null;
+    return {
+      ...resultado,
+      data: {
+        ...resultado.data,
+        permisos: permisoRol?.claves ?? [],
+      },
+    };
   }
 
   /** PATCH /auth/me: mismos campos permitidos que PUT usuarios/:id/perfil (incl. `foto`). */

@@ -21,30 +21,33 @@ import { ListCortesDto } from './dto/list-cortes.dto';
 
 @Controller('pos')
 @UseGuards(JwtAuthGuard, PermisosGuard)
-@Permisos('ventas:escritura')
 export class PosController {
   constructor(private readonly posService: PosService) {}
 
   /** GET /api/pos/ventas */
   @Get('ventas')
+  @Permisos('ventas:escritura')
   listarVentas(@Query() query: ListVentasDto) {
     return this.posService.listarVentas(query);
   }
 
   /** GET /api/pos/ventas/:id */
   @Get('ventas/:id')
+  @Permisos('ventas:escritura')
   obtenerVenta(@Param('id', ParseIntPipe) id: number) {
     return this.posService.obtenerVenta(id);
   }
 
   /** POST /api/pos/ventas */
   @Post('ventas')
+  @Permisos('ventas:escritura')
   crearVenta(@Body() dto: CreateVentaDto, @Request() req: any) {
     return this.posService.crearVenta(dto, req.user.id);
   }
 
   /** PATCH /api/pos/ventas/:id/cancelar */
   @Patch('ventas/:id/cancelar')
+  @Permisos('ventas:escritura')
   cancelarVenta(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CancelarVentaDto,
@@ -55,24 +58,28 @@ export class PosController {
 
   /** GET /api/pos/resumen?desde=&hasta= */
   @Get('resumen')
+  @Permisos('caja:lectura')
   resumen(@Query('desde') desde?: string, @Query('hasta') hasta?: string) {
     return this.posService.resumen(desde, hasta);
   }
 
   /** GET /api/pos/cortes */
   @Get('cortes')
+  @Permisos('caja:lectura')
   listarCortes(@Query() query: ListCortesDto) {
     return this.posService.listarCortes(query);
   }
 
   /** GET /api/pos/cortes/:id */
   @Get('cortes/:id')
+  @Permisos('caja:lectura')
   obtenerCorte(@Param('id', ParseIntPipe) id: number) {
     return this.posService.obtenerCorte(id);
   }
 
   /** POST /api/pos/cortes */
   @Post('cortes')
+  @Permisos('caja:escritura')
   crearCorte(@Body() dto: CreateCorteDto, @Request() req: any) {
     return this.posService.crearCorte(dto, req.user.id);
   }
