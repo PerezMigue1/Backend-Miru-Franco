@@ -24,6 +24,7 @@ export class ClientesService {
       where.OR = [
         { nombre: { contains: q, mode: 'insensitive' } },
         { email:  { contains: q, mode: 'insensitive' } },
+        { telefono: { contains: q, mode: 'insensitive' } },
       ];
     }
 

@@ -21,6 +21,7 @@ import { QuejasModule } from './quejas/quejas.module';
 import { SeguimientosModule } from './seguimientos/seguimientos.module';
 import { CitasModule } from './citas/citas.module';
 import { PosModule } from './pos/pos.module';
+import { OauthModule } from './oauth/oauth.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -55,6 +56,7 @@ import { AppController } from './app.controller';
     SeguimientosModule,
     CitasModule,
     PosModule,
+    OauthModule,
   ],
   controllers: [AppController],
 })
