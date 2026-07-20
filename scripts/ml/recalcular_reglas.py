@@ -55,6 +55,7 @@ MIN_CONFIDENCE_AMPLIA = 0.10
 VENTANA_DIAS = int(os.environ.get("RECOMENDADOR_VENTANA_DIAS", "365"))
 MIN_TRANSACCIONES_REALES = int(os.environ.get("RECOMENDADOR_MIN_TRANSACCIONES_REALES", "200"))
 N_TRANSACCIONES_SIMULADAS = 4000
+N_PRODUCTOS_POR_DEPARTAMENTO = int(os.environ.get("RECOMENDADOR_N_PRODUCTOS_POR_DEPTO", "6"))
 MIN_REGLAS_ACEPTABLE = 15
 PROPORCION_MINIMA_VS_ACTUAL = 0.2  # no reemplazar si el resultado nuevo es <20% del actual
 
@@ -77,14 +78,23 @@ def conectar():
 # ============================================================
 def cargar_catalogo(conn):
     with conn.cursor() as cur:
-        cur.execute("SELECT id, nombre, categoria FROM servicios WHERE activo = true")
+        cur.execute("SELECT id, nombre, categoria FROM servicios WHERE activo = true ORDER BY id")
         servicios = cur.fetchall()
 
+        # ORDER BY creado_en ASC: necesario para poder curar un subconjunto
+        # ESTABLE por departamento (los productos más antiguos/establecidos
+        # primero) en generar_transacciones_simuladas(). Sin un orden fijo,
+        # random.choice()/random.sample() con semilla fija dejan de ser
+        # reproducibles entre corridas (el orden de un SELECT sin ORDER BY
+        # no está garantizado por Postgres).
         cur.execute("""
-            SELECT DISTINCT p.id, p.nombre, p.marca, p.categoria
+            SELECT p.id, p.nombre, p.marca, p.categoria
             FROM productos p
-            JOIN producto_presentaciones pp ON pp.producto_id = p.id
-            WHERE pp.disponible = true
+            WHERE EXISTS (
+                SELECT 1 FROM producto_presentaciones pp
+                WHERE pp.producto_id = p.id AND pp.disponible = true
+            )
+            ORDER BY p.creado_en ASC
         """)
         productos = cur.fetchall()
 
@@ -165,11 +175,26 @@ def generar_transacciones_simuladas(servicios, productos, n=N_TRANSACCIONES_SIMU
     """
     random.seed(42)
 
+    # Cura un subconjunto pequeño y ESTABLE por departamento (los más
+    # antiguos primero, gracias al ORDER BY creado_en de cargar_catalogo).
+    # Esto es lo que hace posible que la simulación de arranque en frío
+    # genere reglas con confianza suficiente: con 62-94 productos
+    # compitiendo por "qué acompaña a este servicio", ningún producto
+    # individual concentra suficiente probabilidad (se valida al construir
+    # este script -- ver notas en el repositorio). Con un subconjunto de
+    # ~8 por departamento, cada uno se lleva una porción representativa,
+    # igual que en la curaduría manual del demo académico original, pero
+    # elegida automáticamente y actualizable sola (si un producto
+    # "destacado" se desactiva, el siguiente más antiguo ocupa su lugar
+    # en la próxima corrida).
     pool_por_depto = {}
-    for _id, nombre, marca, _categoria in productos:
+    for (_id, nombre, marca, _categoria) in productos:
         depto = MARCA_A_DEPARTAMENTO.get((marca or "").upper())
-        if depto:
-            pool_por_depto.setdefault(depto, []).append(nombre)
+        if not depto:
+            continue
+        lista = pool_por_depto.setdefault(depto, [])
+        if len(lista) < N_PRODUCTOS_POR_DEPARTAMENTO:
+            lista.append(nombre)
 
     servicios_con_depto = [
         (nombre, CATEGORIA_SERVICIO_A_DEPARTAMENTO.get(categoria))
