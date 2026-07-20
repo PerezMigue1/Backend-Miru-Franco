@@ -118,6 +118,7 @@ model Usuario {
   cortesCaja                 CorteCaja[]  @relation("CortesComoCajero")
   comprasRegistradas         Compra[]
   cotizaciones               Cotizacion[]
+  facturasCreadas            Factura[]
 
   @@index([activo])
   @@index([email])
@@ -320,21 +321,38 @@ model Envio {
   @@map("envios")
 }
 
-model Factura {
-  id          Int       @id @default(autoincrement())
-  uuidFiscal  String?   @map("uuid_fiscal")
-  folio       String?
-  serie       String?
-  xmlUrl      String?   @map("xml_url")
-  pdfUrl      String?   @map("pdf_url")
-  estado      String?
-  creadoEn    DateTime  @default(now()) @map("creado_en")
-  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+enum TipoDocumento {
+  nota
+  cfdi
+}
 
-  pedido   Pedido @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
-  pedidoId Int    @map("pedido_id")
+model Factura {
+  id            Int           @id @default(autoincrement())
+  tipo          TipoDocumento @default(cfdi)
+  // --- CFDI (fiscal) ---
+  uuidFiscal    String?       @map("uuid_fiscal")
+  folio         String?
+  serie         String?
+  rfc           String?
+  razonSocial   String?       @map("razon_social")
+  xmlUrl        String?       @map("xml_url")
+  pdfUrl        String?       @map("pdf_url")
+  estado        String?
+  // --- Nota simple (no fiscal) ---
+  clienteNombre String?       @map("cliente_nombre")
+  concepto      String?
+  monto         Decimal?      @db.Decimal(10, 2)
+  creadoEn      DateTime      @default(now()) @map("creado_en")
+  actualizadoEn DateTime      @updatedAt @map("actualizado_en")
+
+  pedido   Pedido? @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId Int?    @map("pedido_id")
+
+  creadoPor   Usuario? @relation(fields: [creadoPorId], references: [id], onDelete: SetNull)
+  creadoPorId String?  @map("creado_por_id")
 
   @@index([pedidoId])
+  @@index([tipo])
   @@map("facturas")
 }
 
@@ -857,4 +875,25 @@ model Cotizacion {
   @@index([paqueteId])
   @@index([estado])
   @@map("cotizaciones")
+}
+
+// ─── Módulo: Recomendador (reglas de asociación / Apriori) ───────────────────
+// Tabla poblada por el cuadernillo de minería de datos (mlxtend: Apriori +
+// association_rules). No se escribe desde el backend; solo se lee. Cuando
+// exista suficiente historial real de ventas, se recalculan las reglas y se
+// insertan nuevas filas con origen = 'real'.
+
+model ReglaAsociacion {
+  id          Int      @id @default(autoincrement())
+  antecedente String
+  consecuente String
+  soporte     Decimal  @db.Decimal(6, 4)
+  confianza   Decimal  @db.Decimal(6, 4)
+  lift        Decimal  @db.Decimal(6, 4)
+  tipo        String   @db.VarChar(30)
+  origen      String   @default("simulado") @db.VarChar(30)
+  creadoEn    DateTime @default(now()) @map("creado_en")
+
+  @@index([antecedente])
+  @@map("reglas_asociacion")
 }

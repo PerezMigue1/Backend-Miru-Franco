@@ -11,15 +11,27 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { PermisosGuard, Permisos } from '../../common/guards/permisos.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { FacturasService } from './facturas.service';
 import { CreateFacturaDto } from './dto/create-factura.dto';
 import { UpdateFacturaDto } from './dto/update-factura.dto';
 
 @Controller('facturas')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermisosGuard)
 export class FacturasController {
   constructor(private readonly service: FacturasService) {}
+
+  /**
+   * GET /api/facturas — todas las facturas/notas (con o sin pedido), para el panel admin.
+   * Restringido a caja:lectura (admin/estilista): expone montos, RFC y razón social de
+   * todos los clientes. El cliente ve las suyas por GET /api/facturas/pedido/:id, que no pasa por aquí.
+   */
+  @Get()
+  @Permisos('caja:lectura')
+  listarTodas() {
+    return this.service.listarTodas();
+  }
 
   @Get('pedido/:pedidoId')
   listarPorPedido(

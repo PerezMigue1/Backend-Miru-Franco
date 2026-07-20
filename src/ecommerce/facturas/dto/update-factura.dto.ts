@@ -1,4 +1,5 @@
 import { IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class UpdateFacturaDto {
   @IsString()
@@ -15,6 +16,14 @@ export class UpdateFacturaDto {
 
   @IsString()
   @IsOptional()
+  rfc?: string | null;
+
+  @IsString()
+  @IsOptional()
+  razonSocial?: string | null;
+
+  @IsString()
+  @IsOptional()
   xmlUrl?: string | null;
 
   @IsString()
@@ -24,4 +33,16 @@ export class UpdateFacturaDto {
   @IsString()
   @IsOptional()
   estado?: string | null;
+
+  @IsString()
+  @IsOptional()
+  clienteNombre?: string | null;
+
+  @IsString()
+  @IsOptional()
+  concepto?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  monto?: number | null;
 }
