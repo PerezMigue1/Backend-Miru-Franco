@@ -876,24 +876,3 @@ model Cotizacion {
   @@index([estado])
   @@map("cotizaciones")
 }
-
-// ─── Módulo: Recomendador (reglas de asociación / Apriori) ───────────────────
-// Tabla poblada por el cuadernillo de minería de datos (mlxtend: Apriori +
-// association_rules). No se escribe desde el backend; solo se lee. Cuando
-// exista suficiente historial real de ventas, se recalculan las reglas y se
-// insertan nuevas filas con origen = 'real'.
-
-model ReglaAsociacion {
-  id          Int      @id @default(autoincrement())
-  antecedente String
-  consecuente String
-  soporte     Decimal  @db.Decimal(6, 4)
-  confianza   Decimal  @db.Decimal(6, 4)
-  lift        Decimal  @db.Decimal(6, 4)
-  tipo        String   @db.VarChar(30)
-  origen      String   @default("simulado") @db.VarChar(30)
-  creadoEn    DateTime @default(now()) @map("creado_en")
-
-  @@index([antecedente])
-  @@map("reglas_asociacion")
-}

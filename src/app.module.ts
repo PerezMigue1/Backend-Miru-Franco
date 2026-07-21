@@ -26,7 +26,6 @@ import { ProveedoresModule } from './proveedores/proveedores.module';
 import { ComprasModule } from './compras/compras.module';
 import { CotizacionesModule } from './cotizaciones/cotizaciones.module';
 import { ReportesModule } from './reportes/reportes.module';
-import { RecomendacionesModule } from './recomendaciones/recomendaciones.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -66,7 +65,6 @@ import { AppController } from './app.controller';
     CitasModule,
     PosModule,
     OauthModule,
-    RecomendacionesModule,
   ],
   controllers: [AppController],
 })
