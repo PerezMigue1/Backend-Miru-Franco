@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { CreatePagoDto } from './dto/create-pago.dto';
@@ -10,6 +10,34 @@ export class PagosService {
     private readonly prisma: PrismaService,
     private readonly access: EcommerceAccessService,
   ) {}
+
+  /**
+   * Acceso a escritura de pagos: dueño del pedido, admin, o quien tenga `caja:escritura`
+   * (cobro físico en el salón — la estilista dueña, no el cliente ni el técnico admin).
+   * Acotado a PagosService: NO reutiliza `EcommerceAccessService.assertOwnerOrAdmin`
+   * (compartido con direcciones/pedidos) para no tocar comportamiento fuera de pagos.
+   * Mismo mensaje/shape de error que `assertOwnerOrAdmin` para no cambiar el contrato.
+   */
+  private async assertPuedeGestionarPago(
+    pedidoId: number,
+    solicitanteId: string,
+    rolUsuario?: string,
+    permisosUsuario?: string[],
+  ): Promise<void> {
+    const pedido = await this.prisma.pedido.findUnique({
+      where: { id: pedidoId },
+      select: { usuarioId: true },
+    });
+    if (!pedido) throw new NotFoundException('Pedido no encontrado');
+
+    const esDueño = pedido.usuarioId === solicitanteId;
+    const esAdmin = rolUsuario === 'admin';
+    const tieneCaja = !!permisosUsuario?.includes('caja:escritura');
+
+    if (!esDueño && !esAdmin && !tieneCaja) {
+      throw new ForbiddenException('No tienes permiso para acceder a este recurso');
+    }
+  }
 
   async listarPorPedido(pedidoId: number, solicitanteId: string) {
     await this.access.assertPedido(solicitanteId, pedidoId);
@@ -27,8 +55,13 @@ export class PagosService {
     return { success: true, data: pago };
   }
 
-  async crear(solicitanteId: string, dto: CreatePagoDto) {
-    await this.access.assertPedido(solicitanteId, dto.pedidoId);
+  async crear(
+    solicitanteId: string,
+    dto: CreatePagoDto,
+    rolUsuario?: string,
+    permisosUsuario?: string[],
+  ) {
+    await this.assertPuedeGestionarPago(dto.pedidoId, solicitanteId, rolUsuario, permisosUsuario);
     const data = await this.prisma.pago.create({
       data: {
         pedidoId: dto.pedidoId,
@@ -46,10 +79,16 @@ export class PagosService {
     return { success: true, data };
   }
 
-  async actualizar(id: number, solicitanteId: string, dto: UpdatePagoDto) {
+  async actualizar(
+    id: number,
+    solicitanteId: string,
+    dto: UpdatePagoDto,
+    rolUsuario?: string,
+    permisosUsuario?: string[],
+  ) {
     const pago = await this.prisma.pago.findUnique({ where: { id } });
     if (!pago) throw new NotFoundException('Pago no encontrado');
-    await this.access.assertPedido(solicitanteId, pago.pedidoId);
+    await this.assertPuedeGestionarPago(pago.pedidoId, solicitanteId, rolUsuario, permisosUsuario);
 
     const data = await this.prisma.pago.update({
       where: { id },
