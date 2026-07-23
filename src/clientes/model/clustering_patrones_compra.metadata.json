@@ -1,0 +1,49 @@
+{
+  "nombre": "Segmentación de patrones de compra Miru Franco",
+  "modelo": "K-Means",
+  "filas_entrenamiento": 1017,
+  "fecha_corte": "2026-07-22T00:00:00",
+  "recencia_sin_compra": 354.0,
+  "features": [
+    "frecuencia_total",
+    "productos_totales",
+    "servicios_comprados",
+    "gasto_total",
+    "ticket_promedio",
+    "proporcion_online",
+    "recencia_dias"
+  ],
+  "metricas": {
+    "k": 4,
+    "silhouette": 0.5859749166116862,
+    "davies_bouldin": 0.7415301542113415,
+    "calinski_harabasz": 3108.319112895572,
+    "inercia": 697.5794892297467
+  },
+  "segmentos": [
+    {
+      "cluster": 0,
+      "nombre": "Recientes de consumo bajo",
+      "accion_sugerida": "Seguimiento posterior a la compra y promoción para una segunda visita.",
+      "clientes_entrenamiento": 191
+    },
+    {
+      "cluster": 1,
+      "nombre": "Sin compras registradas",
+      "accion_sugerida": "Campaña de activación o bienvenida y medición de la primera compra.",
+      "clientes_entrenamiento": 273
+    },
+    {
+      "cluster": 2,
+      "nombre": "Frecuentes de alto valor",
+      "accion_sugerida": "Programa de fidelidad, beneficios exclusivos y recomendaciones personalizadas.",
+      "clientes_entrenamiento": 260
+    },
+    {
+      "cluster": 3,
+      "nombre": "Clientes ocasionales por reactivar",
+      "accion_sugerida": "Recordatorios digitales, productos complementarios y reactivación por recencia.",
+      "clientes_entrenamiento": 293
+    }
+  ]
+}

@@ -4,7 +4,7 @@
   "description": "Backend API con NestJS, TypeScript y Prisma",
   "main": "dist/main.js",
   "scripts": {
-    "build": "prisma generate && npx tsc",
+    "build": "prisma generate && npx tsc && node scripts/copiar-modelo-runtime.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",

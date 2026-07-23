@@ -1,0 +1,44 @@
+{
+  "version_esquema": 1,
+  "nombre": "clasificacion_cancelacion_citas",
+  "modelo": "Random Forest",
+  "origen": "Libreta_Clasificacion_Cancelacion_Citas_Miru_Franco_CORREGIDA",
+  "random_state": 42,
+  "filas_entrenamiento": 3964,
+  "version_sklearn": "1.8.0",
+  "features": [
+    "dias_anticipacion",
+    "hora_cita",
+    "mes_cita",
+    "es_fin_semana",
+    "citas_previas_cliente",
+    "cancelaciones_previas_cliente",
+    "completadas_previas_cliente",
+    "tasa_cancelacion_cliente",
+    "cliente_nuevo",
+    "antiguedad_cliente_dias",
+    "precio_servicio",
+    "duracion_servicio",
+    "requiere_evaluacion",
+    "dia_semana",
+    "franja_horaria",
+    "servicio_id",
+    "categoria_servicio",
+    "especialista_id"
+  ],
+  "umbral": 0.356,
+  "umbral_oof_entorno": 0.34259932131731574,
+  "umbrales_riesgo": {
+    "medio": 0.21359999999999998,
+    "alto": 0.356
+  },
+  "metricas_holdout_clientes": {
+    "accuracy": 0.7471554993678887,
+    "balanced_accuracy": 0.7090407342971984,
+    "precision": 0.4146341463414634,
+    "recall": 0.6455696202531646,
+    "f1": 0.504950495049505,
+    "roc_auc": 0.779510868478413,
+    "pr_auc": 0.4859606844391089
+  }
+}

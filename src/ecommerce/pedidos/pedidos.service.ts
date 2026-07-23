@@ -17,6 +17,7 @@ import {
   decrementarStockPresentaciones,
   incrementarStockPorLineas,
 } from '../common/pedido-inventario.util';
+import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
 
 @Injectable()
 export class PedidosService {
@@ -48,6 +49,7 @@ export class PedidosService {
     },
   ) {
     const rol = await this.access.getRol(solicitanteId);
+    const puedeVerOtros = await puedeVerPedidosDeOtros(this.prisma, rol);
     const {
       usuarioId: filtroUsuarioId,
       estado,
@@ -62,13 +64,13 @@ export class PedidosService {
     const where: Prisma.PedidoWhereInput = {};
 
     if (filtroUsuarioId) {
-      if (!this.access.isAdmin(rol)) {
+      if (!puedeVerOtros) {
         throw new ForbiddenException(
-          'Solo administradores pueden filtrar pedidos por usuarioId',
+          'No tienes permiso para filtrar pedidos por usuarioId',
         );
       }
       where.usuarioId = filtroUsuarioId;
-    } else if (!this.access.isAdmin(rol)) {
+    } else if (!puedeVerOtros) {
       where.usuarioId = solicitanteId;
     }
 
@@ -144,12 +146,20 @@ export class PedidosService {
   }
 
   async obtenerPorId(id: number, solicitanteId: string) {
-    await this.access.assertPedido(solicitanteId, id);
     const data = await this.prisma.pedido.findUnique({
       where: { id },
       include: this.includeDefault(),
     });
     if (!data) throw new NotFoundException('Pedido no encontrado');
+
+    const esDueno = data.usuarioId === solicitanteId;
+    if (!esDueno) {
+      const rol = await this.access.getRol(solicitanteId);
+      const puedeVerOtros = await puedeVerPedidosDeOtros(this.prisma, rol);
+      if (!puedeVerOtros) {
+        throw new ForbiddenException('No tienes permiso para acceder a este recurso');
+      }
+    }
     return { success: true, data };
   }
 
@@ -297,12 +307,19 @@ export class PedidosService {
     solicitanteId: string,
     dto: UpdatePedidoDto,
   ) {
-    const { usuarioIdPedido } = await this.access.assertPedido(
-      solicitanteId,
-      id,
-    );
     const actual = await this.prisma.pedido.findUnique({ where: { id } });
     if (!actual) throw new NotFoundException('Pedido no encontrado');
+    const usuarioIdPedido = actual.usuarioId;
+
+    const rol = await this.access.getRol(solicitanteId);
+    const puedeCambiarEstado = await puedeVerPedidosDeOtros(this.prisma, rol);
+
+    // Entrada al método: dueño, admin, o quien tenga caja:escritura (mismo criterio
+    // único de lectura/gestión de pedidos ajenos). Qué campos puede tocar cada quien
+    // se decide más abajo, campo por campo — esto solo decide quién puede intentarlo.
+    if (usuarioIdPedido !== solicitanteId && !puedeCambiarEstado) {
+      throw new ForbiddenException('No tienes permiso para acceder a este recurso');
+    }
 
     if (dto.direccionEnvioId) {
       const dir = await this.prisma.direccionUsuario.findUnique({
@@ -314,8 +331,6 @@ export class PedidosService {
         );
       }
     }
-
-    const rol = await this.access.getRol(solicitanteId);
     const data = await this.prisma.$transaction(async (tx) => {
       const itemsStock = await tx.pedidoItem.findMany({
         where: { pedidoId: id },
@@ -346,11 +361,15 @@ export class PedidosService {
         }),
       };
 
+      // costoEnvio/impuestos/descuento: SOLO admin, sin cambios respecto a antes.
       if (!this.access.isAdmin(rol)) {
-        delete (updateData as any).estado;
         delete (updateData as any).costoEnvio;
         delete (updateData as any).impuestos;
         delete (updateData as any).descuento;
+      }
+      // estado: admin O caja:escritura (la jefa cobrando/marcando en el salón).
+      if (!puedeCambiarEstado) {
+        delete (updateData as any).estado;
       }
 
       const keys = Object.keys(updateData).filter(
@@ -361,7 +380,7 @@ export class PedidosService {
       }
 
       if (
-        this.access.isAdmin(rol) &&
+        puedeCambiarEstado &&
         dto.estado !== undefined &&
         dto.estado !== estadoAnterior
       ) {
@@ -401,14 +420,14 @@ export class PedidosService {
       if (
         dto.estado !== undefined &&
         dto.estado !== estadoAnterior &&
-        this.access.isAdmin(rol)
+        puedeCambiarEstado
       ) {
         await tx.historialEstadoPedido.create({
           data: {
             pedidoId: id,
             estadoAnterior,
             estadoNuevo: dto.estado,
-            origen: 'api.actualizar_pedido_admin',
+            origen: 'api.actualizar_pedido',
             usuarioId: solicitanteId,
           },
         });

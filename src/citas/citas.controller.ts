@@ -20,11 +20,16 @@ import { ReprogramarCitaDto } from './dto/reprogramar-cita.dto';
 import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
+import { PredecirRiesgoCitasDto } from './dto/predecir-riesgo-citas.dto';
+import { RiesgoCancelacionService } from './riesgo-cancelacion.service';
 
 @Controller('citas')
 @UseGuards(JwtAuthGuard, PermisosGuard)
 export class CitasController {
-  constructor(private readonly citasService: CitasService) {}
+  constructor(
+    private readonly citasService: CitasService,
+    private readonly riesgoCancelacionService: RiesgoCancelacionService,
+  ) {}
 
   /** GET /api/citas — listado paginado con filtros */
   @Get()
@@ -74,6 +79,19 @@ export class CitasController {
   @Get('disponibilidad')
   disponibilidad(@Query() query: DisponibilidadCitasDto) {
     return this.citasService.disponibilidad(query);
+  }
+
+  /**
+   * POST /api/citas/riesgo-cancelacion
+   * Calcula en lote las 18 variables de la libreta y ejecuta el Random Forest.
+   * Solo personal autorizado: el puntaje sirve para priorizar recordatorios,
+   * nunca para rechazar una cita.
+   */
+  @Post('riesgo-cancelacion')
+  @Permisos('citas:escritura', 'citas:asignadas')
+  async predecirRiesgoCancelacion(@Body() dto: PredecirRiesgoCitasDto) {
+    const data = await this.riesgoCancelacionService.predecirLote(dto.citaIds);
+    return { success: true, count: data.length, data };
   }
 
   /** GET /api/citas/:id */

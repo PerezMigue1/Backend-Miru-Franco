@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
+import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
 import { CreatePagoDto } from './dto/create-pago.dto';
 import { UpdatePagoDto } from './dto/update-pago.dto';
 
@@ -39,8 +40,28 @@ export class PagosService {
     }
   }
 
+  /**
+   * Lectura de pagos de un pedido: dueño del pedido, admin, o quien tenga
+   * `caja:escritura` (la estilista necesita ver el pago de una clienta para
+   * poder cobrarlo). Mismo criterio único que PedidosService — `puedeVerPedidosDeOtros`.
+   */
+  private async assertLecturaPago(solicitanteId: string, pedidoId: number): Promise<void> {
+    const pedido = await this.prisma.pedido.findUnique({
+      where: { id: pedidoId },
+      select: { usuarioId: true },
+    });
+    if (!pedido) throw new NotFoundException('Pedido no encontrado');
+    if (pedido.usuarioId === solicitanteId) return;
+
+    const rol = await this.access.getRol(solicitanteId);
+    const puedeVerOtros = await puedeVerPedidosDeOtros(this.prisma, rol);
+    if (!puedeVerOtros) {
+      throw new ForbiddenException('No tienes permiso para acceder a este recurso');
+    }
+  }
+
   async listarPorPedido(pedidoId: number, solicitanteId: string) {
-    await this.access.assertPedido(solicitanteId, pedidoId);
+    await this.assertLecturaPago(solicitanteId, pedidoId);
     const data = await this.prisma.pago.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'desc' },
@@ -51,7 +72,7 @@ export class PagosService {
   async obtenerPorId(id: number, solicitanteId: string) {
     const pago = await this.prisma.pago.findUnique({ where: { id } });
     if (!pago) throw new NotFoundException('Pago no encontrado');
-    await this.access.assertPedido(solicitanteId, pago.pedidoId);
+    await this.assertLecturaPago(solicitanteId, pago.pedidoId);
     return { success: true, data: pago };
   }
 

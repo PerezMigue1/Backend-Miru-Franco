@@ -1,0 +1,179 @@
+{
+  "version_esquema": 1,
+  "nombre": "Segmentación de patrones de compra Miru Franco",
+  "modelo": "K-Means",
+  "origen": "MIRUFRANCO_Clustering_COMPLETA_CORREGIDA",
+  "random_state": 42,
+  "filas_entrenamiento": 1017,
+  "version_sklearn": "1.8.0",
+  "dataset_fuente": "fragrant-union-40051633_production_miru_2026-07-22_21-54-51.csv",
+  "fecha_corte": "2026-07-22T00:00:00",
+  "recencia_sin_compra": 354.0,
+  "features": [
+    "frecuencia_total",
+    "productos_totales",
+    "servicios_comprados",
+    "gasto_total",
+    "ticket_promedio",
+    "proporcion_online",
+    "recencia_dias"
+  ],
+  "orden_transformado": [
+    "frecuencia_total",
+    "productos_totales",
+    "servicios_comprados",
+    "gasto_total",
+    "ticket_promedio",
+    "recencia_dias",
+    "proporcion_online"
+  ],
+  "preprocesamiento": {
+    "sesgadas": {
+      "features": [
+        "frecuencia_total",
+        "productos_totales",
+        "servicios_comprados",
+        "gasto_total",
+        "ticket_promedio",
+        "recencia_dias"
+      ],
+      "imputacion": [
+        3.0,
+        6.0,
+        1.0,
+        2484.0,
+        883.0,
+        72.0
+      ],
+      "transformacion": "log1p",
+      "media": [
+        1.3351262178078223,
+        1.9010990312903824,
+        0.9784526497980395,
+        6.232908397132488,
+        5.078290794741611,
+        4.313664914563523
+      ],
+      "escala": [
+        1.0378129913179313,
+        1.4960268290993073,
+        0.929503112048253,
+        3.915457920236727,
+        3.094944172000481,
+        1.3030760191650643
+      ]
+    },
+    "acotadas": {
+      "features": [
+        "proporcion_online"
+      ],
+      "imputacion": [
+        0.0
+      ],
+      "media": [
+        0.5229779673648127
+      ],
+      "escala": [
+        0.3488749583946591
+      ]
+    }
+  },
+  "kmeans": {
+    "numero_clusters": 4,
+    "centroides": [
+      [
+        -0.3055041045100245,
+        -0.3090386042950929,
+        -0.4522768304827118,
+        0.2571108266695623,
+        0.523770387009998,
+        -1.2272347555848708,
+        0.5888199550784751
+      ],
+      [
+        -1.286480540306526,
+        -1.2707653327547295,
+        -1.0526620482656817,
+        -1.5918721447415407,
+        -1.6408343777843164,
+        1.1959800134380942,
+        -1.4990412890947655
+      ],
+      [
+        1.3660377296289223,
+        1.3751412740582316,
+        1.3272804238053026,
+        0.9520924309924524,
+        0.7110064122427238,
+        -0.7116318452674792,
+        0.607464546505399
+      ],
+      [
+        0.18563365788933836,
+        0.16521698978588245,
+        0.0978454048100706,
+        0.4707470838311137,
+        0.5564709011368635,
+        0.3171453051797113,
+        0.47383234952723136
+      ]
+    ]
+  },
+  "nombres_segmentos": {
+    "1": "Sin compras registradas",
+    "0": "Recientes de consumo bajo",
+    "3": "Clientes ocasionales por reactivar",
+    "2": "Frecuentes de alto valor"
+  },
+  "acciones_segmentos": {
+    "1": "Campaña de activación o bienvenida y medición de la primera compra.",
+    "0": "Seguimiento posterior a la compra y promoción para una segunda visita.",
+    "3": "Recordatorios digitales, productos complementarios y reactivación por recencia.",
+    "2": "Programa de fidelidad, beneficios exclusivos y recomendaciones personalizadas."
+  },
+  "perfil_promedio": {
+    "0": {
+      "frecuencia_total": 1.8586387434554974,
+      "productos_totales": 3.5392670157068062,
+      "servicios_comprados": 0.9109947643979057,
+      "gasto_total": 1536.0458115183246,
+      "ticket_promedio": 865.3941317626527,
+      "proporcion_online": 0.7284025046947608,
+      "recencia_dias": 17.76439790575916
+    },
+    "1": {
+      "frecuencia_total": 0.0,
+      "productos_totales": 0.0,
+      "servicios_comprados": 0.0,
+      "gasto_total": 0.0,
+      "ticket_promedio": 0.0,
+      "proporcion_online": 0.0,
+      "recencia_dias": 354.0
+    },
+    "2": {
+      "frecuencia_total": 15.723076923076922,
+      "productos_totales": 59.59230769230769,
+      "servicios_comprados": 10.011538461538462,
+      "gasto_total": 26875.32980769231,
+      "ticket_promedio": 1539.2653935525516,
+      "proporcion_online": 0.7349071357531143,
+      "recencia_dias": 33.46923076923077
+    },
+    "3": {
+      "frecuencia_total": 3.7098976109215016,
+      "productos_totales": 7.982935153583618,
+      "servicios_comprados": 2.2150170648464163,
+      "gasto_total": 3384.1058020477817,
+      "ticket_promedio": 920.2961258735576,
+      "proporcion_online": 0.688286208592169,
+      "recencia_dias": 130.77815699658703
+    }
+  },
+  "metricas": {
+    "k": 4,
+    "silhouette": 0.5859749166116862,
+    "davies_bouldin": 0.7415301542113415,
+    "calinski_harabasz": 3108.319112895572,
+    "inercia": 697.5794892297467
+  }
+}
