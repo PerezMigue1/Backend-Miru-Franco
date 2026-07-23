@@ -176,25 +176,27 @@ export class CitasService {
    * Especialistas para que el cliente elija al agendar — solo lo mínimo para decidir.
    * Nunca email/teléfono (staff, no se expone al público); `puesto`/`especialidades`
    * son reales de `PerfilEmpleado` cuando existe, nunca inventados.
+   * Parte de `PerfilEmpleado` (no de `Usuario`) para exigir perfil.activo Y
+   * usuario.activo — son condiciones distintas, un perfil puede estar de baja
+   * con la cuenta todavía activa.
    */
   async listarEspecialistas() {
-    const usuarios = await this.prisma.usuario.findMany({
-      where: { rol: { in: [...ROLES_ESPECIALISTA] }, activo: true },
+    const perfiles = await this.prisma.perfilEmpleado.findMany({
+      where: { activo: true, usuario: { activo: true, rol: { in: [...ROLES_ESPECIALISTA] } } },
       select: {
-        id: true,
-        nombre: true,
-        foto: true,
-        perfilEmpleado: { select: { puesto: true, especialidades: true } },
+        puesto: true,
+        especialidades: true,
+        usuario: { select: { id: true, nombre: true, foto: true } },
       },
-      orderBy: { nombre: 'asc' },
+      orderBy: { usuario: { nombre: 'asc' } },
     });
 
-    const data = usuarios.map((u) => ({
-      id: u.id,
-      nombre: u.nombre,
-      foto: u.foto,
-      puesto: u.perfilEmpleado?.puesto ?? 'Especialista',
-      especialidades: u.perfilEmpleado?.especialidades ?? [],
+    const data = perfiles.map((p) => ({
+      id: p.usuario.id,
+      nombre: p.usuario.nombre,
+      foto: p.usuario.foto,
+      puesto: p.puesto,
+      especialidades: p.especialidades,
     }));
 
     return { success: true, count: data.length, data };
