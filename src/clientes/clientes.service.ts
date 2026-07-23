@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
+import { containsSQLInjection, sanitizeInput, buildPhoneLookupCandidates } from '../common/utils/security.util';
 import { BadRequestException } from '@nestjs/common';
 import { ListClientesDto } from './dto/list-clientes.dto';
 
@@ -25,6 +25,10 @@ export class ClientesService {
         { nombre: { contains: q, mode: 'insensitive' } },
         { email:  { contains: q, mode: 'insensitive' } },
         { telefono: { contains: q, mode: 'insensitive' } },
+        // Variantes de teléfono (con/sin lada 52, con/sin "+") — cubre que la cajera
+        // teclee "7712345678" y encuentre un cliente guardado como "+527712345678".
+        // Vacío (búsquedas por nombre) no agrega nada al OR.
+        ...buildPhoneLookupCandidates(q).map((tel) => ({ telefono: { contains: tel } })),
       ];
     }
 

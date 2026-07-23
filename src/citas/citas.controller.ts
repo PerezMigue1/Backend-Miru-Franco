@@ -19,6 +19,7 @@ import { ListCitasDto } from './dto/list-citas.dto';
 import { ReprogramarCitaDto } from './dto/reprogramar-cita.dto';
 import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
+import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 
 @Controller('citas')
 @UseGuards(JwtAuthGuard, PermisosGuard)
@@ -53,6 +54,26 @@ export class CitasController {
     @Request() req: any,
   ) {
     return this.citasService.listarCalendario(desde, hasta, req.user.id, req.rolUsuario, especialistaId);
+  }
+
+  /**
+   * GET /api/citas/especialistas — para que el cliente elija a quién agendar.
+   * Sin @Permisos: cualquier autenticado (el cliente no tiene clave de citas de staff).
+   * Debe ir antes de `:id` para que Nest no intente parsear "especialistas" como id numérico.
+   */
+  @Get('especialistas')
+  listarEspecialistas() {
+    return this.citasService.listarEspecialistas();
+  }
+
+  /**
+   * GET /api/citas/disponibilidad?especialistaId=&fecha=YYYY-MM-DD&servicioId=
+   * Slots libres de ese especialista ese día, para la duración real del servicio.
+   * Sin @Permisos, mismo motivo que especialistas. Debe ir antes de `:id`.
+   */
+  @Get('disponibilidad')
+  disponibilidad(@Query() query: DisponibilidadCitasDto) {
+    return this.citasService.disponibilidad(query);
   }
 
   /** GET /api/citas/:id */

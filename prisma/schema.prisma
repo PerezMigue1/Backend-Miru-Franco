@@ -119,6 +119,10 @@ model Usuario {
   comprasRegistradas         Compra[]
   cotizaciones               Cotizacion[]
   facturasCreadas            Factura[]
+  solicitudesPermiso         SolicitudPermiso[] @relation("SolicitudesComoSolicitante")
+  solicitudesResueltas       SolicitudPermiso[] @relation("SolicitudesComoResolutor")
+  asistencias                RegistroAsistencia[] @relation("AsistenciaComoEmpleado")
+  asistenciasCorregidas      RegistroAsistencia[] @relation("AsistenciaComoCorrector")
 
   @@index([activo])
   @@index([email])
@@ -598,12 +602,86 @@ model PerfilEmpleado {
   @@map("perfiles_empleado")
 }
 
+enum TipoSolicitud {
+  permiso
+  vacaciones
+  falta_justificada
+  incapacidad
+}
+
+enum EstadoSolicitud {
+  pendiente
+  aprobada
+  rechazada
+}
+
+model SolicitudPermiso {
+  id                   Int             @id @default(autoincrement())
+  tipo                 TipoSolicitud
+  fechaInicio          DateTime        @map("fecha_inicio")
+  fechaFin             DateTime        @map("fecha_fin")
+  motivo               String          @db.Text
+  estado               EstadoSolicitud @default(pendiente)
+  comentarioResolucion String?         @map("comentario_resolucion") @db.Text
+  creadoEn             DateTime        @default(now()) @map("creado_en")
+  actualizadoEn        DateTime        @updatedAt @map("actualizado_en")
+
+  usuario   Usuario @relation("SolicitudesComoSolicitante", fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @map("usuario_id")
+
+  resueltoPor   Usuario? @relation("SolicitudesComoResolutor", fields: [resueltoPorId], references: [id], onDelete: SetNull)
+  resueltoPorId String?  @map("resuelto_por_id")
+
+  @@index([usuarioId])
+  @@index([estado])
+  @@map("solicitudes_permiso")
+}
+
+// fecha en formato "YYYY-MM-DD" (hora de México), no DateTime: evita que el día de un
+// marcado dependa de la zona horaria del servidor. Un registro por (usuarioId, fecha).
+model RegistroAsistencia {
+  id                Int       @id @default(autoincrement())
+  fecha             String    @map("fecha")
+  horaEntrada       DateTime  @map("hora_entrada")
+  horaSalida        DateTime? @map("hora_salida")
+  cerradoAutomatico Boolean   @default(false) @map("cerrado_automatico")
+  creadoEn          DateTime  @default(now()) @map("creado_en")
+  actualizadoEn     DateTime  @updatedAt @map("actualizado_en")
+
+  usuario   Usuario @relation("AsistenciaComoEmpleado", fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @map("usuario_id")
+
+  corregidoPor   Usuario? @relation("AsistenciaComoCorrector", fields: [corregidoPorId], references: [id], onDelete: SetNull)
+  corregidoPorId String?  @map("corregido_por_id")
+
+  @@unique([usuarioId, fecha])
+  @@index([fecha])
+  @@map("registros_asistencia")
+}
+
 model PermisoRol {
   id     Int      @id @default(autoincrement())
   rol    String   @unique
   claves String[]
 
   @@map("permisos_rol")
+}
+
+// Fila única (id fijo = 1): horario y tarifa de hora extra del salón, iguales para todo el personal.
+model ConfiguracionSalon {
+  id                  Int      @id @default(1)
+  entradaLunesViernes String   @map("entrada_lunes_viernes")
+  salidaLunesViernes  String   @map("salida_lunes_viernes")
+  entradaSabado       String   @map("entrada_sabado")
+  salidaSabado        String   @map("salida_sabado")
+  entradaDomingo      String?  @map("entrada_domingo")
+  salidaDomingo       String?  @map("salida_domingo")
+  margenGraciaMinutos Int      @default(15) @map("margen_gracia_minutos")
+  tarifaHoraExtra     Decimal  @map("tarifa_hora_extra") @db.Decimal(10, 2)
+  creadoEn            DateTime @default(now()) @map("creado_en")
+  actualizadoEn       DateTime @updatedAt @map("actualizado_en")
+
+  @@map("configuracion_salon")
 }
 
 // Paquetes promocionales (tabla existente en BD)

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -89,6 +90,23 @@ export class PosService {
       include: this.incluirVentaRelaciones(),
     });
     if (!venta) throw new NotFoundException(`Venta ${id} no encontrada`);
+    return { success: true, data: venta };
+  }
+
+  /**
+   * El cliente descarga SU ticket — verificación de propiedad aquí, no en el guard
+   * (que solo exige estar autenticado). Si la venta es de otro cliente, 403 sin
+   * incluir ningún dato de la venta en el mensaje.
+   */
+  async obtenerMiTicket(id: number, usuarioId: string) {
+    const venta = await this.prisma.ventaLocal.findUnique({
+      where: { id },
+      include: this.incluirVentaRelaciones(),
+    });
+    if (!venta) throw new NotFoundException('Venta no encontrada');
+    if (venta.clienteId !== usuarioId) {
+      throw new ForbiddenException('No tienes permiso para acceder a esta venta');
+    }
     return { success: true, data: venta };
   }
 
@@ -216,6 +234,31 @@ export class PosService {
         include: this.incluirVentaRelaciones(),
       });
     });
+
+    // Fuera de la transacción a propósito: la venta ya está comprometida en BD en este
+    // punto. Un fallo aquí (o incluso adentro del try) nunca debe poder revertir la venta —
+    // por eso nunca se hace dentro del `$transaction` de arriba.
+    if (venta.clienteId) {
+      try {
+        const fecha = new Intl.DateTimeFormat('es-MX', {
+          timeZone: 'America/Mexico_City',
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(venta.creadoEn);
+        const totalFmt = `$${Number(venta.total).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        await this.prisma.notificacion.create({
+          data: {
+            usuarioId: venta.clienteId,
+            tipo: 'venta',
+            titulo: 'Tu ticket de compra',
+            mensaje: `Folio ${venta.folio} · Total ${totalFmt} · ${fecha}`,
+            metadata: { ventaId: venta.id, folio: venta.folio, total: Number(venta.total) },
+          },
+        });
+      } catch (e) {
+        console.error(`No se pudo crear la notificación de la venta ${venta.id} (no afecta la venta):`, e);
+      }
+    }
 
     return { success: true, data: venta };
   }

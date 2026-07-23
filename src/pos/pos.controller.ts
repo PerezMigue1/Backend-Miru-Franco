@@ -38,6 +38,16 @@ export class PosController {
     return this.posService.obtenerVenta(id);
   }
 
+  /**
+   * GET /api/pos/ventas/:id/mi-ticket — el cliente descarga SU ticket.
+   * Sin @Permisos (cualquier autenticado pasa el guard); la verificación real es de
+   * propiedad, dentro del service — comparar venta.clienteId contra el JWT.
+   */
+  @Get('ventas/:id/mi-ticket')
+  miTicket(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    return this.posService.obtenerMiTicket(id, req.user.id);
+  }
+
   /** POST /api/pos/ventas */
   @Post('ventas')
   @Permisos('ventas:escritura')

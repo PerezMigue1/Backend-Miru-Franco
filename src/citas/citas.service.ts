@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
+import { ConfiguracionService } from '../configuracion/configuracion.service';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
 import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
 import { CreateCitaDto } from './dto/create-cita.dto';
@@ -14,15 +15,22 @@ import { ListCitasDto } from './dto/list-citas.dto';
 import { ReprogramarCitaDto } from './dto/reprogramar-cita.dto';
 import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
+import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 
 const ROLES_ESPECIALISTA = ['estilista', 'empleado', 'becario'] as const;
 const ESTADOS_FINALES = ['cancelada', 'completada', 'no_asistio'] as const;
+/** Mismos estados que bloquean solapamiento en `validarSolapamiento` — un slot es
+ *  "libre" exactamente cuando `crear()` lo aceptaría, sin lista propia que diverja. */
+const ESTADOS_BLOQUEAN_SLOT = ['pendiente', 'confirmada', 'en_curso'] as const;
+const INTERVALO_SLOT_MINUTOS = 30;
+const OFFSET_MEXICO = '-06:00';
 
 @Injectable()
 export class CitasService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventarioService: InventarioService,
+    private readonly configuracionService: ConfiguracionService,
   ) {}
 
   // ─── helpers ────────────────────────────────────────────────────────────────
@@ -162,6 +170,132 @@ export class CitasService {
     }
 
     return { success: true, data: cita };
+  }
+
+  /**
+   * Especialistas para que el cliente elija al agendar — solo lo mínimo para decidir.
+   * Nunca email/teléfono (staff, no se expone al público); `puesto`/`especialidades`
+   * son reales de `PerfilEmpleado` cuando existe, nunca inventados.
+   */
+  async listarEspecialistas() {
+    const usuarios = await this.prisma.usuario.findMany({
+      where: { rol: { in: [...ROLES_ESPECIALISTA] }, activo: true },
+      select: {
+        id: true,
+        nombre: true,
+        foto: true,
+        perfilEmpleado: { select: { puesto: true, especialidades: true } },
+      },
+      orderBy: { nombre: 'asc' },
+    });
+
+    const data = usuarios.map((u) => ({
+      id: u.id,
+      nombre: u.nombre,
+      foto: u.foto,
+      puesto: u.perfilEmpleado?.puesto ?? 'Especialista',
+      especialidades: u.perfilEmpleado?.especialidades ?? [],
+    }));
+
+    return { success: true, count: data.length, data };
+  }
+
+  /**
+   * Slots libres de un especialista en una fecha, para un servicio (su duración real).
+   * Reutiliza `ConfiguracionService` (horario del salón), `normalizarRangoFechas`
+   * (mismo criterio de timezone que `listarDia`) y los mismos estados que bloquean
+   * solapamiento en `validarSolapamiento` — nada de lógica nueva de timezone/estado.
+   */
+  async disponibilidad(query: DisponibilidadCitasDto) {
+    const { especialistaId, fecha, servicioId } = query;
+
+    const especialista = await this.prisma.usuario.findUnique({
+      where: { id: especialistaId },
+      select: { id: true, rol: true, activo: true },
+    });
+    if (!especialista || !especialista.activo || !ROLES_ESPECIALISTA.includes(especialista.rol as any)) {
+      throw new NotFoundException('Especialista no encontrado o inactivo');
+    }
+
+    const servicio = await this.prisma.servicio.findUnique({
+      where: { id: servicioId },
+      select: { id: true, activo: true, duracionMinutos: true },
+    });
+    if (!servicio || !servicio.activo) {
+      throw new NotFoundException('Servicio no encontrado o inactivo');
+    }
+    const duracionMinutos = servicio.duracionMinutos;
+
+    const { data: config } = await this.configuracionService.obtener();
+    const [y, m, d] = fecha.split('-').map(Number);
+    const diaSemana = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=domingo … 6=sábado
+
+    let entrada: string | null;
+    let salida: string | null;
+    if (diaSemana === 0) {
+      entrada = config.entradaDomingo;
+      salida = config.salidaDomingo;
+    } else if (diaSemana === 6) {
+      entrada = config.entradaSabado;
+      salida = config.salidaSabado;
+    } else {
+      entrada = config.entradaLunesViernes;
+      salida = config.salidaLunesViernes;
+    }
+
+    const base = {
+      success: true,
+      fecha,
+      especialistaId,
+      servicioId,
+      duracionMinutos,
+    };
+
+    if (!entrada || !salida) {
+      return { ...base, abierto: false, motivo: 'El salón no abre ese día', slots: [] };
+    }
+
+    const inicioDia = new Date(`${fecha}T${entrada}:00${OFFSET_MEXICO}`);
+    const finDia = new Date(`${fecha}T${salida}:00${OFFSET_MEXICO}`);
+
+    const { gte, lte } = normalizarRangoFechas(fecha, fecha);
+    const citasDelDia = await this.prisma.cita.findMany({
+      where: {
+        especialistaId,
+        estado: { in: [...ESTADOS_BLOQUEAN_SLOT] },
+        fechaHoraInicio: { gte, lte },
+      },
+      select: { fechaHoraInicio: true, fechaHoraFin: true },
+    });
+
+    const ahora = new Date();
+    const slots: { inicio: string; fin: string; horaLocal: string }[] = [];
+    const duracionMs = duracionMinutos * 60_000;
+    const intervaloMs = INTERVALO_SLOT_MINUTOS * 60_000;
+
+    for (let inicio = inicioDia.getTime(); inicio + duracionMs <= finDia.getTime(); inicio += intervaloMs) {
+      const inicioSlot = new Date(inicio);
+      const finSlot = new Date(inicio + duracionMs);
+
+      if (inicioSlot <= ahora) continue;
+
+      const seSolapa = citasDelDia.some(
+        (c) => inicioSlot < c.fechaHoraFin && finSlot > c.fechaHoraInicio,
+      );
+      if (seSolapa) continue;
+
+      slots.push({
+        inicio: inicioSlot.toISOString(),
+        fin: finSlot.toISOString(),
+        horaLocal: inicioSlot.toLocaleTimeString('es-MX', {
+          timeZone: 'America/Mexico_City',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      });
+    }
+
+    return { ...base, abierto: true, motivo: null, slots };
   }
 
   // ─── escrituras ──────────────────────────────────────────────────────────────

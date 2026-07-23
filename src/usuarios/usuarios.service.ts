@@ -9,7 +9,7 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
-import { sanitizeInput, containsSQLInjection, sanitizeForLogging, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone } from '../common/utils/security.util';
+import { sanitizeInput, containsSQLInjection, sanitizeForLogging, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone, buildPhoneLookupCandidates } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
 
@@ -57,32 +57,6 @@ export class UsuariosService {
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     this.twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
     this.twilioClient = accountSid && authToken ? twilio(accountSid, authToken) : null;
-  }
-
-  private buildPhoneLookupCandidates(phone: string): string[] {
-    const normalized = normalizePhone(phone);
-    const digits = normalized.replace(/\D/g, '');
-    const candidates = new Set<string>();
-
-    if (normalized) candidates.add(normalized);
-    if (digits) {
-      candidates.add(digits);
-      candidates.add(`+${digits}`);
-    }
-
-    // Compatibilidad con teléfonos MX guardados como 10 dígitos (sin lada país).
-    if (digits.length === 10) {
-      candidates.add(`52${digits}`);
-      candidates.add(`+52${digits}`);
-    }
-
-    // Compatibilidad con teléfonos MX guardados con 52 pero sin +.
-    if (digits.length === 12 && digits.startsWith('52')) {
-      candidates.add(digits.slice(2)); // 10 dígitos
-      candidates.add(`+${digits}`);
-    }
-
-    return Array.from(candidates).filter(Boolean);
   }
 
   private toTwilioE164(phone: string): string {
@@ -581,7 +555,7 @@ export class UsuariosService {
 
   async enviarCodigoRecuperacionSMS(phone: string) {
     // Normalizar teléfono para buscar con el mismo formato almacenado en BD.
-    const phoneLookupCandidates = this.buildPhoneLookupCandidates(phone);
+    const phoneLookupCandidates = buildPhoneLookupCandidates(phone);
 
     // No revelar si existe o no el usuario.
     if (phoneLookupCandidates.length === 0) {
@@ -633,7 +607,7 @@ export class UsuariosService {
   }
 
   async verificarCodigoRecuperacionSMS(phone: string, codigo: string) {
-    const phoneLookupCandidates = this.buildPhoneLookupCandidates(phone);
+    const phoneLookupCandidates = buildPhoneLookupCandidates(phone);
     const codigoNormalizado = (codigo || '').trim();
 
     if (phoneLookupCandidates.length === 0 || !codigoNormalizado) {

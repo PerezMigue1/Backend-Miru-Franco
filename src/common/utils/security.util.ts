@@ -67,6 +67,41 @@ export function sanitizePhone(phone: string): string {
 }
 
 /**
+ * Genera las variantes plausibles con las que un mismo teléfono pudo quedar guardado
+ * (con/sin lada país 52, con/sin "+") para buscarlo por coincidencia exacta o `contains`.
+ * Compartida entre UsuariosService (recuperación de contraseña por SMS) y ClientesService
+ * (búsqueda de cliente en el POS) — una sola fuente de verdad para esta normalización.
+ *
+ * @param phone - Teléfono (o término de búsqueda) a expandir en candidatos
+ * @returns Lista de variantes normalizadas; vacía si `phone` no tiene dígitos aprovechables
+ */
+export function buildPhoneLookupCandidates(phone: string): string[] {
+  const normalized = normalizePhone(phone);
+  const digits = normalized.replace(/\D/g, '');
+  const candidates = new Set<string>();
+
+  if (normalized) candidates.add(normalized);
+  if (digits) {
+    candidates.add(digits);
+    candidates.add(`+${digits}`);
+  }
+
+  // Compatibilidad con teléfonos MX guardados como 10 dígitos (sin lada país).
+  if (digits.length === 10) {
+    candidates.add(`52${digits}`);
+    candidates.add(`+52${digits}`);
+  }
+
+  // Compatibilidad con teléfonos MX guardados con 52 pero sin +.
+  if (digits.length === 12 && digits.startsWith('52')) {
+    candidates.add(digits.slice(2)); // 10 dígitos
+    candidates.add(`+${digits}`);
+  }
+
+  return Array.from(candidates).filter(Boolean);
+}
+
+/**
  * Sanitiza código postal (solo números)
  * 
  * @param postalCode - Código postal a sanitizar

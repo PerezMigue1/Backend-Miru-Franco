@@ -26,6 +26,10 @@ import { ProveedoresModule } from './proveedores/proveedores.module';
 import { ComprasModule } from './compras/compras.module';
 import { CotizacionesModule } from './cotizaciones/cotizaciones.module';
 import { ReportesModule } from './reportes/reportes.module';
+import { SolicitudesPermisoModule } from './solicitudes-permiso/solicitudes-permiso.module';
+import { ConfiguracionModule } from './configuracion/configuracion.module';
+import { AsistenciaModule } from './asistencia/asistencia.module';
+import { HorasExtraModule } from './horas-extra/horas-extra.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -65,6 +69,10 @@ import { AppController } from './app.controller';
     CitasModule,
     PosModule,
     OauthModule,
+    SolicitudesPermisoModule,
+    ConfiguracionModule,
+    AsistenciaModule,
+    HorasExtraModule,
   ],
   controllers: [AppController],
 })
