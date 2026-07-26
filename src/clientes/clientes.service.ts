@@ -83,6 +83,7 @@ export class ClientesService {
         alergias: true,
         creadoEn: true,
         actualizadoEn: true,
+        ultimaActividad: true,
         _count: {
           select: { pedidos: true, quejas: true, seguimientos: true },
         },

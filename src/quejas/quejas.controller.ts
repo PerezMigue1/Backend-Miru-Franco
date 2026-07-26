@@ -28,11 +28,15 @@ export class QuejasController {
     return this.quejasService.listar(query);
   }
 
+  /**
+   * Admin o staff con `clientes:lectura` (mismo permiso que ya abre el resto de
+   * la ficha de cliente en /clientes/:id). El chequeo vive en el service para
+   * seguir el mismo patrón usado en pedidos/pagos: sin gate nuevo aquí.
+   */
   @Get('cliente/:clienteId')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
-  listarPorCliente(@Param('clienteId') clienteId: string) {
-    return this.quejasService.listarPorCliente(clienteId);
+  @UseGuards(JwtAuthGuard)
+  listarPorCliente(@Param('clienteId') clienteId: string, @Req() req: any) {
+    return this.quejasService.listarPorCliente(clienteId, req.user.id);
   }
 
   @Get(':id')

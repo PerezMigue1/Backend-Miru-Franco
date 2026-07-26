@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
+import { puedeVerDatosDeClientes } from '../../common/utils/permisos-clientes.util';
 import { CreateDireccionUsuarioDto } from './dto/create-direccion-usuario.dto';
 import { UpdateDireccionUsuarioDto } from './dto/update-direccion-usuario.dto';
 
@@ -17,15 +18,16 @@ export class DireccionesUsuarioService {
 
   /**
    * Lista direcciones del usuario autenticado.
-   * Admin puede pasar `usuarioId` en query para ver las de otro usuario.
+   * Admin, o staff con `clientes:lectura`, puede pasar `usuarioId` en query
+   * para ver las de otro usuario (ficha de cliente en operación).
    */
   async listar(solicitanteId: string, filtroUsuarioId?: string) {
     const rol = await this.access.getRol(solicitanteId);
     let targetUserId = solicitanteId;
     if (filtroUsuarioId) {
-      if (!this.access.isAdmin(rol)) {
+      if (!(await puedeVerDatosDeClientes(this.prisma, rol))) {
         throw new ForbiddenException(
-          'Solo administradores pueden listar direcciones de otro usuario',
+          'No tienes permiso para listar direcciones de otro usuario',
         );
       }
       targetUserId = filtroUsuarioId;

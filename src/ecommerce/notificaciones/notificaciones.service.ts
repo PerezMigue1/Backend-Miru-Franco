@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
+import { puedeVerDatosDeClientes } from '../../common/utils/permisos-clientes.util';
 import { CreateNotificacionDto } from './dto/create-notificacion.dto';
 import { UpdateNotificacionDto } from './dto/update-notificacion.dto';
 
@@ -22,9 +23,9 @@ export class NotificacionesService {
     const rol = await this.access.getRol(solicitanteId);
     let targetUserId = solicitanteId;
     if (opts?.usuarioId) {
-      if (!this.access.isAdmin(rol)) {
+      if (!(await puedeVerDatosDeClientes(this.prisma, rol))) {
         throw new ForbiddenException(
-          'Solo administradores pueden filtrar notificaciones de otro usuario',
+          'No tienes permiso para filtrar notificaciones de otro usuario',
         );
       }
       targetUserId = opts.usuarioId;

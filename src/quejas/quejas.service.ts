@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
+import { puedeVerDatosDeClientes } from '../common/utils/permisos-clientes.util';
 import { CreateQuejaDto } from './dto/create-queja.dto';
 import { UpdateQuejaDto } from './dto/update-queja.dto';
 import { ListQuejasDto } from './dto/list-quejas.dto';
@@ -57,7 +58,17 @@ export class QuejasService {
     return { success: true, data: queja };
   }
 
-  async listarPorCliente(clienteId: string) {
+  async listarPorCliente(clienteId: string, solicitanteId: string) {
+    const solicitante = await this.prisma.usuario.findUnique({
+      where: { id: solicitanteId },
+      select: { rol: true },
+    });
+    if (!(await puedeVerDatosDeClientes(this.prisma, solicitante?.rol ?? null))) {
+      throw new ForbiddenException(
+        'No tienes permiso para ver las quejas de este cliente',
+      );
+    }
+
     const quejas = await this.prisma.queja.findMany({
       where: { usuarioId: clienteId },
       orderBy: { creadoEn: 'desc' },
