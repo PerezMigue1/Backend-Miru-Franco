@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificacionesModule } from '../notificaciones/notificaciones.module';
 import { EcommerceAccessService } from './common/ecommerce-access.service';
 import { DireccionesUsuarioController } from './direcciones-usuario/direcciones-usuario.controller';
 import { DireccionesUsuarioService } from './direcciones-usuario/direcciones-usuario.service';
@@ -24,6 +25,7 @@ import { NotificacionesController } from './notificaciones/notificaciones.contro
 import { NotificacionesService } from './notificaciones/notificaciones.service';
 
 @Module({
+  imports: [NotificacionesModule],
   controllers: [
     DireccionesUsuarioController,
     PedidoItemsController,

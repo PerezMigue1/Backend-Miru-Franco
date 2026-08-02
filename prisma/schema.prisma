@@ -123,6 +123,8 @@ model Usuario {
   solicitudesResueltas       SolicitudPermiso[] @relation("SolicitudesComoResolutor")
   asistencias                RegistroAsistencia[] @relation("AsistenciaComoEmpleado")
   asistenciasCorregidas      RegistroAsistencia[] @relation("AsistenciaComoCorrector")
+  preferenciasNotificacion   PreferenciaNotificacion[]
+  dispositivosPush           DispositivoPush[]
 
   @@index([activo])
   @@index([email])
@@ -408,12 +410,76 @@ model Notificacion {
   metadata  Json?
   creadoEn  DateTime @default(now()) @map("creado_en")
 
+  prioridad      String?   @db.VarChar(10)
+  entidadTipo    String?   @map("entidad_tipo") @db.VarChar(30)
+  entidadId      String?   @map("entidad_id")
+  urlAccion      String?   @map("url_accion")
+  programadaPara DateTime? @map("programada_para")
+  leidaEn        DateTime? @map("leida_en")
+
   usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
   usuarioId String  @map("usuario_id")
 
+  envios NotificacionEnvio[]
+
   @@index([usuarioId])
   @@index([leida])
+  @@index([entidadTipo, entidadId])
+  @@index([tipo, creadoEn])
   @@map("notificaciones")
+}
+
+model NotificacionEnvio {
+  id                String    @id @default(cuid())
+  notificacionId    String    @map("notificacion_id")
+  canal             String    @db.VarChar(10)
+  estado            String    @default("pendiente") @db.VarChar(12)
+  programadoPara    DateTime  @default(now()) @map("programado_para")
+  intentos          Int       @default(0)
+  proximoIntento    DateTime? @map("proximo_intento")
+  proveedor         String?   @db.VarChar(30)
+  proveedorMsgId    String?   @map("proveedor_msg_id")
+  errorCodigo       String?   @map("error_codigo") @db.VarChar(60)
+  errorMensaje      String?   @map("error_mensaje")
+  enviadoEn         DateTime? @map("enviado_en")
+  entregadoEn       DateTime? @map("entregado_en")
+  creadoEn          DateTime  @default(now()) @map("creado_en")
+  claveIdempotencia String    @unique @map("clave_idempotencia") @db.VarChar(180)
+
+  notificacion Notificacion @relation(fields: [notificacionId], references: [id], onDelete: Cascade)
+
+  @@index([estado, programadoPara])
+  @@index([notificacionId])
+  @@index([proveedorMsgId])
+  @@map("notificaciones_envios")
+}
+
+model PreferenciaNotificacion {
+  usuarioId String   @map("usuario_id")
+  tipo      String   @db.VarChar(40)
+  canal     String   @db.VarChar(10)
+  activo    Boolean  @default(true)
+  creadoEn  DateTime @default(now()) @map("creado_en")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@id([usuarioId, tipo, canal])
+  @@map("preferencias_notificacion")
+}
+
+model DispositivoPush {
+  id         String   @id @default(cuid())
+  usuarioId  String   @map("usuario_id")
+  token      String   @unique @db.VarChar(300)
+  plataforma String   @db.VarChar(10)
+  activo     Boolean  @default(true)
+  ultimoUso  DateTime @default(now()) @map("ultimo_uso")
+  creadoEn   DateTime @default(now()) @map("creado_en")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId, activo])
+  @@map("dispositivos_push")
 }
 
 // Tabla para preguntas predefinidas disponibles (solo para mostrar opciones)
@@ -678,6 +744,7 @@ model ConfiguracionSalon {
   salidaDomingo       String?  @map("salida_domingo")
   margenGraciaMinutos Int      @default(15) @map("margen_gracia_minutos")
   tarifaHoraExtra     Decimal  @map("tarifa_hora_extra") @db.Decimal(10, 2)
+  stockMinimoGlobal   Int      @default(5) @map("stock_minimo_global")
   creadoEn            DateTime @default(now()) @map("creado_en")
   actualizadoEn       DateTime @updatedAt @map("actualizado_en")
 

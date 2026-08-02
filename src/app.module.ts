@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import databaseConfig from './config/database.config';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
@@ -30,6 +31,7 @@ import { SolicitudesPermisoModule } from './solicitudes-permiso/solicitudes-perm
 import { ConfiguracionModule } from './configuracion/configuracion.module';
 import { AsistenciaModule } from './asistencia/asistencia.module';
 import { HorasExtraModule } from './horas-extra/horas-extra.module';
+import { NotificacionesModule } from './notificaciones/notificaciones.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -41,6 +43,7 @@ import { AppController } from './app.controller';
       load: [databaseConfig],
       cache: true,
     }),
+    EventEmitterModule.forRoot(),
     // Módulos de base de datos
     PrismaModule,
     // Módulos de seguridad
@@ -73,6 +76,7 @@ import { AppController } from './app.controller';
     ConfiguracionModule,
     AsistenciaModule,
     HorasExtraModule,
+    NotificacionesModule,
   ],
   controllers: [AppController],
 })

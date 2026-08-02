@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
 import { ConfiguracionService } from '../configuracion/configuracion.service';
@@ -31,6 +32,7 @@ export class CitasService {
     private readonly prisma: PrismaService,
     private readonly inventarioService: InventarioService,
     private readonly configuracionService: ConfiguracionService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ─── helpers ────────────────────────────────────────────────────────────────
@@ -352,6 +354,16 @@ export class CitasService {
       include: this.incluirRelaciones(),
     });
 
+    // Fuera del create (no hay transacción que envolver aquí, es un create suelto):
+    // notificar es un efecto secundario, nunca debe poder afectar la creación de la cita.
+    this.eventEmitter.emit('cita.creada', {
+      citaId: cita.id,
+      clienteId: cita.clienteId,
+      especialistaId: cita.especialistaId,
+      servicioNombre: cita.servicio.nombre,
+      fechaHoraInicio: cita.fechaHoraInicio,
+    });
+
     return { success: true, data: cita };
   }
 
@@ -467,6 +479,14 @@ export class CitasService {
       data: { estado: 'cancelada', motivoCancelacion: motivoLimpio },
       include: this.incluirRelaciones(),
     });
+
+    this.eventEmitter.emit('cita.cancelada', {
+      citaId: actualizada.id,
+      clienteId: actualizada.clienteId,
+      especialistaId: actualizada.especialistaId,
+      motivo: motivoLimpio,
+    });
+
     return { success: true, data: actualizada };
   }
 

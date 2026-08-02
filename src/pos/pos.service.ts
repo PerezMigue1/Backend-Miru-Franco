@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
@@ -20,6 +21,7 @@ export class PosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventarioService: InventarioService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ─── helpers ────────────────────────────────────────────────────────────────
@@ -236,28 +238,20 @@ export class PosService {
     });
 
     // Fuera de la transacción a propósito: la venta ya está comprometida en BD en este
-    // punto. Un fallo aquí (o incluso adentro del try) nunca debe poder revertir la venta —
-    // por eso nunca se hace dentro del `$transaction` de arriba.
+    // punto. Un fallo aquí nunca debe poder revertir la venta — por eso nunca se hace
+    // dentro del `$transaction` de arriba. Antes creaba la notificación directo
+    // (prisma.notificacion.create suelto, se perdía si fallaba); ahora emite el evento
+    // de dominio y el listener (src/notificaciones/notificaciones.listener.ts) la
+    // recrea vía Outbox con el mismo titulo/mensaje/metadata — mismo resultado visible
+    // para el cliente, con reintento futuro si el listener falla.
     if (venta.clienteId) {
-      try {
-        const fecha = new Intl.DateTimeFormat('es-MX', {
-          timeZone: 'America/Mexico_City',
-          dateStyle: 'medium',
-          timeStyle: 'short',
-        }).format(venta.creadoEn);
-        const totalFmt = `$${Number(venta.total).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        await this.prisma.notificacion.create({
-          data: {
-            usuarioId: venta.clienteId,
-            tipo: 'venta',
-            titulo: 'Tu ticket de compra',
-            mensaje: `Folio ${venta.folio} · Total ${totalFmt} · ${fecha}`,
-            metadata: { ventaId: venta.id, folio: venta.folio, total: Number(venta.total) },
-          },
-        });
-      } catch (e) {
-        console.error(`No se pudo crear la notificación de la venta ${venta.id} (no afecta la venta):`, e);
-      }
+      this.eventEmitter.emit('venta_local.pagada', {
+        ventaId: venta.id,
+        clienteId: venta.clienteId,
+        folio: venta.folio,
+        total: Number(venta.total),
+        creadoEn: venta.creadoEn,
+      });
     }
 
     return { success: true, data: venta };
