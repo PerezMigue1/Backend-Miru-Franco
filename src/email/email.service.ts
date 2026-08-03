@@ -1,34 +1,33 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import sgMail from '@sendgrid/mail';
+import { Resend } from 'resend';
 
 @Injectable()
 export class EmailService {
+  private resend: Resend | null = null;
+
   constructor(private configService: ConfigService) {
-    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    const apiKey = this.configService.get<string>('RESEND_API_KEY');
     if (apiKey) {
-      sgMail.setApiKey(apiKey);
+      this.resend = new Resend(apiKey);
     } else {
-      console.warn('⚠️ SENDGRID_API_KEY no configurada. Los emails no se enviarán.');
+      console.warn('⚠️ RESEND_API_KEY no configurada. Los emails no se enviarán.');
     }
   }
 
   async sendOTPEmail(correo: string, codigoOTP: string): Promise<void> {
-    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
-    const fromEmail = this.configService.get<string>('SENDGRID_FROM_EMAIL');
-    const fromName = this.configService.get<string>('SENDGRID_FROM_NAME') || 'Miru Franco Salón Beauty';
+    const apiKey = this.configService.get<string>('RESEND_API_KEY');
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
 
-    if (!apiKey || !fromEmail) {
-      throw new Error('SendGrid no está configurado. Por favor configura SENDGRID_API_KEY y SENDGRID_FROM_EMAIL.');
+    if (!apiKey || !fromEmail || !this.resend) {
+      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
     }
 
     try {
-      const msg = {
+      const { error } = await this.resend.emails.send({
         to: correo,
-        from: {
-          name: fromName,
-          email: fromEmail,
-        },
+        from: `${fromName} <${fromEmail}>`,
         subject: 'Código de activación - Miru Franco',
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -42,9 +41,9 @@ export class EmailService {
             <p style="color: #666; font-size: 12px;">Si no solicitaste este código, ignora este mensaje.</p>
           </div>
         `,
-      };
+      });
 
-      await sgMail.send(msg);
+      if (error) throw error;
       console.log('Correo de activación enviado a:', correo);
     } catch (err: any) {
       console.error('Error enviando correo de activación:', err.response?.body || err.message);
@@ -53,22 +52,19 @@ export class EmailService {
   }
 
   async sendPasswordResetEmail(correo: string, resetLink: string, expiresInMinutes: number = 10): Promise<void> {
-    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
-    const fromEmail = this.configService.get<string>('SENDGRID_FROM_EMAIL');
-    const fromName = this.configService.get<string>('SENDGRID_FROM_NAME') || 'Miru Franco Salón Beauty';
+    const apiKey = this.configService.get<string>('RESEND_API_KEY');
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://miru-franco.vercel.app';
 
-    if (!apiKey || !fromEmail) {
-      throw new Error('SendGrid no está configurado. Por favor configura SENDGRID_API_KEY y SENDGRID_FROM_EMAIL.');
+    if (!apiKey || !fromEmail || !this.resend) {
+      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
     }
 
     try {
-      const msg = {
+      const { error } = await this.resend.emails.send({
         to: correo,
-        from: {
-          name: fromName,
-          email: fromEmail,
-        },
+        from: `${fromName} <${fromEmail}>`,
         subject: 'Recuperar Contraseña - Miru Franco',
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -120,9 +116,9 @@ export class EmailService {
             </div>
           </div>
         `,
-      };
+      });
 
-      await sgMail.send(msg);
+      if (error) throw error;
       console.log('Correo de recuperación de contraseña enviado a:', correo);
     } catch (err: any) {
       console.error('Error enviando correo de recuperación:', err.response?.body || err.message);
