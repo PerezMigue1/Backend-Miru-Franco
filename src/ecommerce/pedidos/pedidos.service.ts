@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
@@ -24,6 +25,7 @@ export class PedidosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: EcommerceAccessService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   private includeDefault(): Prisma.PedidoInclude {
@@ -299,6 +301,14 @@ export class PedidosService {
       return pedido;
     });
 
+    // Fuera de la transacción a propósito, mismo criterio que citas.service.ts:357-365
+    // y pos.service.ts:240-246: el pedido ya está comprometido en BD en este punto,
+    // un fallo al notificar nunca debe poder revertirlo.
+    this.eventEmitter.emit('pedido.creado', {
+      pedidoId: data.id,
+      usuarioId: data.usuarioId,
+    });
+
     return { success: true, data };
   }
 
@@ -435,6 +445,25 @@ export class PedidosService {
 
       return updated;
     });
+
+    // Fuera de la transacción a propósito (mismo criterio que crear(), arriba, y
+    // que citas.service.ts/pos.service.ts): solo notificar el subconjunto de
+    // transiciones que le importan al cliente. 'preparando' es interno y 'enviado'
+    // no lo dispara ningún botón hoy (ver notas de la Parte A) — se dejan fuera.
+    if (puedeCambiarEstado && dto.estado !== undefined && dto.estado !== actual.estado) {
+      const eventoPorEstado: Partial<Record<EstadoPedido, string>> = {
+        [EstadoPedido.pagado]: 'pedido.pagado',
+        [EstadoPedido.entregado]: 'pedido.entregado',
+        [EstadoPedido.cancelado]: 'pedido.cancelado',
+      };
+      const evento = eventoPorEstado[dto.estado];
+      if (evento) {
+        this.eventEmitter.emit(evento, {
+          pedidoId: id,
+          usuarioId: usuarioIdPedido,
+        });
+      }
+    }
 
     return { success: true, data };
   }

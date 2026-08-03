@@ -20,7 +20,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { NotificacionesService } from './notificaciones.service';
-import { NotificacionesSseService } from '../../notificaciones/sse/notificaciones-sse.service';
+import { NotificacionesSseService, SSE_EVENT_ID } from '../../notificaciones/sse/notificaciones-sse.service';
 import { CreateNotificacionDto } from './dto/create-notificacion.dto';
 import { UpdateNotificacionDto } from './dto/update-notificacion.dto';
 
@@ -41,7 +41,7 @@ export class NotificacionesController {
   @Sse('stream')
   stream(@CurrentUser() user: { id: string }): Observable<MessageEvent> {
     const keepAlive$: Observable<MessageEvent> = interval(KEEP_ALIVE_MS).pipe(
-      map(() => ({ type: 'keep-alive', data: '' }) as MessageEvent),
+      map(() => ({ type: 'keep-alive', data: '', id: SSE_EVENT_ID }) as MessageEvent),
     );
     // No es un comentario SSE crudo (`: keep-alive\n\n`): el serializador de
     // @Sse() de Nest (SseStream) solo sabe emitir líneas `event:`/`data:` a

@@ -40,7 +40,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(req: Request, payload: any) {
     // Obtener token raw del request
     const rawToken = (req as any).rawToken;
-    
+
     // Verificar si el token está en la blacklist
     if (rawToken) {
       const isRevoked = await this.securityService.isTokenRevoked(rawToken);
@@ -48,7 +48,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         throw new UnauthorizedException('Token revocado. Por favor inicia sesión nuevamente.');
       }
     }
-    
+
     // Verificar logout global (todos los tokens revocados)
     if (payload.iat) {
       const isRevokedByGlobalLogout = await this.securityService.isTokenRevokedByGlobalLogout(
@@ -59,11 +59,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         throw new UnauthorizedException('Sesión cerrada. Por favor inicia sesión nuevamente.');
       }
     }
-    
+
     // Verificar expiración y actividad contra la base de datos
     // Esto es más confiable que solo verificar el token JWT (que es inmutable)
     const isInactive = await this.securityService.isUserInactive(payload.id, 15);
-    
+
     if (isInactive) {
       throw new UnauthorizedException('Sesión expirada por inactividad. Por favor inicia sesión nuevamente.');
     }
