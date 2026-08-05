@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import databaseConfig from './config/database.config';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
@@ -44,6 +45,7 @@ import { AppController } from './app.controller';
       cache: true,
     }),
     EventEmitterModule.forRoot(),
+    ScheduleModule.forRoot(),
     // Módulos de base de datos
     PrismaModule,
     // Módulos de seguridad

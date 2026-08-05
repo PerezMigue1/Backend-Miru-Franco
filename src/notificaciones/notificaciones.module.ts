@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { EmailModule } from '../email/email.module';
 import { OutboxService } from './outbox.service';
 import { ResolverDestinatariosService } from './resolver-destinatarios.service';
 import { DespachadorService } from './despachador.service';
+import { BarridoService } from './barrido.service';
 import { InAppDispatcher } from './dispatchers/in-app.dispatcher';
+import { EmailDispatcher } from './dispatchers/email.dispatcher';
 import { NotificacionesListener } from './notificaciones.listener';
 import { NotificacionesSseService } from './sse/notificaciones-sse.service';
 
@@ -21,12 +24,14 @@ import { NotificacionesSseService } from './sse/notificaciones-sse.service';
  * EventEmitter2, no necesita ser invocado directamente desde fuera.
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, EmailModule],
   providers: [
     OutboxService,
     ResolverDestinatariosService,
     DespachadorService,
+    BarridoService,
     InAppDispatcher,
+    EmailDispatcher,
     NotificacionesListener,
     NotificacionesSseService,
   ],

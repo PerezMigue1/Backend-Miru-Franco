@@ -23,6 +23,10 @@ export interface DatoEncolar {
   entidadTipo: string;
   entidadId: string;
   urlAccion?: string;
+  /** Envío diferido (p. ej. recordatorios): sin esto, cae al default de columna
+   *  (`now()`) — mismo comportamiento que tenían todos los llamadores antes de
+   *  este campo, no rompe nada existente. */
+  programadoPara?: Date;
   canales: CanalEncolado[];
 }
 
@@ -57,6 +61,7 @@ export class OutboxService {
         entidadTipo: dato.entidadTipo,
         entidadId: dato.entidadId,
         urlAccion: dato.urlAccion,
+        programadaPara: dato.programadoPara,
       },
     });
 
@@ -68,6 +73,7 @@ export class OutboxService {
       notificacionId: notificacion.id,
       canal: c.canal,
       estado: c.estado ?? 'pendiente',
+      ...(dato.programadoPara ? { programadoPara: dato.programadoPara } : {}),
       claveIdempotencia: this.construirClave(dato.entidadTipo, dato.entidadId, dato.tipo, c.canal, c.discriminador),
     }));
 

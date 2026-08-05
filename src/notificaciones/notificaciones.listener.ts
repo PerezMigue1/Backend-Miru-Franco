@@ -36,14 +36,11 @@ export interface PedidoEvent {
   usuarioId: string;
 }
 
-/**
- * Placeholder del tipo que usarán los recordatorios cuando exista su
- * productor (barrido/scheduler de una etapa futura). No hay ningún código hoy
- * que cree notificaciones con este tipo — la cascada de cancelación de abajo
- * queda como no-op hasta entonces. Nombre asumido, no verificado contra
- * ninguna especificación existente: avisar si el nombre real debe ser otro.
- */
+/** Tipo usado tanto al programar los 2 recordatorios en `onCitaCreada` como al
+ *  identificarlos para descartarlos en la cascada de `onCitaCancelada` —
+ *  cambiarlo en un solo lado rompe esa cascada silenciosamente. */
 const TIPO_RECORDATORIO_CITA = 'cita_recordatorio';
+const RECORDATORIOS_ANTES_MS = [24 * 60 * 60_000, 60 * 60_000]; // 24h, 1h
 
 @Injectable()
 export class NotificacionesListener {
@@ -87,6 +84,33 @@ export class NotificacionesListener {
         canales: canalesEspecialista,
       });
       envioIds.push(...enviosEspecialista.map((e) => e.id));
+
+      // Recordatorios (24h y 1h antes): NO se agregan a `envioIds` — deben
+      // quedar 'pendiente' hasta que el barrido (`BarridoService`, cada 5 min)
+      // los recoja cuando venza su `programadoPara`. Si se pasaran a
+      // `drenarInmediatas` de abajo, `drenar()` los despacharía ahora mismo
+      // (no filtra por `programadoPara`), rompiendo el propósito de programarlos.
+      const ahora = Date.now();
+      for (const antesMs of RECORDATORIOS_ANTES_MS) {
+        const programadoPara = new Date(payload.fechaHoraInicio.getTime() - antesMs);
+        if (programadoPara.getTime() <= ahora) continue; // la cita se creó con menos antelación que este recordatorio
+
+        const canalesRecordatorio = await this.resolver.resolverCanales(
+          payload.clienteId,
+          TIPO_RECORDATORIO_CITA,
+          ['in_app', 'email'],
+        );
+        await this.outbox.encolar(tx, {
+          usuarioId: payload.clienteId,
+          tipo: TIPO_RECORDATORIO_CITA,
+          titulo: 'Recordatorio de cita',
+          mensaje: `Tu cita de ${payload.servicioNombre} es el ${fecha}`,
+          entidadTipo: 'cita',
+          entidadId: String(payload.citaId),
+          programadoPara,
+          canales: canalesRecordatorio,
+        });
+      }
     });
 
     this.despachador.drenarInmediatas(envioIds);

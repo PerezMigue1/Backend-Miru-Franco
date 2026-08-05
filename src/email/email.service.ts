@@ -125,5 +125,37 @@ export class EmailService {
       throw new Error('No se pudo enviar el correo de recuperación de contraseña');
     }
   }
+
+  /**
+   * Envío genérico para el canal `email` del motor de notificaciones (Etapa 3):
+   * a diferencia de los dos métodos de arriba, no trae plantilla propia — el
+   * HTML ya viene armado (ver `EmailDispatcher`). Mismo cliente/remitente
+   * (`RESEND_API_KEY`/`RESEND_FROM_*`) y mismo criterio de error que los otros
+   * dos: loguear el detalle y relanzar un Error fijo en español.
+   */
+  async sendNotificationEmail(to: string, subject: string, html: string): Promise<void> {
+    const apiKey = this.configService.get<string>('RESEND_API_KEY');
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
+
+    if (!apiKey || !fromEmail || !this.resend) {
+      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
+    }
+
+    try {
+      const { error } = await this.resend.emails.send({
+        to,
+        from: `${fromName} <${fromEmail}>`,
+        subject,
+        html,
+      });
+
+      if (error) throw error;
+      console.log('Correo de notificación enviado a:', to);
+    } catch (err: any) {
+      console.error('Error enviando correo de notificación:', err.response?.body || err.message);
+      throw new Error('No se pudo enviar el correo de notificación');
+    }
+  }
 }
 
