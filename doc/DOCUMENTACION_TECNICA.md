@@ -1169,18 +1169,16 @@ NODE_ENV=development  # development | production
 
 ### Configuración de CORS
 
-El sistema está configurado para permitir solicitudes desde los siguientes orígenes:
+La lista blanca vive en `src/config/cors.config.ts`; los orígenes fuera de ella se rechazan.
 
 **Producción:**
-- `https://miru-franco.vercel.app`
-- `https://miru-franco-pznm3jk0w-miru-franco.vercel.app`
-- `https://miru-franco-4pdg1kua8-miru-franco.vercel.app`
-- `https://miru-franco-hri9o928g-miru-franco.vercel.app`
-- `https://miru-franco-idhk1rz7d-miru-franco.vercel.app`
+- `https://www.mirufranco.com`
+- `https://mirufranco.com`
 
-**Desarrollo:**
+**Desarrollo** (`NODE_ENV` distinto de `production`):
 - `http://localhost:3000`
-- `http://localhost:3001`
+
+**Por variable de entorno:** `FRONTEND_URL` y `CORS_ALLOWED_ORIGINS` (orígenes exactos separados por comas; `*` se ignora).
 
 **Configuración adicional:**
 - `credentials: true` - Permite el envío de cookies

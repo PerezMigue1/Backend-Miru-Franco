@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { BadRequestException, ValidationPipe, VersioningType } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { crearCorsOptions } from './config/cors.config';
 import type { ValidationError } from 'class-validator';
 const cookieParser = require('cookie-parser');
 
@@ -52,44 +53,9 @@ async function bootstrap() {
   //   defaultVersion: '1',
   // });
   
-  // Habilitar CORS con múltiples orígenes permitidos
-  const allowedOrigins = [
-    'https://miru-franco.vercel.app',
-    'https://miru-franco-pznm3jk0w-miru-franco.vercel.app',
-    'https://miru-franco-4pdg1kua8-miru-franco.vercel.app', // URL de preview/deployment de Vercel
-    'https://miru-franco-hri9o928g-miru-franco.vercel.app', // URL actual de Vercel
-    'https://miru-franco-idhk1rz7d-miru-franco.vercel.app', // Nueva URL de Vercel
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://mirufranco.com',
-    'https://www.mirufranco.com',
-    process.env.FRONTEND_URL,
-  ].filter(Boolean); // Remover valores undefined/null
-
-  app.enableCors({
-    origin: (origin, callback) => {
-      // Permitir solicitudes sin origin (ej: mobile apps, Postman)
-      if (!origin) return callback(null, true);
-      
-      // Si no hay orígenes específicos configurados, permitir todos
-      if (allowedOrigins.length === 0 || process.env.FRONTEND_URL === '*') {
-        return callback(null, true);
-      }
-      
-      // Verificar si el origen está permitido
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn(`⚠️ CORS: Origen bloqueado: ${origin}`);
-        callback(null, true); // Permitir todos temporalmente para debugging
-      }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    // X-Auth-Mode: el frontend web pide la sesión como cookie httpOnly (ver src/auth/auth-cookie.ts)
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'Last-Event-ID', 'X-Auth-Mode'],
-    exposedHeaders: ['Authorization'],
-  });
+  // CORS: lista blanca de orígenes (ver src/config/cors.config.ts). Los orígenes que no están en
+  // la lista se rechazan; antes se aceptaban todos "temporalmente para debugging".
+  app.enableCors(crearCorsOptions());
 
   // Headers de seguridad HTTP
   app.use((req, res, next) => {

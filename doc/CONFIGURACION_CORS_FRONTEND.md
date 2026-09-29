@@ -8,38 +8,18 @@ El backend está configurado con las siguientes opciones de CORS:
 
 ### Orígenes Permitidos
 
-El backend permite solicitudes desde los siguientes orígenes:
+La lista blanca vive en `src/config/cors.config.ts` (única fuente). Un origen que no esté en ella se rechaza (el navegador bloquea la respuesta):
 
-- `https://miru-franco.vercel.app` (Producción)
-- `https://miru-franco-pznm3jk0w-miru-franco.vercel.app` (Vercel Preview)
-- `https://miru-franco-4pdg1kua8-miru-franco.vercel.app` (Vercel Preview)
-- `https://miru-franco-hri9o928g-miru-franco.vercel.app` (Vercel Preview)
-- `https://miru-franco-idhk1rz7d-miru-franco.vercel.app` (Vercel Preview)
-- `http://localhost:3000` (Desarrollo local)
-- `http://localhost:3001` (Desarrollo local)
-- Valor de la variable de entorno `FRONTEND_URL` (si está configurada)
+- `https://www.mirufranco.com` y `https://mirufranco.com` (producción)
+- `http://localhost:3000` (solo cuando `NODE_ENV` no es `production`)
+- Valor de `FRONTEND_URL` (si es una URL válida)
+- Orígenes exactos listados en `CORS_ALLOWED_ORIGINS`, separados por comas (p. ej. un dominio de preview de Vercel). `*` y valores no válidos se ignoran.
+
+Las peticiones sin cabecera `Origin` (servidor a servidor, apps, curl) no se ven afectadas por CORS.
 
 ### Configuración de CORS
 
-```typescript
-{
-  origin: (origin, callback) => {
-    // Permitir solicitudes sin origin (ej: mobile apps, Postman)
-    if (!origin) return callback(null, true);
-    
-    // Verificar si el origen está permitido
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Permitir todos temporalmente
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token'],
-  exposedHeaders: ['Authorization'],
-}
-```
+Ver `crearCorsOptions()` en `src/config/cors.config.ts`: `credentials: true`, métodos `GET, POST, PUT, DELETE, PATCH, OPTIONS` y cabeceras `Content-Type, Authorization, X-Requested-With, X-CSRF-Token, Last-Event-ID, X-Auth-Mode`.
 
 ## 🔧 Configuración Requerida en el Frontend
 
