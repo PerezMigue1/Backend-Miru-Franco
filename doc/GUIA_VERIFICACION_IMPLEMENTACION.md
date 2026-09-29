@@ -744,7 +744,7 @@ SELECT * FROM tokens_revocados;
 
 4. **Verificar payload:**
    - Debe tener: `id`, `email`, `exp`, `iat`
-   - `exp` debe ser futuro (7 días desde ahora)
+   - `exp` debe ser futuro (24 horas desde la emisión, ver `src/auth/jwt-ttl.ts`)
 
 **Verificar en código:**
 ```bash

@@ -5,6 +5,7 @@ import { UsuariosController } from './usuarios.controller';
 import { UsuariosService } from './usuarios.service';
 import { EmailModule } from '../email/email.module';
 import { SecurityModule } from '../common/services/security.module';
+import { JWT_TTL_SEGUNDOS } from '../auth/jwt-ttl';
 
 @Module({
   imports: [
@@ -14,7 +15,7 @@ import { SecurityModule } from '../common/services/security.module';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET') || 'tu_secreto_temporal',
-        signOptions: { expiresIn: '1d' },
+        signOptions: { expiresIn: JWT_TTL_SEGUNDOS },
       }),
       inject: [ConfigService],
     }),

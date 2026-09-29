@@ -5,6 +5,7 @@ import { SecurityService } from '../common/services/security.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { JwtService } from '@nestjs/jwt';
+import { JWT_TTL_SEGUNDOS } from '../auth/jwt-ttl';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
@@ -265,7 +266,7 @@ export class UsuariosService {
         iat: now, // Issued at time (para logout global)
         lastActivity: now,
       },
-      { expiresIn: '1d' },
+      { expiresIn: JWT_TTL_SEGUNDOS }, // misma vigencia que Google y refresh (src/auth/jwt-ttl.ts)
     );
 
     // Log seguro (sin contraseña)

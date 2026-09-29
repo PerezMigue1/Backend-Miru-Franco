@@ -1129,7 +1129,7 @@ DATABASE_URL=postgresql://username:password@host.neon.tech/database?sslmode=requ
 # CONFIGURACIÓN JWT
 # ============================================
 JWT_SECRET=tu_secreto_jwt_muy_seguro_aqui_minimo_32_caracteres
-JWT_EXPIRES_IN=7d  # Tiempo de expiración del token (opcional, default: 7d)
+# La vigencia del JWT no se configura por entorno: es fija (24 h) en src/auth/jwt-ttl.ts
 
 # ============================================
 # CONFIGURACIÓN DE SENDGRID (EMAIL)
@@ -1461,8 +1461,8 @@ Authorization: Bearer <token>
 
 #### Expiración del Token
 
-- **Tiempo de expiración por defecto:** 7 días
-- **Configurable:** Mediante variable de entorno `JWT_EXPIRES_IN`
+- **Vigencia:** 24 horas, igual para login con correo, Google OAuth y refresh (`JWT_TTL_SEGUNDOS` en `src/auth/jwt-ttl.ts`)
+- **No configurable por entorno** (la variable `JWT_EXPIRES_IN` que antes figuraba aquí nunca la leyó el código)
 
 ### Guards de Autenticación
 

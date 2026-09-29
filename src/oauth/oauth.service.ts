@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { JWT_TTL_SEGUNDOS } from '../auth/jwt-ttl';
 
 /** Roles que pueden vincular la Skill de Alexa (empleadas). Un rol 'cliente' no puede vincular. */
 const ROLES_PERMITIDOS_ALEXA = ['admin', 'estilista', 'empleado', 'becario'];
@@ -101,7 +102,9 @@ export class OauthService {
     return {
       access_token: codigoOAuth.token,
       token_type: 'bearer',
-      expires_in: 7 * 24 * 60 * 60, // el JWT de la app expira en 7d (AuthService.generateToken)
+      // Vigencia real del JWT entregado: la misma para todos los flujos (src/auth/jwt-ttl.ts).
+      // Antes anunciaba 7 días aunque este token sale del login web, que firmaba 1 día.
+      expires_in: JWT_TTL_SEGUNDOS,
     };
   }
 }

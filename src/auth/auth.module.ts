@@ -9,6 +9,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsuariosModule } from '../usuarios/usuarios.module';
 import { SecurityModule } from '../common/services/security.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { JWT_TTL_SEGUNDOS } from './jwt-ttl';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { PrismaModule } from '../prisma/prisma.module';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET') || 'tu_secreto_temporal',
-        signOptions: { expiresIn: '7d' },
+        signOptions: { expiresIn: JWT_TTL_SEGUNDOS },
       }),
       inject: [ConfigService],
     }),

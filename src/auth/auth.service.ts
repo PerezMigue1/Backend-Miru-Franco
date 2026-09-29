@@ -9,6 +9,7 @@ import { ReenviarCodigoDto } from '../usuarios/dto/reenviar-codigo.dto';
 import { SecurityService } from '../common/services/security.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import { JWT_TTL_SEGUNDOS } from './jwt-ttl';
 
 @Injectable()
 export class AuthService {
@@ -33,7 +34,7 @@ export class AuthService {
       payload.lastActivity = now;
     }
     
-    return this.jwtService.sign(payload, { expiresIn: '7d' });
+    return this.jwtService.sign(payload, { expiresIn: JWT_TTL_SEGUNDOS }); // misma vigencia que el login
   }
 
   async googleLogin(user: any) {
