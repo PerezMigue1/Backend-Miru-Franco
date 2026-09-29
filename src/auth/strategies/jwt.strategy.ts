@@ -5,15 +5,25 @@ import { ConfigService } from '@nestjs/config';
 import { SecurityService } from '../../common/services/security.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Request } from 'express';
+import { leerTokenDeCookie } from '../auth-cookie';
 
-// Extender ExtractJwt para obtener el token raw
-const ExtractJwtFromRequest = (req: Request) => {
+// Extender ExtractJwt para obtener el token raw.
+// Bearer (integraciones/scripts) tiene prioridad; si no hay, se usa la cookie httpOnly del
+// frontend web. `authTransport` le dice a /auth/refresh cómo devolver el token nuevo.
+export const ExtractJwtFromRequest = (req: Request) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
     // Guardar token en request para verificación posterior
     (req as any).rawToken = token;
+    (req as any).authTransport = 'bearer';
     return token;
+  }
+  const cookieToken = leerTokenDeCookie(req);
+  if (cookieToken) {
+    (req as any).rawToken = cookieToken;
+    (req as any).authTransport = 'cookie';
+    return cookieToken;
   }
   return null;
 };

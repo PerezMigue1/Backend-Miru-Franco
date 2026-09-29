@@ -11,8 +11,9 @@ import {
   HttpStatus,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { clearAuthCookie, entregarSesion, pideSesionEnCookie } from './auth-cookie';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
@@ -101,8 +102,15 @@ export class AuthController {
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async logout(@Req() req: any, @Body() body?: { logoutAll?: boolean }) {
-    const token = req.headers.authorization?.replace('Bearer ', '');
+  async logout(
+    @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
+    @Body() body?: { logoutAll?: boolean },
+  ) {
+    // rawToken lo fija JwtStrategy con el token que autenticó la petición (Bearer o cookie);
+    // leer solo el header Authorization dejaría sin revocar las sesiones con cookie.
+    const token: string | undefined = req.rawToken;
+    clearAuthCookie(res);
     if (!token) {
       return { success: true, message: 'Sesión cerrada' };
     }
@@ -113,19 +121,25 @@ export class AuthController {
   @Post('logout-all')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async logoutAll(@CurrentUser() user: any) {
+  async logoutAll(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
+    clearAuthCookie(res);
     return this.authService.logoutAll(user.id);
   }
 
   @Post('refresh')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async refreshToken(@Req() req: any, @CurrentUser() user: any) {
-    const token = req.headers.authorization?.replace('Bearer ', '');
+  async refreshToken(
+    @Req() req: any,
+    @CurrentUser() user: any,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const token: string | undefined = req.rawToken;
     if (!token) {
       return { success: false, message: 'Token no proporcionado' };
     }
-    return this.authService.refreshToken(token, user);
+    const resultado = await this.authService.refreshToken(token, user);
+    return entregarSesion(res, resultado, req.authTransport === 'cookie');
   }
 
   @Get('me')
@@ -149,8 +163,13 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+  async login(
+    @Body() loginDto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const resultado = await this.authService.login(loginDto);
+    return entregarSesion(res, resultado, pideSesionEnCookie(req));
   }
 
   // ===== VERIFICACIÓN DE CUENTA =====
@@ -226,11 +245,16 @@ export class AuthController {
    */
   @Post('exchange-code')
   @HttpCode(HttpStatus.OK)
-  async exchangeCode(@Body() body: { code: string }) {
+  async exchangeCode(
+    @Body() body: { code: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     if (!body.code) {
       throw new UnauthorizedException('Código requerido');
     }
-    return this.authService.intercambiarCodigoPorToken(body.code);
+    const resultado = await this.authService.intercambiarCodigoPorToken(body.code);
+    return entregarSesion(res, resultado, pideSesionEnCookie(req));
   }
 }
 

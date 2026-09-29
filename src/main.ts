@@ -86,7 +86,8 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'Last-Event-ID'],
+    // X-Auth-Mode: el frontend web pide la sesión como cookie httpOnly (ver src/auth/auth-cookie.ts)
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'Last-Event-ID', 'X-Auth-Mode'],
     exposedHeaders: ['Authorization'],
   });
 
