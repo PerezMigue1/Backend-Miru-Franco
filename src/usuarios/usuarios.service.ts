@@ -10,7 +10,7 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
-import { sanitizeInput, containsSQLInjection, sanitizeForLogging, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone, buildPhoneLookupCandidates } from '../common/utils/security.util';
+import { sanitizeInput, containsSQLInjection, sanitizeForLogging, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone, buildPhoneLookupCandidates, formaEscapadaAnterior } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
 
@@ -826,10 +826,12 @@ export class UsuariosService {
       throw new NotFoundException('No se encontró respuesta de seguridad');
     }
 
-    const respuestaValida = await bcrypt.compare(
-      respuestaSanitizada.trim(),
-      usuario.respuestaSeguridad,
-    );
+    // Las respuestas registradas antes guardaron el hash del texto escapado (&#x27;, &quot;…): si la
+    // forma tal cual no coincide, se prueba esa.
+    const anterior = formaEscapadaAnterior(respuesta);
+    const respuestaValida =
+      (await bcrypt.compare(respuestaSanitizada.trim(), usuario.respuestaSeguridad)) ||
+      (anterior !== respuestaSanitizada.trim() && (await bcrypt.compare(anterior, usuario.respuestaSeguridad)));
     if (!respuestaValida) {
       throw new UnauthorizedException('Respuesta incorrecta');
     }

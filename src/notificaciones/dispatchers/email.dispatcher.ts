@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from '../../email/email.service';
 import { CanalDispatcher, EnvioConNotificacion, ResultadoEnvio } from './canal-dispatcher.interface';
+import { escaparHtml } from '../../common/utils/security.util';
 
 /**
  * Plantilla mínima genérica a partir de `notificacion.titulo`/`mensaje` —
@@ -16,8 +17,8 @@ function armarHtml(titulo: string, mensaje: string): string {
         <h2 style="color: #710014; margin: 0;">Miru Franco Salón Beauty</h2>
       </div>
       <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px;">
-        <h3 style="color: #161616; margin-top: 0;">${titulo}</h3>
-        <p style="color: #495057; line-height: 1.6; white-space: pre-line;">${mensaje}</p>
+        <h3 style="color: #161616; margin-top: 0;">${escaparHtml(titulo)}</h3>
+        <p style="color: #495057; line-height: 1.6; white-space: pre-line;">${escaparHtml(mensaje)}</p>
       </div>
       <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6;">
         <p style="color: #6c757d; font-size: 12px; margin: 0;">

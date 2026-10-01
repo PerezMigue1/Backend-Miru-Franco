@@ -5,25 +5,50 @@ import * as crypto from 'crypto';
  */
 
 /**
- * Sanitiza texto para prevenir XSS
- * Escapa caracteres HTML peligrosos que podrían ejecutarse como código
- * 
- * @param input - Texto a sanitizar
- * @returns Texto sanitizado
+ * Normaliza texto de entrada antes de guardarlo: quita el byte nulo (PostgreSQL no lo admite en
+ * TEXT/VARCHAR) y los espacios de los extremos. El texto se guarda TAL CUAL: no escapa HTML.
+ *
+ * Antes escapaba < > " ' / al guardar, y eso corrompía los datos (URLs de Cloudinary guardadas
+ * como https:&#x2F;&#x2F;…, comillas como &quot;). La protección contra XSS va al mostrar: React
+ * ya escapa, y lo que se arma como HTML en el backend (correos) usa `escaparHtml`.
  */
 export function sanitizeInput(input: string): string {
   if (!input || typeof input !== 'string') {
     return '';
   }
 
+  return input.replace(/\u0000/g, '').trim();
+}
+
+/**
+ * Escapa texto para meterlo en HTML (plantillas de correo). Usar al MOSTRAR, nunca al guardar.
+ */
+export function escaparHtml(texto: string): string {
+  return String(texto ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+/**
+ * Forma que daba el `sanitizeInput` anterior (escapado al guardar). Solo para comparar con datos
+ * que se guardaron así y no se pueden reescribir, como el hash de la respuesta de seguridad.
+ */
+export function formaEscapadaAnterior(input: string): string {
+  if (!input || typeof input !== 'string') {
+    return '';
+  }
+
   return input
-    .replace(/\u0000/g, '')      // Eliminar byte nulo (PostgreSQL no lo admite en TEXT/VARCHAR)
-    .replace(/</g, '&lt;')      // < → &lt;
-    .replace(/>/g, '&gt;')      // > → &gt;
-    .replace(/"/g, '&quot;')    // " → &quot;
-    .replace(/'/g, '&#x27;')    // ' → &#x27;
-    .replace(/\//g, '&#x2F;')   // / → &#x2F;
-    .trim();                     // Eliminar espacios al inicio y final
+    .replace(/\u0000/g, '')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;')
+    .trim();
 }
 
 /**
