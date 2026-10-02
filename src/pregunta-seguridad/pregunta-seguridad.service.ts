@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcryptjs';
+import { DATOS_NO_COINCIDEN, SIN_PREGUNTA_RECUPERACION } from '../usuarios/usuarios.service';
 
 @Injectable()
 export class PreguntaSeguridadService {
@@ -104,30 +105,22 @@ export class PreguntaSeguridadService {
     throw new BadRequestException('Funcionalidad en desarrollo');
   }
 
+  /**
+   * Equivale a POST /api/auth/pregunta-seguridad: inexistente, inactivo, de Google o sin pregunta
+   * responden el mismo 400 con el mismo texto, para no revelar si el correo existe.
+   */
   async obtenerPreguntaPorEmail(email: string) {
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
       select: {
         id: true,
-        googleId: true,
+        activo: true,
         preguntaSeguridad: true,
       },
     });
 
-    if (!usuario) {
-      this.logger.warn('Pregunta por email: usuario no encontrado');
-      throw new NotFoundException('No existe pregunta para este email');
-    }
-
-    // Si es un usuario de Google y no tiene pregunta de seguridad
-    if (usuario.googleId && !usuario.preguntaSeguridad) {
-      this.logger.log(`Pregunta por email: usuario de Google sin pregunta (${usuario.id})`);
-      throw new NotFoundException('Este correo está asociado a una cuenta de Google. No se puede usar recuperación de contraseña por pregunta de seguridad.');
-    }
-
-    if (!usuario.preguntaSeguridad) {
-      this.logger.warn(`Pregunta por email: usuario sin pregunta (${usuario.id})`);
-      throw new NotFoundException('No existe pregunta para este email. Este correo puede estar asociado a una cuenta de Google.');
+    if (!usuario || !usuario.activo || !usuario.preguntaSeguridad) {
+      throw new BadRequestException(SIN_PREGUNTA_RECUPERACION);
     }
 
     this.logger.log(`Pregunta de seguridad encontrada (${usuario.id})`);
@@ -143,40 +136,48 @@ export class PreguntaSeguridadService {
     };
   }
 
+  /**
+   * Equivale a POST /api/auth/verificar-respuesta: cualquier fallo que dependa de la cuenta
+   * (inexistente, inactiva, sin pregunta, pregunta o respuesta distinta) es el mismo 400.
+   * Los errores de forma de `answers` se validan antes de consultar, así no dependen de la cuenta.
+   */
   async verificarRespuesta(email: string, answers: Record<string, string>) {
-    const usuario = await this.prisma.usuario.findUnique({
-      where: { email: email.toLowerCase() },
-      select: {
-        id: true,
-        preguntaSeguridad: true,
-        respuestaSeguridad: true,
-      },
-    });
-
-    if (!usuario || !usuario.preguntaSeguridad || !usuario.respuestaSeguridad) {
-      throw new NotFoundException('No existe pregunta para este email');
-    }
-
     const keys = Object.keys(answers);
-    
+
     if (keys.length === 0) {
       throw new BadRequestException('answers vacío');
     }
 
     const preguntaTexto = keys[0];
     const respuestaPlano = String(answers[preguntaTexto] ?? '').trim();
-    
+
     if (!respuestaPlano) {
       throw new BadRequestException('Respuesta vacía');
     }
 
-    if (preguntaTexto !== usuario.preguntaSeguridad) {
-      throw new BadRequestException('Pregunta no coincide');
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { email: email.toLowerCase() },
+      select: {
+        id: true,
+        activo: true,
+        preguntaSeguridad: true,
+        respuestaSeguridad: true,
+      },
+    });
+
+    if (
+      !usuario ||
+      !usuario.activo ||
+      !usuario.preguntaSeguridad ||
+      !usuario.respuestaSeguridad ||
+      preguntaTexto !== usuario.preguntaSeguridad
+    ) {
+      throw new BadRequestException(DATOS_NO_COINCIDEN);
     }
 
     const ok = await bcrypt.compare(respuestaPlano, usuario.respuestaSeguridad);
     if (!ok) {
-      throw new BadRequestException('Respuesta incorrecta');
+      throw new BadRequestException(DATOS_NO_COINCIDEN);
     }
 
     return { success: true };

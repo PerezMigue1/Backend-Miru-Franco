@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { PreguntaSeguridadService } from './pregunta-seguridad.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { CreatePreguntaDto } from './dto/create-pregunta.dto';
 import { UpdatePreguntaDto } from './dto/update-pregunta.dto';
 import { VerificarRespuestaDto } from './dto/verificar-respuesta.dto';
@@ -28,7 +29,9 @@ export class PreguntaSeguridadController {
     return this.preguntaSeguridadService.obtenerPreguntas();
   }
 
+  // Misma política que POST /api/auth/pregunta-seguridad (la web usa esa; esta queda para otras apps).
   @Get('por-email')
+  @UseGuards(new RateLimitGuard(3, 60000))
   async obtenerPreguntaPorEmail(@Query('email') email: string) {
     if (!email) {
       return { success: false, message: 'email es requerido' };
@@ -53,8 +56,10 @@ export class PreguntaSeguridadController {
     );
   }
 
+  // Misma política que POST /api/auth/verificar-respuesta.
   @Post('verificar')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000))
   async verificarRespuesta(@Body() verificarRespuestaDto: VerificarRespuestaDto) {
     return this.preguntaSeguridadService.verificarRespuesta(
       verificarRespuestaDto.email,
