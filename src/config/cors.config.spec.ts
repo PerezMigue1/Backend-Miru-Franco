@@ -1,4 +1,5 @@
-import { construirOrigenesPermitidos, crearCorsOptions } from './cors.config';
+import { Test } from '@nestjs/testing';
+import { construirOrigenesPermitidos, crearCorsOptions, crearRechazoPreflight } from './cors.config';
 
 type OrigenCallback = (err: Error | null, permitido?: boolean) => void;
 
@@ -59,5 +60,43 @@ describe('cors.config', () => {
     const opciones = crearCorsOptions(prod);
     expect(opciones.credentials).toBe(true);
     expect(opciones.allowedHeaders).toEqual(expect.arrayContaining(['X-Auth-Mode', 'Last-Event-ID', 'Authorization']));
+  });
+});
+
+describe('preflight (OPTIONS) con la app real', () => {
+  const prod = { NODE_ENV: 'production' } as NodeJS.ProcessEnv;
+  let app: any;
+  let base: string;
+
+  beforeAll(async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const modulo = await Test.createTestingModule({}).compile();
+    app = modulo.createNestApplication({ logger: false });
+    app.use(crearRechazoPreflight(prod));
+    app.enableCors(crearCorsOptions(prod));
+    await app.listen(0, '127.0.0.1');
+    base = `http://127.0.0.1:${app.getHttpServer().address().port}`;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const preflight = (origin: string) =>
+    fetch(`${base}/api/pregunta-seguridad`, {
+      method: 'OPTIONS',
+      headers: { Origin: origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'content-type,x-auth-mode' },
+    });
+
+  it('un origen permitido recibe 204 con cabeceras CORS', async () => {
+    const r = await preflight('https://www.mirufranco.com');
+    expect(r.status).toBe(204);
+    expect(r.headers.get('access-control-allow-origin')).toBe('https://www.mirufranco.com');
+  });
+
+  it('un origen no permitido recibe 403, sin cabeceras CORS', async () => {
+    const r = await preflight('http://localhost:3100');
+    expect(r.status).toBe(403);
+    expect(r.headers.get('access-control-allow-origin')).toBeNull();
   });
 });

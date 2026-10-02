@@ -3,7 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { BadRequestException, ValidationPipe, VersioningType } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
-import { crearCorsOptions } from './config/cors.config';
+import { crearCorsOptions, crearRechazoPreflight } from './config/cors.config';
 import type { ValidationError } from 'class-validator';
 const cookieParser = require('cookie-parser');
 
@@ -55,6 +55,8 @@ async function bootstrap() {
   
   // CORS: lista blanca de orígenes (ver src/config/cors.config.ts). Los orígenes que no están en
   // la lista se rechazan; antes se aceptaban todos "temporalmente para debugging".
+  // El preflight de un origen fuera de la lista responde 403 (antes caía al router con 404).
+  app.use(crearRechazoPreflight());
   app.enableCors(crearCorsOptions());
 
   // Headers de seguridad HTTP

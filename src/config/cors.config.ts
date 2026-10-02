@@ -49,6 +49,27 @@ export function construirOrigenesPermitidos(env: NodeJS.ProcessEnv = process.env
   return origenes;
 }
 
+/**
+ * Preflight (OPTIONS) de un origen fuera de la lista blanca: 403. Sin esto, el middleware de CORS lo
+ * deja pasar sin cabeceras y el router responde 404, que parece una ruta inexistente. Usa la misma
+ * lista que crearCorsOptions; las peticiones sin Origin (no son de navegador) siguen de largo.
+ */
+export function crearRechazoPreflight(env: NodeJS.ProcessEnv = process.env) {
+  const permitidos = construirOrigenesPermitidos(env);
+  return (
+    req: { method?: string; headers: Record<string, string | string[] | undefined> },
+    res: { status(codigo: number): { end(): void } },
+    next: () => void,
+  ): void => {
+    const origin = req.headers.origin;
+    if (req.method === 'OPTIONS' && typeof origin === 'string' && !permitidos.has(origin)) {
+      res.status(403).end();
+      return;
+    }
+    next();
+  };
+}
+
 export function crearCorsOptions(env: NodeJS.ProcessEnv = process.env): CorsOptions {
   const permitidos = construirOrigenesPermitidos(env);
   return {
