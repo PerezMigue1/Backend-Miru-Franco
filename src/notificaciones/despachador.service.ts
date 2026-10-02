@@ -79,8 +79,6 @@ export class DespachadorService {
       take: BATCH_SIZE,
       select: { id: true },
     });
-    // DIAGNÓSTICO TEMPORAL (prueba manual Etapa 3) — quitar o silenciar tras la prueba.
-    this.logger.log(`[BARRIDO] tick — ${candidatos.length} envíos pendientes encontrados`);
     if (candidatos.length === 0) return;
 
     const ids = candidatos.map((c) => c.id);
@@ -107,11 +105,8 @@ export class DespachadorService {
         });
         continue;
       }
-      // DIAGNÓSTICO TEMPORAL (prueba manual Etapa 3) — quitar o silenciar tras la prueba.
-      this.logger.log(`[BARRIDO] despachando envío ${envio.id} canal ${envio.canal}...`);
       try {
         await dispatcher.enviar(envio);
-        this.logger.log(`[BARRIDO] envío ${envio.id} canal ${envio.canal} → enviada`);
       } catch (e) {
         const intentos = envio.intentos + 1;
         if (intentos >= MAX_INTENTOS) {

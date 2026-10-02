@@ -20,6 +20,14 @@ export interface CitaCanceladaEvent {
   motivo: string;
 }
 
+export interface CitaReprogramadaEvent {
+  citaId: number;
+  clienteId: string;
+  especialistaId: string;
+  servicioNombre: string;
+  fechaHoraInicioNueva: Date;
+}
+
 export interface VentaLocalPagadaEvent {
   ventaId: number;
   clienteId: string;
@@ -162,6 +170,85 @@ export class NotificacionesListener {
         },
         data: { estado: 'descartada' },
       });
+    });
+
+    this.despachador.drenarInmediatas(envioIds);
+  }
+
+  @OnEvent('cita.reprogramada')
+  async onCitaReprogramada(payload: CitaReprogramadaEvent): Promise<void> {
+    const fecha = this.formatearFecha(payload.fechaHoraInicioNueva);
+    const envioIds: string[] = [];
+
+    await this.prisma.$transaction(async (tx) => {
+      // (a) Cancelar primero los recordatorios viejos (apuntan a la hora
+      // anterior) — debe ir ANTES de programar los nuevos de (c), o este mismo
+      // updateMany también los descartaría a ellos.
+      await tx.notificacionEnvio.updateMany({
+        where: {
+          estado: 'pendiente',
+          notificacion: {
+            entidadTipo: 'cita',
+            entidadId: String(payload.citaId),
+            tipo: TIPO_RECORDATORIO_CITA,
+          },
+        },
+        data: { estado: 'descartada' },
+      });
+
+      // (b) Notificación inmediata a cliente + especialista — sí entran a
+      // envioIds → drenarInmediatas, deben llegar ya.
+      const canalesCliente = await this.resolver.resolverCanales(payload.clienteId, 'cita_reprogramada', ['in_app']);
+      const { envios: enviosCliente } = await this.outbox.encolar(tx, {
+        usuarioId: payload.clienteId,
+        tipo: 'cita_reprogramada',
+        titulo: 'Cita reprogramada',
+        mensaje: `Tu cita de ${payload.servicioNombre} fue reprogramada para el ${fecha}`,
+        entidadTipo: 'cita',
+        entidadId: String(payload.citaId),
+        canales: canalesCliente,
+      });
+      envioIds.push(...enviosCliente.map((e) => e.id));
+
+      const canalesEspecialista = await this.resolver.resolverCanales(
+        payload.especialistaId,
+        'cita_reprogramada',
+        ['in_app'],
+      );
+      const { envios: enviosEspecialista } = await this.outbox.encolar(tx, {
+        usuarioId: payload.especialistaId,
+        tipo: 'cita_reprogramada',
+        titulo: 'Cita reprogramada',
+        mensaje: `La cita de ${payload.servicioNombre} que tenías asignada fue reprogramada para el ${fecha}`,
+        entidadTipo: 'cita',
+        entidadId: String(payload.citaId),
+        canales: canalesEspecialista,
+      });
+      envioIds.push(...enviosEspecialista.map((e) => e.id));
+
+      // (c) Recordatorios nuevos con la fecha nueva — mismo guard de
+      // antelación que onCitaCreada, y mismo cuidado: NO entran a envioIds.
+      const ahora = Date.now();
+      for (const antesMs of RECORDATORIOS_ANTES_MS) {
+        const programadoPara = new Date(payload.fechaHoraInicioNueva.getTime() - antesMs);
+        if (programadoPara.getTime() <= ahora) continue;
+
+        const canalesRecordatorio = await this.resolver.resolverCanales(
+          payload.clienteId,
+          TIPO_RECORDATORIO_CITA,
+          ['in_app', 'email'],
+        );
+        await this.outbox.encolar(tx, {
+          usuarioId: payload.clienteId,
+          tipo: TIPO_RECORDATORIO_CITA,
+          titulo: 'Recordatorio de cita',
+          mensaje: `Tu cita de ${payload.servicioNombre} es el ${fecha}`,
+          entidadTipo: 'cita',
+          entidadId: String(payload.citaId),
+          programadoPara,
+          canales: canalesRecordatorio,
+        });
+      }
     });
 
     this.despachador.drenarInmediatas(envioIds);

@@ -459,6 +459,17 @@ export class CitasService {
       },
       include: this.incluirRelaciones(),
     });
+
+    // Fuera de cualquier transacción a propósito (no hay una que envolver aquí,
+    // igual que crear()/cancelar()): la cita ya está comprometida en BD.
+    this.eventEmitter.emit('cita.reprogramada', {
+      citaId: actualizada.id,
+      clienteId: actualizada.clienteId,
+      especialistaId: actualizada.especialistaId,
+      servicioNombre: actualizada.servicio.nombre,
+      fechaHoraInicioNueva: actualizada.fechaHoraInicio,
+    });
+
     return { success: true, data: actualizada };
   }
 
