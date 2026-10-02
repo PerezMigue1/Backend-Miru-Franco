@@ -1,6 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
+/**
+ * Tras rotar un token en /auth/refresh, el anterior se sigue aceptando este tiempo: las peticiones
+ * que ya iban con él (otra pestaña, o en vuelo durante el refresh) no cierran la sesión con
+ * "Token revocado". El logout no pasa por aquí (usa tokensRevocadosDesde) y revoca al instante.
+ */
+export const GRACIA_ROTACION_MS = 30_000;
+
 @Injectable()
 export class SecurityService {
   private readonly MAX_LOGIN_ATTEMPTS = 5;
@@ -132,15 +139,16 @@ export class SecurityService {
   }
 
   /**
-   * Verifica si un token JWT está en la blacklist
+   * Verifica si un token JWT está en la blacklist. La tabla solo la llena la rotación del refresh:
+   * dentro de GRACIA_ROTACION_MS desde la rotación (creadoEn) el token aún se acepta.
    */
   async isTokenRevoked(token: string): Promise<boolean> {
-    let tokenRevocado: { expiraEn: Date } | null = null;
+    let tokenRevocado: { expiraEn: Date; creadoEn: Date } | null = null;
     try {
       tokenRevocado = await this.withReconnectRetry(() =>
         this.prisma.tokenRevocado.findUnique({
           where: { token },
-          select: { expiraEn: true },
+          select: { expiraEn: true, creadoEn: true },
         }),
       );
     } catch (error) {
@@ -164,18 +172,21 @@ export class SecurityService {
       return false;
     }
 
+    if (Date.now() - tokenRevocado.creadoEn.getTime() < GRACIA_ROTACION_MS) {
+      return false;
+    }
+
     return true;
   }
 
   /**
-   * Agrega un token a la blacklist
+   * Agrega un token a la blacklist (rotación del refresh). Si ya estaba (dos pestañas refrescaron
+   * con el mismo token dentro de la gracia), se conserva la fila original: la gracia no se alarga.
    */
   async revokeToken(token: string, expiresAt: Date): Promise<void> {
-    await this.prisma.tokenRevocado.create({
-      data: {
-        token,
-        expiraEn: expiresAt,
-      },
+    await this.prisma.tokenRevocado.createMany({
+      data: [{ token, expiraEn: expiresAt, creadoEn: new Date() }],
+      skipDuplicates: true,
     });
   }
 
