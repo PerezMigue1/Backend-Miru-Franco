@@ -43,6 +43,14 @@ const SELECT_USUARIO_SEGURO = {
   activo: true,
 } as const;
 
+/**
+ * Mensajes de la recuperación por pregunta de seguridad: los mismos (y el mismo 400) exista o no la
+ * cuenta, tenga o no pregunta, sea o no de Google, para no revelar datos de la cuenta.
+ */
+export const SIN_PREGUNTA_RECUPERACION =
+  'No pudimos continuar con la recuperación por pregunta de seguridad. Intenta recuperar tu cuenta por correo.';
+export const DATOS_NO_COINCIDEN = 'Los datos no coinciden.';
+
 @Injectable()
 export class UsuariosService {
   // Logs sin datos personales (Render los guarda): solo ids, nunca correo, teléfono ni nombre.
@@ -770,7 +778,7 @@ export class UsuariosService {
     // Prevenir SQL injection
     if (containsSQLInjection(emailSanitizado)) {
       this.logger.warn('Intento de SQL injection en obtenerPreguntaSeguridad');
-      throw new NotFoundException('No se encontró pregunta de seguridad para este correo');
+      throw new BadRequestException(SIN_PREGUNTA_RECUPERACION);
     }
     
     const usuario = await this.prisma.usuario.findUnique({
@@ -788,16 +796,16 @@ export class UsuariosService {
     // Siempre devolver el mismo tipo de respuesta independientemente
     if (!usuario || !usuario.activo) {
       // No logear email real para prevenir información en logs
-      throw new NotFoundException('No se encontró pregunta de seguridad para este correo');
+      throw new BadRequestException(SIN_PREGUNTA_RECUPERACION);
     }
 
     // Si es un usuario de Google y no tiene pregunta de seguridad
     if (usuario.googleId && !usuario.preguntaSeguridad) {
-      throw new NotFoundException('Este correo está asociado a una cuenta de Google. No se puede usar recuperación de contraseña por pregunta de seguridad. Usa "Continuar con Google" para iniciar sesión.');
+      throw new BadRequestException(SIN_PREGUNTA_RECUPERACION);
     }
 
     if (!usuario.preguntaSeguridad) {
-      throw new NotFoundException('No se encontró pregunta de seguridad para este correo');
+      throw new BadRequestException(SIN_PREGUNTA_RECUPERACION);
     }
 
     return {
@@ -821,11 +829,11 @@ export class UsuariosService {
     });
 
     if (!usuario) {
-      throw new NotFoundException('Correo no encontrado');
+      throw new BadRequestException(DATOS_NO_COINCIDEN);
     }
 
     if (!usuario.respuestaSeguridad) {
-      throw new NotFoundException('No se encontró respuesta de seguridad');
+      throw new BadRequestException(DATOS_NO_COINCIDEN);
     }
 
     // Las respuestas registradas antes guardaron el hash del texto escapado (&#x27;, &quot;…): si la
@@ -835,7 +843,7 @@ export class UsuariosService {
       (await bcrypt.compare(respuestaSanitizada.trim(), usuario.respuestaSeguridad)) ||
       (anterior !== respuestaSanitizada.trim() && (await bcrypt.compare(anterior, usuario.respuestaSeguridad)));
     if (!respuestaValida) {
-      throw new UnauthorizedException('Respuesta incorrecta');
+      throw new BadRequestException(DATOS_NO_COINCIDEN);
     }
 
     // Generar token temporal válido por 10 minutos

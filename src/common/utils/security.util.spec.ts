@@ -52,6 +52,6 @@ describe('Respuesta de seguridad registrada con el escape anterior', () => {
 
   it('rechaza una respuesta incorrecta', async () => {
     const hash = await bcrypt.hash("Firulais d'Oro", 4);
-    await expect(servicioCon(hash).validarRespuestaSeguridad('u@example.com', 'Otra')).rejects.toThrow('Respuesta incorrecta');
+    await expect(servicioCon(hash).validarRespuestaSeguridad('u@example.com', 'Otra')).rejects.toThrow('Los datos no coinciden.');
   });
 });
