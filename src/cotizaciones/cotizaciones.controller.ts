@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Request, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { CotizacionesService } from './cotizaciones.service';
 import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
@@ -14,6 +14,16 @@ export class CotizacionesController {
   @Permisos('servicios:lectura')
   async listar() {
     return this.cotizacionesService.listar();
+  }
+
+  /**
+   * GET /api/cotizaciones/mias — las cotizaciones del cliente en sesión. El cliente sale del token;
+   * no se acepta clienteId por query, params ni body. Va antes de `:id` para que no la capture.
+   */
+  @Get('mias')
+  @Permisos('citas:propia')
+  async listarMias(@Request() req: any) {
+    return this.cotizacionesService.listarMias(req.user?.id);
   }
 
   @Get(':id')

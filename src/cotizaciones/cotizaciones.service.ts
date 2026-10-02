@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
@@ -19,6 +19,35 @@ export class CotizacionesService {
     const cotizaciones = await this.prisma.cotizacion.findMany({
       include: this.incluirRelaciones(),
       orderBy: { fechaEvento: 'asc' },
+    });
+
+    return {
+      success: true,
+      count: cotizaciones.length,
+      data: cotizaciones,
+    };
+  }
+
+  /** Cotizaciones de un cliente, más recientes primero, solo con los campos que ve el propio cliente. */
+  async listarMias(clienteId: string | undefined) {
+    // Sin id, `where: { clienteId: undefined }` devolvería las de todos los clientes
+    if (!clienteId) {
+      throw new UnauthorizedException('Usuario no autenticado');
+    }
+
+    const cotizaciones = await this.prisma.cotizacion.findMany({
+      where: { clienteId },
+      select: {
+        id: true,
+        fechaEvento: true,
+        estado: true,
+        monto: true,
+        anticipo: true,
+        cantidadPersonas: true,
+        notas: true,
+        paquete: { select: { tipo_evento: true, precio_especial: true } },
+      },
+      orderBy: { fechaEvento: 'desc' },
     });
 
     return {
