@@ -5,11 +5,12 @@ import {
   entregarSesion,
   leerTokenDeCookie,
   pideSesionEnCookie,
+  renovarEnSegundos,
 } from './auth-cookie';
 
-function jwtCon(exp: number): string {
+function jwtCon(exp: number, extra: Record<string, number> = {}): string {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
-  return `${b64({ alg: 'HS256' })}.${b64({ id: 'u1', exp })}.firma`;
+  return `${b64({ alg: 'HS256' })}.${b64({ id: 'u1', exp, ...extra })}.firma`;
 }
 
 function resMock() {
@@ -26,7 +27,7 @@ describe('auth-cookie', () => {
 
     const cuerpo = entregarSesion(res, { success: true, token, usuario: { id: 'u1' } }, true);
 
-    expect(cuerpo).toEqual({ success: true, usuario: { id: 'u1' } });
+    expect(cuerpo).toEqual({ success: true, usuario: { id: 'u1' }, renovarEnSegundos: expect.any(Number) });
     expect(res.cookie).toHaveBeenCalledTimes(1);
     const [nombre, valor, opciones] = res.cookie.mock.calls[0];
     expect(nombre).toBe(AUTH_COOKIE_NAME);
@@ -35,6 +36,19 @@ describe('auth-cookie', () => {
     // La cookie no sobrevive al token (~1 h)
     expect(opciones.maxAge).toBeGreaterThan(3500 * 1000);
     expect(opciones.maxAge).toBeLessThanOrEqual(3600 * 1000);
+  });
+
+  it('renovarEnSegundos: lo que falta de los 15 min desde lastActivity, sin pasar del exp', () => {
+    const ahora = 1_800_000_000;
+    const ms = ahora * 1000;
+    expect(renovarEnSegundos(jwtCon(ahora + 24 * 3600, { iat: ahora, lastActivity: ahora }), ms)).toBe(15 * 60);
+    // Token a punto de expirar: manda el exp.
+    expect(renovarEnSegundos(jwtCon(ahora + 60, { iat: ahora, lastActivity: ahora }), ms)).toBe(60);
+    // Sin lastActivity, cuenta desde iat.
+    expect(renovarEnSegundos(jwtCon(ahora + 24 * 3600, { iat: ahora - 600 }), ms)).toBe(300);
+    // Ventana ya pasada: 0, nunca negativo.
+    expect(renovarEnSegundos(jwtCon(ahora + 24 * 3600, { iat: ahora - 3600, lastActivity: ahora - 3600 }), ms)).toBe(0);
+    expect(renovarEnSegundos('no-es-un-jwt', ms)).toBeUndefined();
   });
 
   it('sin modo cookie devuelve el token en el cuerpo y no toca cookies (clientes Bearer)', () => {

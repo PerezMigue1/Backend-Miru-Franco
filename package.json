@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Backend API con NestJS, TypeScript y Prisma",
   "main": "dist/main.js",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "prisma generate && npx tsc && node scripts/copiar-modelo-runtime.js",
     "test": "jest",
@@ -60,7 +63,7 @@
     "reflect-metadata": "^0.2.2",
     "resend": "^6.18.1",
     "rxjs": "^7.8.1",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.5",
     "twilio": "^5.13.0",
     "typescript": "^5.1.3"
   },

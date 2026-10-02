@@ -1,11 +1,13 @@
 import type { CookieOptions, Request, Response } from 'express';
+import { VENTANA_REFRESH_SEGUNDOS } from './jwt-ttl';
 
 /**
  * Sesión del frontend web en cookie httpOnly (el JWT deja de ser legible desde JavaScript).
  *
  * Contrato con el frontend (miru-franco-web, services/client.ts):
  * - El frontend envía `X-Auth-Mode: cookie` en login y exchange-code → el backend responde
- *   con `Set-Cookie` y SIN `token` en el cuerpo.
+ *   con `Set-Cookie` y SIN `token` en el cuerpo. En su lugar va `renovarEnSegundos`:
+ *   el frontend solo llama a refresh cuando le quedan menos de 5 min.
  * - Toda petición autenticada viaja con `credentials: 'include'`; JwtStrategy lee la cookie
  *   cuando no hay `Authorization: Bearer`.
  * - refresh responde como se autenticó la petición: cookie → nueva cookie (sin token en el
@@ -32,14 +34,32 @@ function opcionesBase(): CookieOptions {
   };
 }
 
+function leerPayload(token: string): { exp?: unknown; iat?: unknown; lastActivity?: unknown } | null {
+  try {
+    return JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /** Milisegundos hasta el `exp` del JWT, para que la cookie no sobreviva al token. */
 function msHastaExpirar(token: string): number | undefined {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'));
-    return typeof payload?.exp === 'number' ? Math.max(0, payload.exp * 1000 - Date.now()) : undefined;
-  } catch {
-    return undefined;
-  }
+  const payload = leerPayload(token);
+  return typeof payload?.exp === 'number' ? Math.max(0, payload.exp * 1000 - Date.now()) : undefined;
+}
+
+/**
+ * Segundos que le quedan a este token para que /auth/refresh lo acepte: su ventana de renovación
+ * (VENTANA_REFRESH_SEGUNDOS desde `lastActivity`), sin pasar del `exp`. El frontend no puede leer
+ * la cookie httpOnly, así que renueva con este dato y no en cada carga. Va como duración y no como
+ * hora para que un reloj desfasado en el dispositivo no lo descuadre.
+ */
+export function renovarEnSegundos(token: string, ahoraMs: number = Date.now()): number | undefined {
+  const payload = leerPayload(token);
+  if (typeof payload?.exp !== 'number') return undefined;
+  const desde = typeof payload.lastActivity === 'number' ? payload.lastActivity : payload.iat;
+  const limite = typeof desde === 'number' ? Math.min(payload.exp, desde + VENTANA_REFRESH_SEGUNDOS) : payload.exp;
+  return Math.max(0, limite - Math.floor(ahoraMs / 1000));
 }
 
 export function setAuthCookie(res: Response, token: string): void {
@@ -61,16 +81,16 @@ export function pideSesionEnCookie(req: Request): boolean {
 }
 
 /**
- * Entrega un token recién emitido según el modo del cliente: como cookie httpOnly (y sin
- * `token` en el cuerpo) o en el cuerpo, como antes.
+ * Entrega un token recién emitido según el modo del cliente: como cookie httpOnly (sin `token`
+ * en el cuerpo, con `renovarEnSegundos`) o en el cuerpo, como antes.
  */
 export function entregarSesion<T extends { token?: string }>(
   res: Response,
   resultado: T,
   enCookie: boolean,
-): T | Omit<T, 'token'> {
+): T | (Omit<T, 'token'> & { renovarEnSegundos?: number }) {
   if (!enCookie || !resultado?.token) return resultado;
   setAuthCookie(res, resultado.token);
-  const { token: _token, ...sinToken } = resultado;
-  return sinToken;
+  const { token, ...sinToken } = resultado;
+  return { ...sinToken, renovarEnSegundos: renovarEnSegundos(token) };
 }

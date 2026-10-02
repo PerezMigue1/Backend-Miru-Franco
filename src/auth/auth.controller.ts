@@ -224,6 +224,7 @@ export class AuthController {
 
   @Post('cambiar-password')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000))
   async cambiarPassword(@Body() cambiarPasswordDto: CambiarPasswordDto) {
     return this.authService.cambiarPassword(
       cambiarPasswordDto.email,

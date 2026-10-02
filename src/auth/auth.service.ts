@@ -9,7 +9,7 @@ import { ReenviarCodigoDto } from '../usuarios/dto/reenviar-codigo.dto';
 import { SecurityService } from '../common/services/security.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
-import { JWT_TTL_SEGUNDOS } from './jwt-ttl';
+import { JWT_TTL_SEGUNDOS, VENTANA_REFRESH_SEGUNDOS } from './jwt-ttl';
 
 @Injectable()
 export class AuthService {
@@ -190,8 +190,7 @@ export class AuthService {
     const decoded: any = this.jwtService.decode(oldToken);
     if (decoded?.lastActivity) {
       const now = Math.floor(Date.now() / 1000);
-      const INACTIVITY_TIMEOUT = 15 * 60; // 15 minutos
-      if (now - decoded.lastActivity > INACTIVITY_TIMEOUT) {
+      if (now - decoded.lastActivity > VENTANA_REFRESH_SEGUNDOS) {
         throw new UnauthorizedException('Sesión expirada por inactividad');
       }
     }

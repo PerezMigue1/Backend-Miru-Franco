@@ -12,3 +12,11 @@
  * (src/auth/auth-cookie.ts).
  */
 export const JWT_TTL_SEGUNDOS = 24 * 60 * 60;
+
+/**
+ * Un token solo se puede renovar (POST /auth/refresh) durante sus primeros 15 min, contados desde
+ * su `lastActivity` (= emisión). Pasado ese plazo sigue sirviendo hasta su `exp` mientras la BD no
+ * marque inactividad, pero ya no se renueva: un token con más de 15 min no se estira más allá de su `exp`.
+ * `entregarSesion` le dice al frontend cuánto le queda para renovar (`renovarEnSegundos`).
+ */
+export const VENTANA_REFRESH_SEGUNDOS = 15 * 60;

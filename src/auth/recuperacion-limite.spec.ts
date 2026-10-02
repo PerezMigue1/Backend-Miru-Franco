@@ -14,10 +14,13 @@ const { AuthController } = require('./auth.controller');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { AuthService } = require('./auth.service');
 
-describe('POST /api/auth/verificar-respuesta: límite de intentos', () => {
+describe('Recuperación de contraseña: límite de intentos', () => {
   let app: INestApplication;
   let base: string;
-  const authService = { verificarRespuestaSeguridad: jest.fn().mockResolvedValue({ success: true }) };
+  const authService = {
+    verificarRespuestaSeguridad: jest.fn().mockResolvedValue({ success: true }),
+    cambiarPassword: jest.fn().mockResolvedValue({ success: true }),
+  };
 
   beforeAll(async () => {
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -35,7 +38,7 @@ describe('POST /api/auth/verificar-respuesta: límite de intentos', () => {
     await app.close();
   });
 
-  it('el cuarto intento dentro de un minuto responde 429 y no llega al servicio', async () => {
+  it('POST /api/auth/verificar-respuesta: el cuarto intento dentro de un minuto responde 429 y no llega al servicio', async () => {
     const intentar = () =>
       fetch(`${base}/api/auth/verificar-respuesta`, {
         method: 'POST',
@@ -48,5 +51,20 @@ describe('POST /api/auth/verificar-respuesta: límite de intentos', () => {
 
     expect(estados).toEqual([200, 200, 200, 429]);
     expect(authService.verificarRespuestaSeguridad).toHaveBeenCalledTimes(3);
+  });
+
+  it('POST /api/auth/cambiar-password: el cuarto intento dentro de un minuto responde 429 y no llega al servicio', async () => {
+    const intentar = () =>
+      fetch(`${base}/api/auth/cambiar-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'alguien@example.com', token: 'x', nuevaPassword: 'Nueva123#' }),
+      });
+
+    const estados: number[] = [];
+    for (let i = 0; i < 4; i++) estados.push((await intentar()).status);
+
+    expect(estados).toEqual([200, 200, 200, 429]);
+    expect(authService.cambiarPassword).toHaveBeenCalledTimes(3);
   });
 });
