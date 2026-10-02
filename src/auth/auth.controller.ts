@@ -190,6 +190,7 @@ export class AuthController {
 
   @Post('verificar-respuesta')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(3, 60000))
   async verificarRespuesta(@Body() body: { email: string; respuesta: string }) {
     return this.authService.verificarRespuestaSeguridad(body.email, body.respuesta);
   }
