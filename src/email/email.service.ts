@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 
 @Injectable()
 export class EmailService {
+  // Sin destinatario en los logs: el correo de la clienta es dato personal.
+  private readonly logger = new Logger(EmailService.name);
   private resend: Resend | null = null;
 
   constructor(private configService: ConfigService) {
@@ -44,7 +46,7 @@ export class EmailService {
       });
 
       if (error) throw error;
-      console.log('Correo de activación enviado a:', correo);
+      this.logger.log('Correo de activación enviado');
     } catch (err: any) {
       console.error('Error enviando correo de activación:', err.response?.body || err.message);
       throw new Error('No se pudo enviar el correo de activación');
@@ -119,7 +121,7 @@ export class EmailService {
       });
 
       if (error) throw error;
-      console.log('Correo de recuperación de contraseña enviado a:', correo);
+      this.logger.log('Correo de recuperación de contraseña enviado');
     } catch (err: any) {
       console.error('Error enviando correo de recuperación:', err.response?.body || err.message);
       throw new Error('No se pudo enviar el correo de recuperación de contraseña');
@@ -151,7 +153,7 @@ export class EmailService {
       });
 
       if (error) throw error;
-      console.log('Correo de notificación enviado a:', to);
+      this.logger.log('Correo de notificación enviado');
     } catch (err: any) {
       console.error('Error enviando correo de notificación:', err.response?.body || err.message);
       throw new Error('No se pudo enviar el correo de notificación');

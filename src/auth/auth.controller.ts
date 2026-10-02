@@ -56,22 +56,14 @@ export class AuthController {
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
     try {
       console.log('🔍 Google OAuth callback recibido');
-      console.log(
-        '🔍 Usuario del request:',
-        req.user
-          ? {
-              id: req.user.id,
-              email: sanitizeForLogOutput(req.user.email, 320),
-            }
-          : 'NO HAY USUARIO',
-      );
+      console.log('🔍 Usuario del request:', req.user ? req.user.id : 'NO HAY USUARIO');
 
       if (!req.user) {
         console.error('❌ Error: req.user es undefined en el callback');
         // No loguear headers ni URL cruda (log injection / datos sensibles)
         console.error('❌ Request (resumido):', {
           method: req.method,
-          path: sanitizeForLogOutput(req.url, 2048),
+          path: sanitizeForLogOutput(String(req.url ?? '').split('?')[0], 2048),
           headerCount: Object.keys(req.headers ?? {}).length,
         });
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';

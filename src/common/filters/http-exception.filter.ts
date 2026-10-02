@@ -38,7 +38,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const body = this.buildErrorBody(exception, status, request.url);
 
     // Log: en producción no loguear stack al cliente; sí en consola del servidor
-    this.logError(exception, status, request.url);
+    // Sin query string: puede llevar datos personales (p. ej. /pregunta-seguridad/por-email?email=…)
+    this.logError(exception, status, String(request.url ?? '').split('?')[0]);
 
     response.status(status).json(body);
   }

@@ -1,9 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class PreguntaSeguridadService {
+  // Sin correo ni pregunta en los logs.
+  private readonly logger = new Logger(PreguntaSeguridadService.name);
+
   constructor(private prisma: PrismaService) {}
 
   async obtenerPreguntas() {
@@ -102,8 +105,6 @@ export class PreguntaSeguridadService {
   }
 
   async obtenerPreguntaPorEmail(email: string) {
-    console.log('🔍 Obteniendo pregunta por email:', email);
-    
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: email.toLowerCase() },
       select: {
@@ -114,22 +115,22 @@ export class PreguntaSeguridadService {
     });
 
     if (!usuario) {
-      console.error('❌ Usuario no encontrado para email:', email);
+      this.logger.warn('Pregunta por email: usuario no encontrado');
       throw new NotFoundException('No existe pregunta para este email');
     }
 
     // Si es un usuario de Google y no tiene pregunta de seguridad
     if (usuario.googleId && !usuario.preguntaSeguridad) {
-      console.log('⚠️ Usuario de Google sin pregunta de seguridad:', email);
+      this.logger.log(`Pregunta por email: usuario de Google sin pregunta (${usuario.id})`);
       throw new NotFoundException('Este correo está asociado a una cuenta de Google. No se puede usar recuperación de contraseña por pregunta de seguridad.');
     }
 
     if (!usuario.preguntaSeguridad) {
-      console.error('❌ Usuario sin pregunta de seguridad:', email);
+      this.logger.warn(`Pregunta por email: usuario sin pregunta (${usuario.id})`);
       throw new NotFoundException('No existe pregunta para este email. Este correo puede estar asociado a una cuenta de Google.');
     }
 
-    console.log('✅ Pregunta de seguridad encontrada:', usuario.preguntaSeguridad);
+    this.logger.log(`Pregunta de seguridad encontrada (${usuario.id})`);
 
     return {
       success: true,

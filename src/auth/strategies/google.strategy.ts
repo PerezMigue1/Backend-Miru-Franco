@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { Strategy, VerifyCallback } from 'passport-google-oauth20';
 import { ConfigService } from '@nestjs/config';
@@ -7,6 +7,8 @@ import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
+  private readonly logger = new Logger(GoogleStrategy.name);
+
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
@@ -47,7 +49,6 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       const email = profile.emails[0].value.toLowerCase();
       const { id, displayName, photos } = profile;
       
-      console.log('🔍 Google OAuth - Validando usuario:', email);
 
       let usuario = await this.prisma.usuario.findFirst({
         where: {
@@ -60,7 +61,6 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
 
       if (!usuario) {
         // Crear nuevo usuario con Google (sin pregunta de seguridad)
-        console.log('🔍 Creando nuevo usuario de Google sin pregunta de seguridad:', email);
         usuario = await this.prisma.usuario.create({
           data: {
             nombre: displayName,
@@ -100,10 +100,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       console.log('✅ Google OAuth - Usuario validado:', usuario.id);
       done(null, usuario);
     } catch (error: any) {
-      console.error('❌ Google OAuth - Error validando usuario:', error);
-      console.error('❌ Error stack:', error.stack);
-      console.error('❌ Error code:', error.code);
-      console.error('❌ Error meta:', error.meta);
+      this.logger.error(`Google OAuth - Error validando usuario (${error?.name ?? 'Error'}, código ${error?.code ?? '-'})`);
       done(error, null);
     }
   }

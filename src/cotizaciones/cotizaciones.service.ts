@@ -114,7 +114,7 @@ export class CotizacionesService {
       include: this.incluirRelaciones(),
     });
 
-    console.log('✅ Cotización creada:', sanitizeForLogging({ id: cotizacion.id, cliente: clienteNombreSanitizado }));
+    console.log('✅ Cotización creada:', sanitizeForLogging({ id: cotizacion.id, clienteId: cotizacion.clienteId }));
 
     return {
       success: true,

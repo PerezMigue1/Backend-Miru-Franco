@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { SecurityService } from '../common/services/security.service';
@@ -10,7 +10,7 @@ import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerificarOtpDto } from './dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
-import { sanitizeInput, containsSQLInjection, sanitizeForLogging, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone, buildPhoneLookupCandidates, formaEscapadaAnterior } from '../common/utils/security.util';
+import { sanitizeInput, containsSQLInjection, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone, buildPhoneLookupCandidates, formaEscapadaAnterior } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
 
@@ -45,6 +45,8 @@ const SELECT_USUARIO_SEGURO = {
 
 @Injectable()
 export class UsuariosService {
+  // Logs sin datos personales (Render los guarda): solo ids, nunca correo, teléfono ni nombre.
+  private readonly logger = new Logger(UsuariosService.name);
   private readonly twilioClient: ReturnType<typeof twilio> | null;
   private readonly twilioVerifyServiceSid: string | undefined;
 
@@ -96,7 +98,7 @@ export class UsuariosService {
       (preguntaSeguridad?.pregunta && containsSQLInjection(preguntaSeguridad.pregunta)) ||
       (preguntaSeguridad?.respuesta && containsSQLInjection(preguntaSeguridad.respuesta))
     ) {
-      console.warn('⚠️ Intento de SQL injection detectado en crearUsuario:', sanitizeForLogging({ email }));
+      this.logger.warn('Intento de SQL injection detectado en crearUsuario');
       throw new BadRequestException('Datos inválidos. Por favor verifica la información ingresada.');
     }
 
@@ -160,7 +162,7 @@ export class UsuariosService {
     });
 
     // Log seguro (sin datos sensibles)
-    console.log('✅ Usuario registrado:', sanitizeForLogging({ email, id: nuevoUsuario.id }));
+    this.logger.log(`Usuario registrado: ${nuevoUsuario.id}`);
 
     const usuarioCreado = {
       id: nuevoUsuario.id,
@@ -198,7 +200,7 @@ export class UsuariosService {
     
     // Prevenir SQL injection
     if (containsSQLInjection(emailSanitizado) || containsSQLInjection(password)) {
-      console.warn('⚠️ Intento de SQL injection detectado:', sanitizeForLogging({ email: emailSanitizado }));
+      this.logger.warn('Intento de SQL injection detectado en login');
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
@@ -270,7 +272,7 @@ export class UsuariosService {
     );
 
     // Log seguro (sin contraseña)
-    console.log('✅ Login exitoso:', sanitizeForLogging({ id: usuario.id, email: usuario.email }));
+    this.logger.log(`Login ok: ${usuario.id}`);
 
     return {
       success: true,
@@ -595,9 +597,9 @@ export class UsuariosService {
       await this.twilioClient.verify.v2
         .services(this.twilioVerifyServiceSid)
         .verifications.create({ to: phoneForTwilio, channel: 'sms' });
-      console.log('✅ OTP SMS enviado con Twilio Verify:', sanitizeForLogging({ usuarioId: usuario.id, telefono: phoneForTwilio }));
+      this.logger.log(`OTP SMS enviado con Twilio Verify: ${usuario.id}`);
     } catch (error) {
-      console.error('Error enviando OTP SMS con Twilio Verify:', error);
+      this.logger.error(`Error enviando OTP SMS con Twilio Verify (código ${(error as any)?.code ?? '-'}, estado ${(error as any)?.status ?? '-'})`);
       throw new BadRequestException('No se pudo enviar el código de verificación por SMS');
     }
 
@@ -649,7 +651,7 @@ export class UsuariosService {
       if (error instanceof BadRequestException) {
         throw error;
       }
-      console.error('Error verificando OTP SMS con Twilio Verify:', error);
+      this.logger.error(`Error verificando OTP SMS con Twilio Verify (código ${(error as any)?.code ?? '-'}, estado ${(error as any)?.status ?? '-'})`);
       throw new BadRequestException('Código inválido o expirado');
     }
 
@@ -678,7 +680,7 @@ export class UsuariosService {
     
     // Prevenir SQL injection
     if (containsSQLInjection(emailSanitizado)) {
-      console.warn('⚠️ Intento de SQL injection en solicitarEnlaceRecuperacion:', sanitizeForLogging({ email: emailSanitizado }));
+      this.logger.warn('Intento de SQL injection en solicitarEnlaceRecuperacion');
       // No revelar si el email existe o no
       return {
         success: true,
@@ -710,7 +712,7 @@ export class UsuariosService {
 
     // Si es un usuario de Google, no permitir recuperación por email
     if (usuario.googleId) {
-      console.log('⚠️ Intento de recuperación para usuario de Google:', sanitizeForLogging({ email: emailSanitizado }));
+      this.logger.log(`Intento de recuperación para usuario de Google: ${usuario.id}`);
       return {
         success: true,
         message: 'Si el email existe, se ha enviado un enlace de recuperación',
@@ -745,7 +747,7 @@ export class UsuariosService {
         expiresInMinutes,
       );
       
-      console.log('✅ Enlace de recuperación enviado a:', sanitizeForLogging({ email: emailSanitizado }));
+      this.logger.log(`Enlace de recuperación enviado: ${usuario.id}`);
       
       return {
         success: true,
@@ -767,7 +769,7 @@ export class UsuariosService {
     
     // Prevenir SQL injection
     if (containsSQLInjection(emailSanitizado)) {
-      console.warn('⚠️ Intento de SQL injection en obtenerPreguntaSeguridad:', sanitizeForLogging({ email: emailSanitizado }));
+      this.logger.warn('Intento de SQL injection en obtenerPreguntaSeguridad');
       throw new NotFoundException('No se encontró pregunta de seguridad para este correo');
     }
     
