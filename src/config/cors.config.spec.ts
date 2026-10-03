@@ -92,6 +92,8 @@ describe('preflight (OPTIONS) con la app real', () => {
     const r = await preflight('https://www.mirufranco.com');
     expect(r.status).toBe(204);
     expect(r.headers.get('access-control-allow-origin')).toBe('https://www.mirufranco.com');
+    // El navegador reutiliza el preflight 10 min en vez de repetirlo antes de cada petición.
+    expect(r.headers.get('access-control-max-age')).toBe('600');
   });
 
   it('un origen no permitido recibe 403, sin cabeceras CORS', async () => {

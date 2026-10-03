@@ -86,5 +86,8 @@ export function crearCorsOptions(env: NodeJS.ProcessEnv = process.env): CorsOpti
     methods: METODOS,
     allowedHeaders: CABECERAS_PERMITIDAS,
     exposedHeaders: ['Authorization'],
+    // El frontend manda X-Auth-Mode y Content-Type en cada petición, así que todas llevan preflight:
+    // el navegador lo reutiliza 10 min en vez de repetir el OPTIONS antes de cada una.
+    maxAge: 600,
   };
 }
