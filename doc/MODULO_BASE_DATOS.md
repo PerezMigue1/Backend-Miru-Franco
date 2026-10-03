@@ -8,7 +8,7 @@ Módulo que permite a administradores **importar**, **exportar** y **visualizar 
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `GET` | `/api/db/diagram?formato=mermaid\|svg\|png` | Descarga el diagrama ER del schema Prisma |
+| `GET` | `/api/db/diagram?formato=mermaid` | Descarga el diagrama ER del schema Prisma (código Mermaid) |
 | `GET` | `/api/db/import/tables` | Lista tablas importables y modos disponibles |
 | `POST` | `/api/db/import` | Importa datos desde archivo CSV o JSON |
 | `GET` | `/api/db/export?tabla=&formato=csv\|json` | Exporta datos de una tabla a CSV o JSON |
@@ -23,13 +23,15 @@ Genera un diagrama entidad-relación a partir de `prisma/schema.prisma`.
 
 | Parámetro | Tipo | Requerido | Valores | Descripción |
 |-----------|------|-----------|---------|-------------|
-| `formato` | string | No | `mermaid`, `svg`, `png` | Por defecto: `mermaid` |
+| `formato` | string | No | `mermaid` | Por defecto: `mermaid`. Cualquier otro valor responde 400. |
 
 ### Formatos
 
 - **mermaid** (`.mmd`): Código Mermaid para usar en GitHub, Notion, editores compatibles
-- **svg**: Imagen vectorial SVG
-- **png**: Imagen raster PNG
+
+El backend ya no genera SVG ni PNG: mermaid necesita un DOM y en Node no puede renderizar. La web
+(`/admin/base-datos`) pide `formato=mermaid` y convierte a SVG/PNG en el navegador con
+`src/app/utils/mermaidRender.ts`.
 
 ### Ejemplo
 
@@ -172,17 +174,8 @@ src/db/
 
 ## Dependencias
 
-```json
-{
-  "mermaid": "^11.0.0",
-  "sharp": "^0.33.0"
-}
-```
-
-- **mermaid**: Genera SVG a partir del código Mermaid
-- **sharp**: Convierte SVG a PNG
-
-Para formato `mermaid` no se requieren dependencias adicionales; para `svg` y `png` sí.
+El diagrama no necesita dependencias: `schema-to-mermaid.ts` arma el código Mermaid leyendo
+`schema.prisma`.
 
 ---
 

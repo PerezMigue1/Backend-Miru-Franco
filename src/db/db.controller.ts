@@ -42,12 +42,15 @@ export class DbController {
     @Query('formato') formato: string,
     @Res() res: Response,
   ): Promise<void> {
-    const fmt = (formato?.toLowerCase() || 'mermaid') as 'mermaid' | 'svg' | 'png';
-    if (!['mermaid', 'svg', 'png'].includes(fmt)) {
-      throw new BadRequestException('formato debe ser mermaid, svg o png');
+    // Solo el código Mermaid: la web lo convierte a SVG/PNG en el navegador (mermaidRender.ts).
+    const fmt = formato?.trim().toLowerCase() || 'mermaid';
+    if (fmt !== 'mermaid') {
+      throw new BadRequestException(
+        'Formato no soportado: el diagrama solo se entrega como mermaid (formato=mermaid).',
+      );
     }
 
-    const { buffer, filename, contentType } = await this.dbService.generarDiagrama(fmt);
+    const { buffer, filename, contentType } = await this.dbService.generarDiagrama();
 
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

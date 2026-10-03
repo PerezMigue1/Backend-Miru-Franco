@@ -32,7 +32,7 @@ export class AppController {
           import: 'POST /api/db/import (multipart: tabla, archivo, formato?)',
           export: 'GET /api/db/export?tabla=&formato=csv|json',
           exportDirect: 'GET /api/db/export-direct (admin JWT; ver doc/API_PAYMENTS_AND_DB_EXPORT.md)',
-          diagram: 'GET /api/db/diagram?formato=mermaid|svg|png',
+          diagram: 'GET /api/db/diagram?formato=mermaid',
         },
       },
     };

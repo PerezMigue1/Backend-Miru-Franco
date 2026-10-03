@@ -1314,64 +1314,17 @@ export class DbService {
     return null;
   }
 
-  async generarDiagrama(
-    formato: 'mermaid' | 'svg' | 'png',
-  ): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+  /**
+   * Diagrama ER del schema de Prisma como código Mermaid. El SVG/PNG lo arma la web en el
+   * navegador: mermaid necesita un DOM y en Node no puede renderizar.
+   */
+  async generarDiagrama(): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
     const mermaidCode = generateMermaidFromSchema();
     const fecha = new Date().toISOString().slice(0, 10);
-    const baseName = `diagrama-er_${fecha}`;
-
-    if (formato === 'mermaid') {
-      return {
-        buffer: Buffer.from(mermaidCode, 'utf-8'),
-        filename: `${baseName}.mmd`,
-        contentType: 'text/plain',
-      };
-    }
-
-    if (formato === 'svg') {
-      const svg = await this.renderMermaidToSvg(mermaidCode);
-      return {
-        buffer: Buffer.from(svg, 'utf-8'),
-        filename: `${baseName}.svg`,
-        contentType: 'image/svg+xml',
-      };
-    }
-
-    if (formato === 'png') {
-      const svg = await this.renderMermaidToSvg(mermaidCode);
-      const png = await this.svgToPng(svg);
-      return {
-        buffer: png,
-        filename: `${baseName}.png`,
-        contentType: 'image/png',
-      };
-    }
-
-    throw new BadRequestException('formato debe ser mermaid, svg o png');
-  }
-
-  private async renderMermaidToSvg(mermaidCode: string): Promise<string> {
-    try {
-      const mermaid = await import('mermaid');
-      mermaid.default.initialize({ startOnLoad: false });
-      const { svg } = await mermaid.default.render('er-' + Date.now(), mermaidCode);
-      return svg;
-    } catch (e: any) {
-      throw new BadRequestException(
-        `No se pudo generar SVG. Usa formato=mermaid para descargar el código. Error: ${e?.message || e}`,
-      );
-    }
-  }
-
-  private async svgToPng(svg: string): Promise<Buffer> {
-    try {
-      const sharp = await import('sharp');
-      return await sharp.default(Buffer.from(svg)).png().toBuffer();
-    } catch (e: any) {
-      throw new BadRequestException(
-        `No se pudo convertir a PNG. Usa formato=svg o mermaid. Error: ${e?.message || e}`,
-      );
-    }
+    return {
+      buffer: Buffer.from(mermaidCode, 'utf-8'),
+      filename: `diagrama-er_${fecha}.mmd`,
+      contentType: 'text/plain',
+    };
   }
 }

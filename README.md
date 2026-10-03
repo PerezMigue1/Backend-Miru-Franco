@@ -168,7 +168,7 @@ backend-miru/
 
 Endpoints para importar, exportar y visualizar el diagrama ER. Requieren JWT + rol admin. Ver [MODULO_BASE_DATOS.md](MODULO_BASE_DATOS.md) para documentación completa.
 
-- `GET /api/db/diagram?formato=mermaid|svg|png` - Diagrama ER del schema
+- `GET /api/db/diagram?formato=mermaid` - Diagrama ER del schema (código Mermaid; la web lo convierte a SVG/PNG)
 - `POST /api/db/import` - Importar CSV/JSON (multipart: tabla, archivo, formato?)
 - `GET /api/db/export?tabla=&formato=csv|json` - Exportar datos
 
