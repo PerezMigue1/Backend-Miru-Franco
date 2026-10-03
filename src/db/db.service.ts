@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
+  Logger,
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -103,6 +105,8 @@ function parseJSON(content: string): Record<string, any>[] {
 
 @Injectable()
 export class DbService {
+  private readonly logger = new Logger(DbService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async getImportTablesMetadata(): Promise<
@@ -315,7 +319,7 @@ export class DbService {
         });
         insertados++;
       } catch (e: any) {
-        errores.push({ fila, mensaje: e.message || String(e) });
+        errores.push({ fila, mensaje: this.getImportFailureMessage(e, fila) });
       }
     }
 
@@ -363,7 +367,7 @@ export class DbService {
         await this.prisma.$executeRawUnsafe(sql, ...values);
         insertados++;
       } catch (e: any) {
-        errores.push({ fila, mensaje: e.message || String(e) });
+        errores.push({ fila, mensaje: this.getImportFailureMessage(e, fila) });
       }
     }
 
@@ -450,7 +454,7 @@ export class DbService {
           actualizados++;
         }
       } catch (e: any) {
-        errores.push({ fila, mensaje: e.message || String(e) });
+        errores.push({ fila, mensaje: this.getImportFailureMessage(e, fila) });
       }
     }
 
@@ -585,7 +589,7 @@ export class DbService {
       try {
         parsedRows.push(this.normalizeAndValidateSqlRow(cfg, registros[i], modo));
       } catch (e: any) {
-        errores.push({ fila, mensaje: e.message || String(e) });
+        errores.push({ fila, mensaje: this.getImportFailureMessage(e, fila) });
       }
     }
 
@@ -906,8 +910,21 @@ export class DbService {
     return value;
   }
 
-  private getImportFailureMessage(error: unknown): string {
-    const e = error as { code?: string; message?: string };
+  /**
+   * Texto para el admin cuando falla una importación (o una fila). Los mensajes de Prisma/Postgres
+   * traen SQL, tablas y columnas: llegan al navegador las validaciones propias (HttpException o
+   * Error lanzados aquí, pensados para el usuario) y los códigos conocidos; un error de la base sin
+   * código conocido va al log sin los datos de la fila.
+   */
+  private getImportFailureMessage(error: unknown, fila?: number): string {
+    const e = error as { code?: string; message?: string; name?: string; severity?: string };
+    const esErrorDeBase =
+      (typeof e?.name === 'string' && e.name.startsWith('PrismaClient')) ||
+      typeof e?.code === 'string' ||
+      typeof e?.severity === 'string';
+    if (error instanceof HttpException || (error instanceof Error && !esErrorDeBase)) {
+      return error.message;
+    }
     if (e?.code === 'P2003') {
       return 'Violación de llave foránea (revisa referencias relacionadas)';
     }
@@ -917,10 +934,9 @@ export class DbService {
     if (e?.code === 'P2025') {
       return 'Registro relacionado no encontrado';
     }
-    if (typeof e?.message === 'string' && e.message.trim()) {
-      return e.message;
-    }
-    return 'No se pudo completar la importación';
+    const donde = fila ? ` (fila ${fila})` : '';
+    this.logger.warn(`Importación${donde}: ${e?.name ?? 'Error'}${e?.code ? ` ${e.code}` : ''}`);
+    return fila ? 'No se pudo importar esta fila. Revisa sus datos.' : 'No se pudo completar la importación';
   }
 
   private async insertarRegistro(

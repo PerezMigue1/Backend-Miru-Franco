@@ -1,7 +1,27 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { Pool, type QueryResult, type QueryResultRow } from 'pg';
+import { MENSAJE_SERVICIO_NO_DISPONIBLE } from '../common/filters/http-exception.filter';
 
 const IDENT_REGEX = /^[a-zA-Z0-9_]+$/;
+
+/** Métricas del panel de monitoreo (/admin/base-datos): caché corta y consultas acotadas. */
+const METAS_MONITOREO = new Set([
+  'db_summary',
+  'activity',
+  'locks',
+  'table_stats',
+  'index_stats',
+  'realtime_metrics',
+  'query_insights',
+]);
+const CACHE_METAS_MS = 15_000;
+/** Tiempo máximo de cada consulta (statement_timeout): métricas vs. exportaciones y EXPLAIN. */
+const TIMEOUT_METAS_MS = 5_000;
+const TIMEOUT_OTRAS_MS = 120_000;
+
+type ConsultaPg = {
+  query<R extends QueryResultRow = any>(text: string, values?: unknown[]): Promise<QueryResult<R>>;
+};
 
 function parseTabla(input: string): { schema: string; table: string } | null {
   const raw = String(input || '').trim();
@@ -36,12 +56,27 @@ export type ExportDirectResult =
  */
 @Injectable()
 export class ExportDirectService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ExportDirectService.name);
   private pool: Pool | null = null;
+  private readonly cacheMetas = new Map<string, { expira: number; resultado: ExportDirectResult }>();
+  private readonly metasEnCurso = new Map<string, Promise<ExportDirectResult>>();
 
   onModuleInit() {
     const url = process.env.DATABASE_URL;
     if (url) {
-      this.pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: true } });
+      // Pool propio, aparte de las conexiones de Prisma: pequeño y sin esperas indefinidas, para
+      // que el panel de monitoreo no pueda acaparar conexiones de Neon.
+      this.pool = new Pool({
+        connectionString: url,
+        ssl: { rejectUnauthorized: true },
+        max: 3,
+        idleTimeoutMillis: 10_000,
+        // Abrir una conexión nueva a Neon tarda ~2 s; si no hay una libre en 10 s, error (503).
+        connectionTimeoutMillis: 10_000,
+        keepAlive: true,
+      });
+      // Neon cierra conexiones inactivas: sin este handler, el 'error' del pool tumbaría el proceso.
+      this.pool.on('error', (err) => this.logger.warn(`Conexión inactiva del pool cerrada: ${err.message}`));
     }
   }
 
@@ -49,19 +84,90 @@ export class ExportDirectService implements OnModuleInit, OnModuleDestroy {
     await this.pool?.end();
   }
 
+  /**
+   * Las métricas del monitoreo se sirven desde una caché de 15 s, y si ya hay una consulta en
+   * curso para esa métrica, las peticiones que llegan esperan su resultado en vez de lanzar otra.
+   */
   async handleGet(query: Record<string, string | undefined>): Promise<ExportDirectResult> {
+    const meta = query.meta;
+    if (!meta || !METAS_MONITOREO.has(meta)) return this.consultar(query);
+
+    const enCache = this.cacheMetas.get(meta);
+    if (enCache && enCache.expira > Date.now()) return enCache.resultado;
+    const enCurso = this.metasEnCurso.get(meta);
+    if (enCurso) return enCurso;
+
+    const promesa = this.consultar(query)
+      .then((resultado) => {
+        if (resultado.status === 200) {
+          this.cacheMetas.set(meta, { expira: Date.now() + CACHE_METAS_MS, resultado });
+        }
+        return resultado;
+      })
+      .finally(() => this.metasEnCurso.delete(meta));
+    this.metasEnCurso.set(meta, promesa);
+    return promesa;
+  }
+
+  /**
+   * Cada consulta va en su propia transacción con SET LOCAL statement_timeout, y Postgres la corta
+   * si se pasa. SET LOCAL y no SET: el pooler de Neon reparte transacciones entre conexiones, y un
+   * SET de sesión se quedaría en una conexión que después usa otro cliente (y el pooler ignora
+   * statement_timeout como parámetro de conexión).
+   *
+   * Además, cada envío lleva query_timeout del lado del cliente: si Neon corta la conexión, pg
+   * esperaría la respuesta para siempre y la conexión no volvería al pool. Sin parámetros, todo va
+   * en un solo envío (BEGIN; SET LOCAL; consulta; COMMIT): un viaje a Neon en vez de tres.
+   */
+  private conTimeout(pool: Pool, ms: number): ConsultaPg {
+    const statementMs = Math.trunc(ms);
+    const query_timeout = statementMs + 5_000;
+    return {
+      query: async <R extends QueryResultRow = any>(text: string, values?: unknown[]) => {
+        const client = await pool.connect();
+        try {
+          let resultado: QueryResult<R>;
+          if (!values || values.length === 0) {
+            // La consulta va en su propia línea: un comentario `--` al final no se traga el COMMIT.
+            const sql = text.trim().replace(/;+$/, '');
+            const partes = (await client.query({
+              text: `BEGIN; SET LOCAL statement_timeout = ${statementMs};\n${sql}\n;COMMIT`,
+              query_timeout,
+            } as any)) as unknown as QueryResult<R>[];
+            resultado = partes[2];
+          } else {
+            await client.query({ text: `BEGIN; SET LOCAL statement_timeout = ${statementMs}`, query_timeout } as any);
+            resultado = await client.query<R>({ text, values, query_timeout } as any);
+            await client.query({ text: 'COMMIT', query_timeout } as any);
+          }
+          client.release();
+          return resultado;
+        } catch (err) {
+          // Sin respuesta de Neon, o ni el ROLLBACK responde: la conexión se descarta, no vuelve al pool.
+          const sinRespuesta = err instanceof Error && err.message === 'Query read timeout';
+          const sana =
+            !sinRespuesta &&
+            (await client.query({ text: 'ROLLBACK', query_timeout } as any).then(
+              () => true,
+              () => false,
+            ));
+          client.release(sana ? undefined : true);
+          throw err;
+        }
+      },
+    };
+  }
+
+  private async consultar(query: Record<string, string | undefined>): Promise<ExportDirectResult> {
     if (!this.pool) {
-      return {
-        kind: 'json',
-        status: 503,
-        body: { error: 'DATABASE_URL no configurada' },
-      };
+      this.logger.error('DATABASE_URL no configurada: export-direct no tiene pool');
+      throw new ServiceUnavailableException(MENSAJE_SERVICIO_NO_DISPONIBLE);
     }
 
-    const pool = this.pool;
+    const meta = query.meta;
+    const pool = this.conTimeout(this.pool, meta && METAS_MONITOREO.has(meta) ? TIMEOUT_METAS_MS : TIMEOUT_OTRAS_MS);
     const tablaRaw = query.tabla ?? '';
     const formato = query.formato ?? 'json';
-    const meta = query.meta;
     const columnasParam = query.columnas;
     const fechaDesde = query.fechaDesde ?? '';
     const fechaHasta = query.fechaHasta ?? '';
@@ -584,8 +690,9 @@ export class ExportDirectService implements OnModuleInit, OnModuleDestroy {
         filename,
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Error al consultar la base de datos';
-      return { kind: 'json', status: 500, body: { error: message } };
+      // Sin el texto de Postgres en la respuesta (trae SQL, tablas y columnas): el filtro global
+      // responde 500 o 503 genérico con una referencia y deja el detalle en el log.
+      throw err;
     }
   }
 }

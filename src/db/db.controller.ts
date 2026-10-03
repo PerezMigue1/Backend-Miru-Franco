@@ -5,7 +5,6 @@ import {
   ForbiddenException,
   Get,
   HttpException,
-  HttpStatus,
   Post,
   Query,
   Res,
@@ -208,13 +207,8 @@ export class DbController {
         status,
       );
     }
-    const fallbackMessage =
-      error instanceof Error && typeof error.message === 'string' && error.message.trim()
-        ? error.message
-        : 'error interno';
-    throw new HttpException(
-      { success: false, error: fallbackMessage, message: fallbackMessage },
-      HttpStatus.INTERNAL_SERVER_ERROR,
-    );
+    // Errores no HTTP (Prisma, red…): el filtro global responde 500/503 genérico con referencia y
+    // deja el detalle en el log. Antes se envolvían en un 500 con el mensaje crudo de Prisma.
+    throw error;
   }
 }
