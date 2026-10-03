@@ -11,6 +11,7 @@ const ZONA_HORARIA = 'America/Mexico_City';
 const ESTADOS_PEDIDO_VALIDOS = [
   'pagado',
   'preparando',
+  'listo_recoger',
   'enviado',
   'entregado',
 ] as const;

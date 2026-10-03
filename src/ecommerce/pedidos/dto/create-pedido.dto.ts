@@ -2,9 +2,11 @@ import {
   ArrayMinSize,
   IsArray,
   IsEnum,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -17,9 +19,16 @@ export class CreatePedidoDto {
   @IsOptional()
   usuarioId?: string;
 
+  /** Ya no hay envío a domicilio: el servicio rechaza cualquier dirección. */
   @IsUUID()
   @IsOptional()
   direccionEnvioId?: string | null;
+
+  /** Solo se acepta 0: el servicio rechaza un costo de envío mayor. */
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  costoEnvio?: number;
 
   @IsArray()
   @ArrayMinSize(1, { message: 'El pedido debe incluir al menos un ítem' })

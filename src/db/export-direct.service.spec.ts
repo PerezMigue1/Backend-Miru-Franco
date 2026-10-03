@@ -101,3 +101,19 @@ describe('ExportDirectService: métricas del monitoreo', () => {
     expect(liberados).toEqual([true]);
   });
 });
+
+describe('ExportDirectService: filtro de fechas de la exportación', () => {
+  it('filtra por creado_en (la columna real) con el día de México', async () => {
+    const { pool, envios } = poolFalso(async (sql) =>
+      sql.includes('information_schema.columns')
+        ? { rows: [{ column_name: 'id' }, { column_name: 'estado' }, { column_name: 'creado_en' }] }
+        : { rows: [{ id: 1 }] },
+    );
+
+    await servicioCon(pool).handleGet({ tabla: 'pedidos', formato: 'json', fechaDesde: '2026-10-03', fechaHasta: '2026-10-03' });
+
+    const consulta = envios.find((e) => e.text.startsWith('SELECT "id"')) as { text: string; values?: unknown[] };
+    expect(consulta.text).toContain('WHERE "creado_en" >= $1 AND "creado_en" <= $2');
+    expect(consulta.values).toEqual(['2026-10-03T06:00:00.000Z', '2026-10-04T05:59:59.999Z']);
+  });
+});

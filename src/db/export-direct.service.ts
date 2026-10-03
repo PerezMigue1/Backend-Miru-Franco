@@ -613,7 +613,9 @@ export class ExportDirectService implements OnModuleInit, OnModuleDestroy {
       if (columnasSelect.length === 0) columnasSelect = columnasReales;
 
       const dateCol = columnasReales.find(
-        (c) => c === 'created_at' || c === 'createdAt' || c === 'fecha_creacion' || c === 'fecha_creado',
+        // creado_en es la columna real de casi todas las tablas (@map en schema.prisma); sin ella el filtro no aplicaba.
+        (c) =>
+          c === 'creado_en' || c === 'created_at' || c === 'createdAt' || c === 'fecha_creacion' || c === 'fecha_creado',
       );
       const activoCol = columnasReales.find((c) => c === 'activo' || c === 'disponible');
       const estadoCol = columnasReales.find((c) => c === 'estado');

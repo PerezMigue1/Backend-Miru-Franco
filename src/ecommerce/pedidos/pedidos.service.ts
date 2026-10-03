@@ -19,6 +19,14 @@ import {
   incrementarStockPorLineas,
 } from '../common/pedido-inventario.util';
 import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
+import {
+  ESTADOS_CANCELABLES_POR_CLIENTA,
+  ESTADOS_INICIALES_CLIENTA,
+  ESTADOS_INICIALES_PERSONAL,
+  MENSAJE_SIN_ENVIO,
+  esPagoEnSalon,
+  transicionPermitida,
+} from './flujo-pedido';
 
 @Injectable()
 export class PedidosService {
@@ -220,15 +228,18 @@ export class PedidosService {
       usuarioId = dto.usuarioId;
     }
 
-    if (dto.direccionEnvioId) {
-      const dir = await this.prisma.direccionUsuario.findUnique({
-        where: { id: dto.direccionEnvioId },
-      });
-      if (!dir || dir.usuarioId !== usuarioId) {
-        throw new BadRequestException(
-          'La dirección de envío no existe o no pertenece al usuario del pedido',
-        );
-      }
+    // Todo pedido se recoge en el salón.
+    if (dto.direccionEnvioId || (dto.costoEnvio ?? 0) > 0) {
+      throw new BadRequestException(MENSAJE_SIN_ENVIO);
+    }
+
+    const estado = dto.estado ?? EstadoPedido.borrador;
+    const esPersonal = await puedeVerPedidosDeOtros(this.prisma, rol);
+    if (!esPersonal && !ESTADOS_INICIALES_CLIENTA.includes(estado)) {
+      throw new ForbiddenException('Solo el personal del salón puede fijar ese estado');
+    }
+    if (esPersonal && !ESTADOS_INICIALES_PERSONAL.includes(estado)) {
+      throw new BadRequestException(`Un pedido nuevo no puede empezar como '${estado}'`);
     }
 
     const detalles = await this.validarItems(dto.items);
@@ -242,14 +253,13 @@ export class PedidosService {
     const total =
       Math.round((subtotal + costoEnvio + impuestos - descuento) * 100) / 100;
 
-    const estado = dto.estado ?? EstadoPedido.borrador;
     const moneda = dto.moneda ?? 'MXN';
 
     const data = await this.prisma.$transaction(async (tx) => {
       const pedido = await tx.pedido.create({
         data: {
           usuarioId,
-          direccionEnvioId: dto.direccionEnvioId ?? null,
+          direccionEnvioId: null,
           estado,
           subtotal,
           costoEnvio,
@@ -331,25 +341,49 @@ export class PedidosService {
       throw new ForbiddenException('No tienes permiso para acceder a este recurso');
     }
 
-    if (dto.direccionEnvioId) {
-      const dir = await this.prisma.direccionUsuario.findUnique({
-        where: { id: dto.direccionEnvioId },
-      });
-      if (!dir || dir.usuarioId !== usuarioIdPedido) {
-        throw new BadRequestException(
-          'La dirección de envío no existe o no pertenece al titular del pedido',
+    // Todo pedido se recoge en el salón. Vaciar (null / '' / 0) sí se permite; los datos de
+    // envío de pedidos anteriores se quedan como historial mientras nadie los toque.
+    if (
+      dto.direccionEnvioId ||
+      dto.direccionTextoCompleta?.trim() ||
+      (dto.costoEnvio ?? 0) > 0
+    ) {
+      throw new BadRequestException(MENSAJE_SIN_ENVIO);
+    }
+
+    const estadoAnterior = actual.estado;
+    const cambiaEstado = dto.estado !== undefined && dto.estado !== estadoAnterior;
+    if (cambiaEstado && !puedeCambiarEstado) {
+      // La clienta solo puede cancelar su pedido, y solo antes de que se empiece a preparar.
+      const cancelaATiempo =
+        dto.estado === EstadoPedido.cancelado &&
+        ESTADOS_CANCELABLES_POR_CLIENTA.includes(estadoAnterior);
+      if (!cancelaATiempo) {
+        throw new ForbiddenException(
+          'Solo el personal del salón cambia el estado del pedido. Puedes cancelarlo mientras no esté en preparación.',
         );
       }
+    } else if (cambiaEstado && !transicionPermitida(estadoAnterior, dto.estado!, actual.metodoPago)) {
+      throw new BadRequestException(
+        `No se puede pasar un pedido de '${estadoAnterior}' a '${dto.estado}'`,
+      );
     }
+    // Se cobra al marcar 'pagado' o, en el pago al recoger, al entregar en el salón.
+    const registraPago =
+      cambiaEstado &&
+      !actual.pagadoEn &&
+      (dto.estado === EstadoPedido.pagado ||
+        (dto.estado === EstadoPedido.entregado && esPagoEnSalon(actual.metodoPago)));
+
     const data = await this.prisma.$transaction(async (tx) => {
       const itemsStock = await tx.pedidoItem.findMany({
         where: { pedidoId: id },
         select: { presentacionId: true, cantidad: true },
       });
 
-      const estadoAnterior = actual.estado;
       const updateData: Prisma.PedidoUpdateInput = {
         ...(dto.estado !== undefined && { estado: dto.estado }),
+        ...(registraPago && { pagadoEn: new Date() }),
         ...(dto.direccionEnvioId !== undefined && {
           direccionEnvio: dto.direccionEnvioId
             ? { connect: { id: dto.direccionEnvioId } }
@@ -377,10 +411,13 @@ export class PedidosService {
         delete (updateData as any).impuestos;
         delete (updateData as any).descuento;
       }
-      // estado: admin O caja:escritura (la jefa cobrando/marcando en el salón).
+      // metodoPago/referenciaPago: solo el personal. El método decide el flujo (pago al recoger o en
+      // línea), así que la clienta no puede cambiarlo después de crear el pedido.
       if (!puedeCambiarEstado) {
-        delete (updateData as any).estado;
+        delete (updateData as any).metodoPago;
+        delete (updateData as any).referenciaPago;
       }
+      // estado: ya validado arriba (personal con transición válida, o la clienta cancelando a tiempo).
 
       const keys = Object.keys(updateData).filter(
         (k) => (updateData as any)[k] !== undefined,
@@ -389,36 +426,14 @@ export class PedidosService {
         throw new BadRequestException('No hay campos permitidos para actualizar');
       }
 
-      if (
-        puedeCambiarEstado &&
-        dto.estado !== undefined &&
-        dto.estado !== estadoAnterior
-      ) {
-        if (
-          dto.estado === EstadoPedido.cancelado &&
-          estadoAnterior !== EstadoPedido.cancelado
-        ) {
-          await incrementarStockPorLineas(tx, itemsStock, {
-            usuarioId: solicitanteId,
-            referenciaTipo: 'pedido',
-            referenciaId: String(id),
-            motivo: 'pedido_cancelado',
-          });
-        } else if (
-          dto.estado !== EstadoPedido.cancelado &&
-          estadoAnterior === EstadoPedido.cancelado
-        ) {
-          await decrementarStockPresentaciones(
-            tx,
-            cantidadPorPresentacion(itemsStock),
-            {
-              usuarioId: solicitanteId,
-              referenciaTipo: 'pedido',
-              referenciaId: String(id),
-              motivo: 'pedido_reactivado',
-            },
-          );
-        }
+      // cancelado es final (ya no hay reactivación), así que solo se devuelve stock al cancelar.
+      if (cambiaEstado && dto.estado === EstadoPedido.cancelado) {
+        await incrementarStockPorLineas(tx, itemsStock, {
+          usuarioId: solicitanteId,
+          referenciaTipo: 'pedido',
+          referenciaId: String(id),
+          motivo: 'pedido_cancelado',
+        });
       }
 
       const updated = await tx.pedido.update({
@@ -427,17 +442,13 @@ export class PedidosService {
         include: this.includeDefault(),
       });
 
-      if (
-        dto.estado !== undefined &&
-        dto.estado !== estadoAnterior &&
-        puedeCambiarEstado
-      ) {
+      if (cambiaEstado) {
         await tx.historialEstadoPedido.create({
           data: {
             pedidoId: id,
             estadoAnterior,
-            estadoNuevo: dto.estado,
-            origen: 'api.actualizar_pedido',
+            estadoNuevo: dto.estado!,
+            origen: puedeCambiarEstado ? 'api.actualizar_pedido' : 'api.cancelar_clienta',
             usuarioId: solicitanteId,
           },
         });
@@ -448,15 +459,16 @@ export class PedidosService {
 
     // Fuera de la transacción a propósito (mismo criterio que crear(), arriba, y
     // que citas.service.ts/pos.service.ts): solo notificar el subconjunto de
-    // transiciones que le importan al cliente. 'preparando' es interno y 'enviado'
-    // no lo dispara ningún botón hoy (ver notas de la Parte A) — se dejan fuera.
-    if (puedeCambiarEstado && dto.estado !== undefined && dto.estado !== actual.estado) {
+    // transiciones que le importan al cliente. 'preparando' es interno y ya nadie
+    // puede pasar a 'enviado' — se dejan fuera.
+    if (cambiaEstado) {
       const eventoPorEstado: Partial<Record<EstadoPedido, string>> = {
         [EstadoPedido.pagado]: 'pedido.pagado',
+        [EstadoPedido.listo_recoger]: 'pedido.listo_recoger',
         [EstadoPedido.entregado]: 'pedido.entregado',
         [EstadoPedido.cancelado]: 'pedido.cancelado',
       };
-      const evento = eventoPorEstado[dto.estado];
+      const evento = eventoPorEstado[dto.estado!];
       if (evento) {
         this.eventEmitter.emit(evento, {
           pedidoId: id,

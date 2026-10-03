@@ -311,12 +311,26 @@ export class NotificacionesListener {
     });
   }
 
+  @OnEvent('pedido.listo_recoger')
+  async onPedidoListoRecoger(payload: PedidoEvent): Promise<void> {
+    // Único aviso de pedidos que también va por email: la clienta tiene que venir al salón.
+    await this.notificarPedido(
+      payload,
+      {
+        tipo: 'pedido_listo_recoger',
+        titulo: 'Tu pedido está listo para recoger',
+        mensaje: `Tu pedido #${payload.pedidoId} está listo para recoger en el salón`,
+      },
+      ['in_app', 'email'],
+    );
+  }
+
   @OnEvent('pedido.entregado')
   async onPedidoEntregado(payload: PedidoEvent): Promise<void> {
     await this.notificarPedido(payload, {
       tipo: 'pedido_entregado',
-      titulo: 'Pedido entregado',
-      mensaje: `Tu pedido #${payload.pedidoId} fue entregado`,
+      titulo: 'Pedido entregado en el salón',
+      mensaje: `Tu pedido #${payload.pedidoId} fue entregado en el salón`,
     });
   }
 
@@ -329,18 +343,19 @@ export class NotificacionesListener {
     });
   }
 
-  /** Encolado común a los 4 eventos de pedidos online: mismo destinatario único
-   *  (usuarioId dueño del pedido), mismo canal, misma entidad — solo cambian
-   *  tipo/título/mensaje. Igual criterio de fallo que venta_local.pagada: un
+  /** Encolado común a los eventos de pedidos online: mismo destinatario único
+   *  (usuarioId dueño del pedido), misma entidad — cambian tipo/título/mensaje
+   *  y, para "listo para recoger", los canales. Igual criterio de fallo que venta_local.pagada: un
    *  error aquí nunca debe afectar el pedido, que ya está comprometido en BD. */
   private async notificarPedido(
     payload: PedidoEvent,
     datos: { tipo: string; titulo: string; mensaje: string },
+    canalesDeseados: string[] = ['in_app'],
   ): Promise<void> {
     let envioIds: string[] = [];
     try {
       await this.prisma.$transaction(async (tx) => {
-        const canales = await this.resolver.resolverCanales(payload.usuarioId, datos.tipo, ['in_app']);
+        const canales = await this.resolver.resolverCanales(payload.usuarioId, datos.tipo, canalesDeseados);
         const { envios } = await this.outbox.encolar(tx, {
           usuarioId: payload.usuarioId,
           tipo: datos.tipo,

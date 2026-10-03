@@ -27,7 +27,8 @@ enum EstadoPedido {
   pendiente_pago
   pagado
   preparando
-  enviado
+  listo_recoger // en el salón, esperando a la clienta
+  enviado // solo pedidos anteriores: ya no hay envío a domicilio
   entregado
   cancelado
 }
