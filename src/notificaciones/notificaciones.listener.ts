@@ -39,6 +39,13 @@ export interface VentaLocalPagadaEvent {
 /** Común a los 4 eventos de pedidos online: un solo destinatario (el dueño del
  *  pedido), sin cascada a otros roles — a diferencia de citas, aquí no hay un
  *  segundo actor (especialista) que notificar. */
+export interface PagoRevisionEvent {
+  pedidoId: number;
+  referencia: string;
+  motivo: 'pedido_no_pendiente' | 'monto_distinto';
+  estadoPedido: string;
+}
+
 export interface PedidoEvent {
   pedidoId: number;
   usuarioId: string;
@@ -290,6 +297,71 @@ export class NotificacionesListener {
       return;
     }
 
+    this.despachador.drenarInmediatas(envioIds);
+  }
+
+  /** La barrida canceló un apartado o un pedido en línea sin pagar (ApartadosService). */
+  @OnEvent('pedido.vencido')
+  async onPedidoVencido(payload: PedidoEvent & { motivo: 'apartado_sin_preparar' | 'no_recogido' | 'pago_en_linea_vencido' }): Promise<void> {
+    const mensajes = {
+      apartado_sin_preparar: `Tu apartado #${payload.pedidoId} se canceló porque no se preparó en 3 días. Puedes volver a pedirlo en la tienda.`,
+      no_recogido: `Cancelamos tu apartado #${payload.pedidoId} porque no se recogió en 7 días.`,
+      pago_en_linea_vencido: `Tu pedido #${payload.pedidoId} se canceló porque el pago no se completó en 24 horas.`,
+    };
+    await this.notificarPedido(
+      payload,
+      { tipo: 'pedido_cancelado', titulo: 'Pedido cancelado', mensaje: mensajes[payload.motivo] },
+      ['in_app', 'email'],
+    );
+  }
+
+  /** Listo para recoger desde hace 3 días: recordatorio (la barrida no lo repite). */
+  @OnEvent('pedido.recordatorio_recoger')
+  async onPedidoRecordatorioRecoger(payload: PedidoEvent): Promise<void> {
+    await this.notificarPedido(
+      payload,
+      {
+        tipo: 'pedido_recordatorio_recoger',
+        titulo: 'Tu pedido te espera en el salón',
+        mensaje: `Recuerda pasar por tu pedido #${payload.pedidoId}. Si no lo recoges en 4 días más, se cancelará.`,
+      },
+      ['in_app', 'email'],
+    );
+  }
+
+  /** Un pago de la pasarela que no se pudo aplicar al pedido: aviso por la app a cada admin. */
+  @OnEvent('pago.requiere_revision')
+  async onPagoRequiereRevision(payload: PagoRevisionEvent): Promise<void> {
+    const mensaje =
+      payload.motivo === 'monto_distinto'
+        ? `Pago con un monto distinto al del pedido #${payload.pedidoId}: revisar devolución`
+        : payload.estadoPedido === 'cancelado'
+          ? `Pago recibido de un pedido cancelado #${payload.pedidoId}: revisar devolución`
+          : `Pago recibido de un pedido que ya estaba pagado #${payload.pedidoId}: revisar devolución`;
+    let envioIds: string[] = [];
+    try {
+      const admins = await this.resolver.resolverUsuariosPorPermiso('*');
+      await this.prisma.$transaction(async (tx) => {
+        for (const usuarioId of admins) {
+          const canales = await this.resolver.resolverCanales(usuarioId, 'pago_revision', ['in_app']);
+          const { envios } = await this.outbox.encolar(tx, {
+            usuarioId,
+            tipo: 'pago_revision',
+            titulo: 'Pago por revisar',
+            mensaje,
+            metadata: { referencia: payload.referencia, motivo: payload.motivo },
+            entidadTipo: 'pedido',
+            entidadId: String(payload.pedidoId),
+            urlAccion: '/admin/pagos',
+            canales,
+          });
+          envioIds = envioIds.concat(envios.map((e) => e.id));
+        }
+      });
+    } catch (e) {
+      this.logger.error(`No se pudo avisar del pago en revisión del pedido ${payload.pedidoId}`, e);
+      return;
+    }
     this.despachador.drenarInmediatas(envioIds);
   }
 

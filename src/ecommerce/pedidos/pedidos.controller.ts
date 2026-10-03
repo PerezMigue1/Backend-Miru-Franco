@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   Post,
   Put,
   Query,
@@ -14,10 +15,13 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
+import { Permisos, PermisosGuard } from '../../common/guards/permisos.guard';
+import { PERMISO_ENTREGAR_PEDIDOS } from '../common/permisos-pedido.util';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { PedidosService } from './pedidos.service';
 import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
+import { EntregarPedidoDto } from './dto/entregar-pedido.dto';
 
 @Controller('pedidos')
 @UseGuards(JwtAuthGuard)
@@ -84,6 +88,28 @@ export class PedidosController {
     @Body() dto: UpdatePedidoDto,
   ) {
     return this.service.actualizar(Number(id), user.id, dto);
+  }
+
+  /** "Marcar listo para recoger" (Pedidos por recoger): permiso pedidos:entregar. */
+  @Post(':id/listo')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermisosGuard)
+  @Permisos(PERMISO_ENTREGAR_PEDIDOS)
+  marcarListo(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.marcarListo(id, user.id);
+  }
+
+  /** "Marcar entregado" o "Cobrar y entregar" (con metodoCobro): permiso pedidos:entregar. */
+  @Post(':id/entregar')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermisosGuard)
+  @Permisos(PERMISO_ENTREGAR_PEDIDOS)
+  entregar(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: { id: string },
+    @Body() dto: EntregarPedidoDto,
+  ) {
+    return this.service.entregar(id, user.id, dto.metodoCobro);
   }
 
   @Delete(':id')

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -18,7 +19,11 @@ import {
   decrementarStockPresentaciones,
   incrementarStockPorLineas,
 } from '../common/pedido-inventario.util';
-import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
+import {
+  puedeEntregarPedidos,
+  puedeGestionarPedidos,
+  puedeVerPedidosDeOtros,
+} from '../common/permisos-pedido.util';
 import {
   ESTADOS_CANCELABLES_POR_CLIENTA,
   ESTADOS_INICIALES_CLIENTA,
@@ -26,6 +31,8 @@ import {
   MENSAJE_SIN_ENVIO,
   esPagoEnSalon,
   transicionPermitida,
+  METODOS_COBRO_SALON,
+  MetodoCobroSalon,
 } from './flujo-pedido';
 
 @Injectable()
@@ -234,7 +241,7 @@ export class PedidosService {
     }
 
     const estado = dto.estado ?? EstadoPedido.borrador;
-    const esPersonal = await puedeVerPedidosDeOtros(this.prisma, rol);
+    const esPersonal = await puedeGestionarPedidos(this.prisma, rol);
     if (!esPersonal && !ESTADOS_INICIALES_CLIENTA.includes(estado)) {
       throw new ForbiddenException('Solo el personal del salón puede fijar ese estado');
     }
@@ -332,10 +339,9 @@ export class PedidosService {
     const usuarioIdPedido = actual.usuarioId;
 
     const rol = await this.access.getRol(solicitanteId);
-    const puedeCambiarEstado = await puedeVerPedidosDeOtros(this.prisma, rol);
+    const puedeCambiarEstado = await puedeGestionarPedidos(this.prisma, rol);
 
-    // Entrada al método: dueño, admin, o quien tenga caja:escritura (mismo criterio
-    // único de lectura/gestión de pedidos ajenos). Qué campos puede tocar cada quien
+    // Entrada al método: dueño, admin, o quien tenga caja:escritura. Qué campos puede tocar cada quien
     // se decide más abajo, campo por campo — esto solo decide quién puede intentarlo.
     if (usuarioIdPedido !== solicitanteId && !puedeCambiarEstado) {
       throw new ForbiddenException('No tienes permiso para acceder a este recurso');
@@ -367,6 +373,22 @@ export class PedidosService {
       throw new BadRequestException(
         `No se puede pasar un pedido de '${estadoAnterior}' a '${dto.estado}'`,
       );
+    } else if (
+      cambiaEstado &&
+      (dto.estado === EstadoPedido.listo_recoger || dto.estado === EstadoPedido.entregado) &&
+      !(await puedeEntregarPedidos(this.prisma, rol))
+    ) {
+      // Marcar listo y entregar son del permiso propio de entregas, no de la caja.
+      throw new ForbiddenException('Necesitas el permiso de entregar pedidos');
+    } else if (
+      cambiaEstado &&
+      dto.estado === EstadoPedido.entregado &&
+      esPagoEnSalon(actual.metodoPago) &&
+      !actual.pagadoEn
+    ) {
+      // Entregar un apartado es también cobrarlo: va por POST /pedidos/:id/entregar, que registra el
+      // pago con su método y quién cobró (si no, el dinero no llega al corte de caja).
+      throw new BadRequestException('Para entregar un apartado usa "Cobrar y entregar": registra cómo se pagó');
     }
     // Se cobra al marcar 'pagado' o, en el pago al recoger, al entregar en el salón.
     const registraPago =
@@ -426,6 +448,13 @@ export class PedidosService {
         throw new BadRequestException('No hay campos permitidos para actualizar');
       }
 
+      // El estado solo cambia si sigue siendo el que se leyó: si la barrida de apartados (u otra persona)
+      // lo cambió un instante antes, no se pisa.
+      if (cambiaEstado) {
+        const r = await tx.pedido.updateMany({ where: { id, estado: estadoAnterior }, data: { estado: dto.estado! } });
+        if (r.count !== 1) throw new ConflictException('El pedido cambió mientras lo editabas. Recarga para ver su estado.');
+      }
+
       // cancelado es final (ya no hay reactivación), así que solo se devuelve stock al cancelar.
       if (cambiaEstado && dto.estado === EstadoPedido.cancelado) {
         await incrementarStockPorLineas(tx, itemsStock, {
@@ -477,6 +506,82 @@ export class PedidosService {
       }
     }
 
+    return { success: true, data };
+  }
+
+  /** Lee el pedido y comprueba el permiso de entregas (admin o `pedidos:entregar`). */
+  private async pedidoParaEntrega(id: number, solicitanteId: string) {
+    const rol = await this.access.getRol(solicitanteId);
+    if (!(await puedeEntregarPedidos(this.prisma, rol))) {
+      throw new ForbiddenException('Necesitas el permiso de entregar pedidos');
+    }
+    const pedido = await this.prisma.pedido.findUnique({ where: { id } });
+    if (!pedido) throw new NotFoundException('Pedido no encontrado');
+    return pedido;
+  }
+
+  /** "Marcar listo para recoger": preparando → listo_recoger y aviso a la clienta (app y correo). */
+  async marcarListo(id: number, solicitanteId: string) {
+    const pedido = await this.pedidoParaEntrega(id, solicitanteId);
+    if (!transicionPermitida(pedido.estado, EstadoPedido.listo_recoger, pedido.metodoPago)) {
+      throw new BadRequestException('Solo se marca listo un pedido en preparación');
+    }
+    const data = await this.prisma.$transaction(async (tx) => {
+      const r = await tx.pedido.updateMany({
+        where: { id, estado: pedido.estado },
+        data: { estado: EstadoPedido.listo_recoger },
+      });
+      if (r.count !== 1) throw new ConflictException('El pedido cambió mientras lo editabas. Recarga para ver su estado.');
+      await tx.historialEstadoPedido.create({
+        data: { pedidoId: id, estadoAnterior: pedido.estado, estadoNuevo: EstadoPedido.listo_recoger, origen: 'api.marcar_listo', usuarioId: solicitanteId },
+      });
+      return tx.pedido.findUnique({ where: { id }, include: this.includeDefault() });
+    });
+    this.eventEmitter.emit('pedido.listo_recoger', { pedidoId: id, usuarioId: pedido.usuarioId });
+    return { success: true, data };
+  }
+
+  /**
+   * "Marcar entregado" o "Cobrar y entregar": listo_recoger (o el 'enviado' de pedidos anteriores) →
+   * entregado. Un apartado (pago al recoger) exige el método de cobro, y en la misma transacción se
+   * registra el Pago aprobado con quién cobró, para el corte de caja.
+   */
+  async entregar(id: number, solicitanteId: string, metodoCobro?: MetodoCobroSalon) {
+    const pedido = await this.pedidoParaEntrega(id, solicitanteId);
+    if (!transicionPermitida(pedido.estado, EstadoPedido.entregado, pedido.metodoPago)) {
+      throw new BadRequestException('Solo se entrega un pedido listo para recoger');
+    }
+    const cobra = esPagoEnSalon(pedido.metodoPago) && !pedido.pagadoEn;
+    if (cobra && !METODOS_COBRO_SALON.includes(metodoCobro as MetodoCobroSalon)) {
+      throw new BadRequestException('Indica cómo se cobró: efectivo, tarjeta en terminal o transferencia');
+    }
+    const ahora = new Date();
+    const data = await this.prisma.$transaction(async (tx) => {
+      const r = await tx.pedido.updateMany({
+        where: { id, estado: pedido.estado },
+        data: { estado: EstadoPedido.entregado, ...(cobra && { pagadoEn: ahora }) },
+      });
+      if (r.count !== 1) throw new ConflictException('El pedido cambió mientras lo editabas. Recarga para ver su estado.');
+      if (cobra) {
+        await tx.pago.create({
+          data: {
+            pedidoId: id,
+            intentoNumero: 1,
+            monto: Number(pedido.total),
+            moneda: pedido.moneda ?? 'MXN',
+            metodo: metodoCobro!,
+            estado: 'aprobado',
+            pagadoEn: ahora,
+            cobradoPorId: solicitanteId,
+          },
+        });
+      }
+      await tx.historialEstadoPedido.create({
+        data: { pedidoId: id, estadoAnterior: pedido.estado, estadoNuevo: EstadoPedido.entregado, origen: cobra ? 'api.cobrar_entregar' : 'api.entregar', usuarioId: solicitanteId },
+      });
+      return tx.pedido.findUnique({ where: { id }, include: this.includeDefault() });
+    });
+    this.eventEmitter.emit('pedido.entregado', { pedidoId: id, usuarioId: pedido.usuarioId });
     return { success: true, data };
   }
 

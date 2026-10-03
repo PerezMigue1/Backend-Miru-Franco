@@ -34,4 +34,9 @@ export class UpdatePagoDto {
   @Min(0)
   @IsOptional()
   monto?: number;
+
+  /** Método con el que se cobró (efectivo, tarjeta_terminal, transferencia…). */
+  @IsString()
+  @IsOptional()
+  metodo?: string;
 }

@@ -1,10 +1,8 @@
 import {
-  Body,
   Controller,
   Delete,
+  GoneException,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   Patch,
   Post,
@@ -14,12 +12,10 @@ import {
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { MetodosPagoService } from './metodos-pago.service';
-import { CreateMetodoPagoDto } from './dto/create-metodo-pago.dto';
-import { UpdateMetodoPagoDto } from './dto/update-metodo-pago.dto';
 
 /**
  * Tarjetas / métodos tokenizados guardados (perfil + checkout).
- * Base: GET/POST /api/payments/metodos-pago
+ * Base: /api/payments/metodos-pago. Solo listar y borrar las que ya existían (crear y editar: 410).
  */
 @Controller('payments/metodos-pago')
 @UseGuards(JwtAuthGuard)
@@ -39,22 +35,19 @@ export class MetodosPagoController {
     return this.service.obtenerPorId(id, user.id);
   }
 
+  /**
+   * Retirado: con Mercado Pago Checkout Pro el sitio no guarda datos de tarjeta. Sin @Body a propósito:
+   * el cuerpo ni se valida ni se lee. Las tarjetas que ya existían se pueden listar y borrar.
+   */
   @Post()
-  @HttpCode(HttpStatus.CREATED)
-  crear(
-    @CurrentUser() user: { id: string },
-    @Body() dto: CreateMetodoPagoDto,
-  ) {
-    return this.service.crear(user.id, dto);
+  crear() {
+    throw new GoneException('Ya no se guardan tarjetas: el pago en línea se hace en Mercado Pago.');
   }
 
+  /** Retirado por el mismo motivo que crear(): no se escriben datos de tarjeta. */
   @Patch(':id')
-  actualizar(
-    @Param('id') id: string,
-    @CurrentUser() user: { id: string },
-    @Body() dto: UpdateMetodoPagoDto,
-  ) {
-    return this.service.actualizar(id, user.id, dto);
+  actualizar() {
+    throw new GoneException('Ya no se guardan tarjetas: el pago en línea se hace en Mercado Pago.');
   }
 
   @Delete(':id')

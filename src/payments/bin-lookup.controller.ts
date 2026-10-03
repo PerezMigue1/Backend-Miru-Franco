@@ -1,18 +1,15 @@
-import { Controller, Get, Query } from '@nestjs/common';
-import { BinLookupService } from './bin-lookup.service';
+import { Controller, Get, GoneException, Query } from '@nestjs/common';
 import { indicioMsiPorBancoEmisor } from './msi-por-banco-emisor';
 
 @Controller('payments')
 export class BinLookupController {
-  constructor(private readonly binLookupService: BinLookupService) {}
-
   /**
-   * Consulta BIN (binlist + respaldo). Respuesta incluye indicioMsi (heurística MSI por nombre de banco).
-   * GET /api/payments/bin-lookup?bin=4242424242424242
+   * Retirado: con Mercado Pago Checkout Pro la tarjeta se escribe en la página de Mercado Pago y el
+   * sitio no recibe dígitos de tarjeta. Ya no se consulta a servicios externos de BIN.
    */
   @Get('bin-lookup')
-  async binLookup(@Query('bin') bin: string) {
-    return this.binLookupService.lookup(bin ?? '');
+  binLookup() {
+    throw new GoneException('La consulta de tarjetas ya no está disponible.');
   }
 
   /**

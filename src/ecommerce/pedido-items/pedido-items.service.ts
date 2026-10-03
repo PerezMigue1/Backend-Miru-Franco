@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -13,6 +14,9 @@ import {
   decrementarStockPresentaciones,
   incrementarStockPresentaciones,
 } from '../common/pedido-inventario.util';
+
+/** La clienta solo cambia los productos antes de que el salón empiece a preparar su pedido. */
+const ESTADOS_EDITABLES_POR_CLIENTA: EstadoPedido[] = [EstadoPedido.borrador, EstadoPedido.pendiente_pago];
 
 @Injectable()
 export class PedidoItemsService {
@@ -58,18 +62,28 @@ export class PedidoItemsService {
     return { success: true, count: data.length, data };
   }
 
-  async crear(solicitanteId: string, dto: CreatePedidoItemDto) {
-    await this.access.assertPedido(solicitanteId, dto.pedidoId);
+  /**
+   * Quién puede cambiar los artículos: la dueña (o el admin) y nunca en un pedido cancelado. La clienta
+   * además solo mientras el pedido está en borrador o pendiente de pago, antes de que se prepare.
+   */
+  private async assertPuedeEditarArticulos(solicitanteId: string, pedidoId: number) {
+    await this.access.assertPedido(solicitanteId, pedidoId);
     const pedido = await this.prisma.pedido.findUnique({
-      where: { id: dto.pedidoId },
+      where: { id: pedidoId },
       select: { estado: true },
     });
     if (!pedido) throw new NotFoundException('Pedido no encontrado');
     if (pedido.estado === EstadoPedido.cancelado) {
-      throw new BadRequestException(
-        'No se pueden añadir ítems a un pedido cancelado',
-      );
+      throw new BadRequestException('No se pueden cambiar los productos de un pedido cancelado');
     }
+    const rol = await this.access.getRol(solicitanteId);
+    if (!this.access.isAdmin(rol) && !ESTADOS_EDITABLES_POR_CLIENTA.includes(pedido.estado)) {
+      throw new ForbiddenException('Ya no puedes cambiar los productos de este pedido: el salón ya lo está preparando.');
+    }
+  }
+
+  async crear(solicitanteId: string, dto: CreatePedidoItemDto) {
+    await this.assertPuedeEditarArticulos(solicitanteId, dto.pedidoId);
     const pres = await this.prisma.productoPresentacion.findUnique({
       where: { id: dto.presentacionId },
       include: { producto: true },
@@ -119,23 +133,15 @@ export class PedidoItemsService {
     id: number,
     solicitanteId: string,
     dto: UpdatePedidoItemDto,
+    pedidoId: number,
   ) {
     const item = await this.prisma.pedidoItem.findUnique({
       where: { id },
       include: { presentacion: true, producto: true },
     });
-    if (!item) throw new NotFoundException('Ítem de pedido no encontrado');
-    await this.access.assertPedido(solicitanteId, item.pedidoId);
-
-    const pedidoEstado = await this.prisma.pedido.findUnique({
-      where: { id: item.pedidoId },
-      select: { estado: true },
-    });
-    if (pedidoEstado?.estado === EstadoPedido.cancelado) {
-      throw new BadRequestException(
-        'No se pueden modificar ítems de un pedido cancelado',
-      );
-    }
+    // El artículo tiene que ser del pedido de la URL: no se edita uno ajeno cambiando el pedidoId.
+    if (!item || item.pedidoId !== pedidoId) throw new NotFoundException('Ítem de pedido no encontrado');
+    await this.assertPuedeEditarArticulos(solicitanteId, item.pedidoId);
 
     const cantidad =
       dto.cantidad !== undefined ? dto.cantidad : item.cantidad;
@@ -207,19 +213,10 @@ export class PedidoItemsService {
     return { success: true, data };
   }
 
-  async eliminar(id: number, solicitanteId: string) {
+  async eliminar(id: number, solicitanteId: string, pedidoIdUrl: number) {
     const item = await this.prisma.pedidoItem.findUnique({ where: { id } });
-    if (!item) throw new NotFoundException('Ítem de pedido no encontrado');
-    await this.access.assertPedido(solicitanteId, item.pedidoId);
-    const pedidoRow = await this.prisma.pedido.findUnique({
-      where: { id: item.pedidoId },
-      select: { estado: true },
-    });
-    if (pedidoRow?.estado === EstadoPedido.cancelado) {
-      throw new BadRequestException(
-        'No se pueden eliminar ítems de un pedido cancelado',
-      );
-    }
+    if (!item || item.pedidoId !== pedidoIdUrl) throw new NotFoundException('Ítem de pedido no encontrado');
+    await this.assertPuedeEditarArticulos(solicitanteId, item.pedidoId);
     const pedidoId = item.pedidoId;
     await this.prisma.$transaction(async (tx) => {
       await incrementarStockPresentaciones(

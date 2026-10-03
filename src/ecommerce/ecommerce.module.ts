@@ -23,6 +23,10 @@ import { DevolucionesController } from './devoluciones/devoluciones.controller';
 import { DevolucionesService } from './devoluciones/devoluciones.service';
 import { NotificacionesController } from './notificaciones/notificaciones.controller';
 import { NotificacionesService } from './notificaciones/notificaciones.service';
+import { PagosEnLineaController } from './mercadopago/pagos-en-linea.controller';
+import { PagosEnLineaService } from './mercadopago/pagos-en-linea.service';
+import { MercadoPagoClient } from './mercadopago/mercadopago.client';
+import { ApartadosService } from './pedidos/apartados.service';
 
 @Module({
   imports: [NotificacionesModule],
@@ -38,6 +42,7 @@ import { NotificacionesService } from './notificaciones/notificaciones.service';
     ValoracionesController,
     DevolucionesController,
     NotificacionesController,
+    PagosEnLineaController,
   ],
   providers: [
     EcommerceAccessService,
@@ -52,6 +57,9 @@ import { NotificacionesService } from './notificaciones/notificaciones.service';
     ValoracionesService,
     DevolucionesService,
     NotificacionesService,
+    PagosEnLineaService,
+    MercadoPagoClient,
+    ApartadosService,
   ],
   exports: [EcommerceAccessService],
 })

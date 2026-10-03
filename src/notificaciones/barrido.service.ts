@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DespachadorService } from './despachador.service';
 
 const INTERVALO_MS = 5 * 60_000;
@@ -22,7 +23,10 @@ export class BarridoService {
   private readonly logger = new Logger(BarridoService.name);
   private corriendo = false;
 
-  constructor(private readonly despachador: DespachadorService) {}
+  constructor(
+    private readonly despachador: DespachadorService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   @Interval(INTERVALO_MS)
   async tick(): Promise<void> {
@@ -37,6 +41,13 @@ export class BarridoService {
       await this.despachador.drenarPendientes();
     } catch (e) {
       this.logger.error('Fallo en el barrido de notificaciones pendientes', e);
+    }
+    // Otras reglas programadas (apartados y pedidos en línea vencidos) escuchan este evento: así hay una
+    // sola tarea programada y Notificaciones no depende de E-commerce. Corren aunque drenar falle.
+    try {
+      await this.eventEmitter.emitAsync('barrido.tick');
+    } catch (e) {
+      this.logger.error('Fallo en una regla de la barrida', e);
     } finally {
       this.corriendo = false;
     }

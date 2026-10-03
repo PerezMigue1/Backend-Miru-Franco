@@ -51,8 +51,7 @@ export class PedidoItemsController {
     @CurrentUser() user: { id: string },
     @Body() dto: UpdatePedidoItemDto,
   ) {
-    void pedidoId;
-    return this.service.actualizar(Number(itemId), user.id, dto);
+    return this.service.actualizar(Number(itemId), user.id, dto, Number(pedidoId));
   }
 
   @Delete(':itemId')
@@ -61,7 +60,6 @@ export class PedidoItemsController {
     @Param('itemId') itemId: string,
     @CurrentUser() user: { id: string },
   ) {
-    void pedidoId;
-    return this.service.eliminar(Number(itemId), user.id);
+    return this.service.eliminar(Number(itemId), user.id, Number(pedidoId));
   }
 }

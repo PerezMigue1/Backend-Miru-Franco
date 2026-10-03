@@ -95,6 +95,8 @@ export class PagosService {
         referenciaExterna: dto.referenciaExterna ?? null,
         errorMensaje: dto.errorMensaje ?? null,
         payload: dto.payload === undefined ? undefined : (dto.payload as object),
+        // Cobrado en el salón: cuándo y quién, para que entre en el corte de caja de esa persona.
+        ...(dto.estado === 'aprobado' && { pagadoEn: new Date(), cobradoPorId: solicitanteId }),
       },
     });
     return { success: true, data };
@@ -126,6 +128,9 @@ export class PagosService {
           pagadoEn: dto.pagadoEn ? new Date(dto.pagadoEn) : null,
         }),
         ...(dto.monto !== undefined && { monto: dto.monto }),
+        ...(dto.metodo !== undefined && { metodo: dto.metodo }),
+        // Se aprueba ahora sin fecha de cobro previa: cuándo y quién, para el corte de caja.
+        ...(dto.estado === 'aprobado' && !pago.pagadoEn && dto.pagadoEn === undefined && { pagadoEn: new Date(), cobradoPorId: solicitanteId }),
       },
     });
     return { success: true, data };

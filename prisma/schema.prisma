@@ -46,6 +46,7 @@ enum EstadoPago {
   rechazado
   cancelado
   reembolsado
+  en_revision // pago aprobado en la pasarela que no se pudo aplicar (pedido cancelado o ya pagado): revisar devolución
 }
 
 enum MovimientoInventarioTipo {
@@ -117,6 +118,7 @@ model Usuario {
   ventasComoCajero           VentaLocal[] @relation("VentasComoCajero")
   ventasComoCliente          VentaLocal[] @relation("VentasComoCliente")
   cortesCaja                 CorteCaja[]  @relation("CortesComoCajero")
+  pagosCobrados              Pago[]       @relation("PagosCobrados")
   comprasRegistradas         Compra[]
   cotizaciones               Cotizacion[]
   facturasCreadas            Factura[]
@@ -286,9 +288,19 @@ model Pago {
   pedidoId  Int          @map("pedido_id")
   devoluciones Devolucion[]
 
+  // Quién cobró en el salón y en qué corte de caja entró (cobros de pedidos para recoger).
+  cobradoPor   Usuario?   @relation("PagosCobrados", fields: [cobradoPorId], references: [id], onDelete: SetNull)
+  cobradoPorId String?    @map("cobrado_por_id")
+  corte        CorteCaja? @relation(fields: [corteId], references: [id], onDelete: SetNull)
+  corteId      Int?       @map("corte_id")
+
+  // Un mismo pago de la pasarela se registra una sola vez (webhook idempotente).
+  @@unique([proveedor, referenciaExterna])
   @@index([pedidoId])
   @@index([estado])
   @@index([referenciaExterna])
+  @@index([cobradoPorId, pagadoEn])
+  @@index([corteId])
   @@map("pagos")
 }
 
@@ -932,6 +944,7 @@ model CorteCaja {
   cajeroId String  @map("cajero_id")
 
   ventas VentaLocal[]
+  pagos  Pago[]
 
   @@index([cajeroId])
   @@index([fecha])

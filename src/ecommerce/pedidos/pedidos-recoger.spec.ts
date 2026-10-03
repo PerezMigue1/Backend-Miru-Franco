@@ -21,7 +21,7 @@ const inventario = require('../common/pedido-inventario.util');
 const CLIENTA = 'clienta-1';
 const STAFF = 'staff-1';
 
-/** Prisma en memoria para un solo pedido; el rol 'empleado' tiene caja:escritura (personal). */
+/** Prisma en memoria para un solo pedido; el rol 'empleado' tiene caja:escritura y pedidos:entregar (personal). */
 function montar(pedido: { estado: EstadoPedido; metodoPago?: string | null; usuarioId?: string; pagadoEn?: Date | null }) {
   const actual = { id: 7, usuarioId: CLIENTA, metodoPago: null, pagadoEn: null, ...pedido };
   const actualizaciones: Record<string, unknown>[] = [];
@@ -29,6 +29,12 @@ function montar(pedido: { estado: EstadoPedido; metodoPago?: string | null; usua
   const tx = {
     pedidoItem: { findMany: jest.fn(async () => [{ presentacionId: 1, cantidad: 2 }]) },
     pedido: {
+      // Cambio de estado condicional: solo si sigue en el estado que se leyó.
+      updateMany: jest.fn(async ({ where, data }: { where: { id: number; estado: EstadoPedido }; data: Record<string, unknown> }) => {
+        if (where.id !== actual.id || where.estado !== actual.estado) return { count: 0 };
+        actual.estado = data.estado as EstadoPedido;
+        return { count: 1 };
+      }),
       update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => (actualizaciones.push(data), { ...actual, ...data })),
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 99, ...data })),
     },
@@ -38,7 +44,7 @@ function montar(pedido: { estado: EstadoPedido; metodoPago?: string | null; usua
     pedido: { findUnique: jest.fn(async () => actual) },
     permisoRol: {
       findUnique: jest.fn(async ({ where }: { where: { rol: string } }) =>
-        where.rol === 'empleado' ? { claves: ['caja:escritura'] } : { claves: [] },
+        where.rol === 'empleado' ? { claves: ['caja:escritura', 'pedidos:entregar'] } : { claves: [] },
       ),
     },
     productoPresentacion: {
@@ -101,7 +107,7 @@ describe('Pedidos para recoger en el salón: transiciones', () => {
     [listo_recoger, entregado, 'tarjeta_credito'],
     [pendiente_pago, preparando, 'pago_en_salon'],
     [preparando, listo_recoger, 'pago_en_salon'],
-    [listo_recoger, entregado, 'pago_en_salon'],
+    // listo_recoger → entregado de un apartado va por POST /pedidos/:id/entregar (cobra): pedidos-entrega.spec.ts
     [listo_recoger, cancelado, 'pago_en_salon'],
     [enviado, entregado, 'efectivo'], // pedido anterior
   ])('el personal pasa de %s a %s (%s)', async (desde, hacia, metodoPago) => {
@@ -165,12 +171,6 @@ describe('Pedidos para recoger en el salón: transiciones', () => {
     const { servicio, eventos } = montar({ estado: preparando, metodoPago: 'pago_en_salon' });
     await servicio.actualizar(7, STAFF, { estado: listo_recoger });
     expect(eventos.emit).toHaveBeenCalledWith('pedido.listo_recoger', { pedidoId: 7, usuarioId: CLIENTA });
-  });
-
-  it('cobrar y entregar un pago al recoger registra la fecha de pago', async () => {
-    const { servicio, actualizaciones } = montar({ estado: listo_recoger, metodoPago: 'pago_en_salon' });
-    await servicio.actualizar(7, STAFF, { estado: entregado });
-    expect(actualizaciones[0].pagadoEn).toBeInstanceOf(Date);
   });
 
   it('la regla pura: nada llega a enviado', () => {

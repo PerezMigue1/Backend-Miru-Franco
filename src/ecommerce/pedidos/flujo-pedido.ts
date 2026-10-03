@@ -11,6 +11,14 @@ import { EstadoPedido } from '@prisma/client';
  *   ningún pedido puede pasar a 'enviado'.
  */
 export const METODO_PAGO_EN_SALON = 'pago_en_salon';
+/** Pago en línea con Mercado Pago Checkout Pro: sigue el flujo en línea; lo marca pagado el webhook. */
+export const METODO_PAGO_MERCADOPAGO = 'mercado_pago';
+/** Cómo se cobra en el mostrador un pedido de pago al recoger (el corte de caja suma cada uno aparte). */
+export const METODOS_COBRO_SALON = ['efectivo', 'tarjeta_terminal', 'transferencia'] as const;
+export type MetodoCobroSalon = (typeof METODOS_COBRO_SALON)[number];
+
+/** Un pedido en línea sin pagar se cancela a las 24 h; la preferencia de Mercado Pago vence a la misma hora. */
+export const VIGENCIA_PEDIDO_EN_LINEA_MS = 24 * 60 * 60 * 1000;
 
 export const esPagoEnSalon = (metodoPago: string | null | undefined): boolean =>
   (metodoPago ?? '').trim().toLowerCase() === METODO_PAGO_EN_SALON;

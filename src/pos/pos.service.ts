@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -16,6 +17,13 @@ import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { ListVentasDto } from './dto/list-ventas.dto';
 import { CreateCorteDto } from './dto/create-corte.dto';
 import { ListCortesDto } from './dto/list-cortes.dto';
+
+/** Método de cobro de un pedido en el salón → total del corte donde se suma. */
+const CAJA_POR_METODO_COBRO: Record<string, 'efectivo' | 'tarjeta' | 'transferencia'> = {
+  efectivo: 'efectivo',
+  tarjeta_terminal: 'tarjeta',
+  transferencia: 'transferencia',
+};
 
 /**
  * Día (en México) del corte: 'YYYY-MM-DD' tal cual; si llega con hora (ISO completo), su día en
@@ -314,6 +322,35 @@ export class PosService {
     return { success: true, data: ventaActualizada };
   }
 
+  // ─── cobros de pedidos en el salón ───────────────────────────────────────────
+
+  /**
+   * Pagos aprobados que alguien cobró en el mostrador ("Cobrar y entregar" o "Cobrar" de pedidos): cuentan
+   * en el corte igual que una venta local, cada uno en su método. Los pagos en línea (Mercado Pago) no entran:
+   * ese dinero llega a la cuenta de Mercado Pago, no a la caja. Los pagos anteriores sin cobrado_por_id tampoco.
+   */
+  private async cobrosDelSalon(filtro: { cobradoPorId?: string; pagadoEn?: { gte?: Date; lte?: Date }; soloSinCorte?: boolean }) {
+    const cobros = await this.prisma.pago.findMany({
+      where: {
+        estado: 'aprobado',
+        metodo: { in: Object.keys(CAJA_POR_METODO_COBRO) },
+        cobradoPorId: filtro.cobradoPorId ?? { not: null },
+        ...(filtro.pagadoEn && { pagadoEn: filtro.pagadoEn }),
+        ...(filtro.soloSinCorte && { corteId: null }),
+      },
+      select: { id: true, monto: true, metodo: true },
+    });
+    const suma = (caja: 'efectivo' | 'tarjeta' | 'transferencia') =>
+      cobros.filter((c) => CAJA_POR_METODO_COBRO[c.metodo] === caja).reduce((acc, c) => acc.add(c.monto), new Decimal(0));
+    return {
+      ids: cobros.map((c) => c.id),
+      total: cobros.reduce((acc, c) => acc.add(c.monto), new Decimal(0)),
+      efectivo: suma('efectivo'),
+      tarjeta: suma('tarjeta'),
+      transferencia: suma('transferencia'),
+    };
+  }
+
   // ─── resumen ─────────────────────────────────────────────────────────────────
 
   async resumen(desde?: string, hasta?: string) {
@@ -333,13 +370,21 @@ export class PosService {
     const totalTarjeta      = ventas.filter((v) => v.metodoPago === 'tarjeta').reduce((acc, v) => acc.add(v.total), new Decimal(0));
     const totalTransferencia = ventas.filter((v) => v.metodoPago === 'transferencia').reduce((acc, v) => acc.add(v.total), new Decimal(0));
     const totalMixto        = ventas.filter((v) => v.metodoPago === 'mixto').reduce((acc, v) => acc.add(v.total), new Decimal(0));
+    const cobros = await this.cobrosDelSalon(
+      where.creadoEn ? { pagadoEn: where.creadoEn as { gte?: Date; lte?: Date } } : {},
+    );
 
     return {
       success: true,
       data: {
-        totalVentas,
-        totalMonto,
-        porMetodo: { efectivo: totalEfectivo, tarjeta: totalTarjeta, transferencia: totalTransferencia, mixto: totalMixto },
+        totalVentas: totalVentas + cobros.ids.length,
+        totalMonto: totalMonto.add(cobros.total),
+        porMetodo: {
+          efectivo: totalEfectivo.add(cobros.efectivo),
+          tarjeta: totalTarjeta.add(cobros.tarjeta),
+          transferencia: totalTransferencia.add(cobros.transferencia),
+          mixto: totalMixto,
+        },
       },
     };
   }
@@ -413,10 +458,13 @@ export class PosService {
       select: { id: true, total: true, metodoPago: true },
     });
 
-    const totalVentas        = ventas.reduce((acc, v) => acc.add(v.total), new Decimal(0));
-    const totalEfectivo      = ventas.filter((v) => v.metodoPago === 'efectivo').reduce((acc, v) => acc.add(v.total), new Decimal(0));
-    const totalTarjeta       = ventas.filter((v) => v.metodoPago === 'tarjeta').reduce((acc, v) => acc.add(v.total), new Decimal(0));
-    const totalTransferencia = ventas.filter((v) => v.metodoPago === 'transferencia').reduce((acc, v) => acc.add(v.total), new Decimal(0));
+    // Cobros de pedidos en el salón de esta cajera ese día, todavía sin corte.
+    const cobros = await this.cobrosDelSalon({ cobradoPorId: cajeroId, pagadoEn: { gte: inicioDia, lte: finDia }, soloSinCorte: true });
+
+    const totalVentas        = ventas.reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.total);
+    const totalEfectivo      = ventas.filter((v) => v.metodoPago === 'efectivo').reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.efectivo);
+    const totalTarjeta       = ventas.filter((v) => v.metodoPago === 'tarjeta').reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.tarjeta);
+    const totalTransferencia = ventas.filter((v) => v.metodoPago === 'transferencia').reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.transferencia);
     const efectivoFinal      = new Decimal(dto.efectivoFinal);
     const efectivoInicial    = new Decimal(dto.efectivoInicial);
     // diferencia = efectivo_final - (efectivo_inicial + total_ventas_efectivo)
@@ -449,9 +497,17 @@ export class PosService {
         });
       }
 
+      if (cobros.ids.length > 0) {
+        // Solo los que siguen sin corte: si otro corte simultáneo se llevó alguno, este se revierte.
+        const ligados = await tx.pago.updateMany({ where: { id: { in: cobros.ids }, corteId: null }, data: { corteId: nuevo.id } });
+        if (ligados.count !== cobros.ids.length) {
+          throw new ConflictException('Algunos cobros ya entraron en otro corte. Vuelve a registrar el corte.');
+        }
+      }
+
       return nuevo;
     });
 
-    return { success: true, data: { ...corte, ventasVinculadas: ventas.length } };
+    return { success: true, data: { ...corte, ventasVinculadas: ventas.length, cobrosVinculados: cobros.ids.length } };
   }
 }
