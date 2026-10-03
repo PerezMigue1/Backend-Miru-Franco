@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { Pool, type QueryResult, type QueryResultRow } from 'pg';
 import { MENSAJE_SERVICIO_NO_DISPONIBLE } from '../common/filters/http-exception.filter';
+import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
 
 const IDENT_REGEX = /^[a-zA-Z0-9_]+$/;
 
@@ -621,14 +622,18 @@ export class ExportDirectService implements OnModuleInit, OnModuleDestroy {
       const params: unknown[] = [];
       let paramIndex = 1;
       if (dateCol && (fechaDesde || fechaHasta)) {
-        if (fechaDesde) {
+        // Días de México (00:00 a 23:59:59.999 hora de México) como instantes UTC: las columnas de
+        // creación guardan UTC. Antes 'YYYY-MM-DD' se comparaba como día UTC y lo creado desde las
+        // 18:00 de México caía en el día siguiente.
+        const rango = normalizarRangoFechas(fechaDesde || undefined, fechaHasta || undefined);
+        if (rango.gte) {
           conditions.push(`"${dateCol}" >= $${paramIndex}`);
-          params.push(fechaDesde);
+          params.push(rango.gte.toISOString());
           paramIndex++;
         }
-        if (fechaHasta) {
+        if (rango.lte) {
           conditions.push(`"${dateCol}" <= $${paramIndex}`);
-          params.push(fechaHasta + 'T23:59:59.999');
+          params.push(rango.lte.toISOString());
           paramIndex++;
         }
       }

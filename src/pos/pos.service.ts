@@ -9,12 +9,21 @@ import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
-import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
+import { normalizarRangoFechas, normalizarRangoFechasSoloDia } from '../common/utils/fecha-rango.util';
+import { diaEnMexico, esDiaValido, rangoDiaMexico } from '../common/utils/zona-mexico';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { ListVentasDto } from './dto/list-ventas.dto';
 import { CreateCorteDto } from './dto/create-corte.dto';
 import { ListCortesDto } from './dto/list-cortes.dto';
+
+/**
+ * Día (en México) del corte: 'YYYY-MM-DD' tal cual; si llega con hora (ISO completo), su día en
+ * México. Cortar el texto (`fecha.slice(0, 10)`) daría el día UTC.
+ */
+export function diaDelCorte(fecha: string): string {
+  return esDiaValido(fecha) ? fecha : diaEnMexico(new Date(fecha));
+}
 
 @Injectable()
 export class PosService {
@@ -47,7 +56,8 @@ export class PosService {
   }
 
   private generarFolio(id: number): string {
-    return `VL-${new Date().getFullYear()}-${String(id).padStart(6, '0')}`;
+    // Año de México: el 31 de diciembre después de las 18:00 el servidor (UTC) ya va en el siguiente.
+    return `VL-${diaEnMexico().slice(0, 4)}-${String(id).padStart(6, '0')}`;
   }
 
   // ─── ventas ─────────────────────────────────────────────────────────────────
@@ -344,7 +354,9 @@ export class PosService {
     const where: Record<string, unknown> = {};
     if (query.cajeroId) where.cajeroId = query.cajeroId;
     if (query.desde || query.hasta) {
-      where.fecha = normalizarRangoFechas(query.desde, query.hasta);
+      // CorteCaja.fecha guarda el día del corte a medianoche UTC: se filtra por día UTC. Con el
+      // rango de México, el corte del día D aparecía al filtrar por D-1.
+      where.fecha = normalizarRangoFechasSoloDia(query.desde, query.hasta);
     }
 
     const [total, cortes] = await this.prisma.$transaction([
@@ -382,11 +394,14 @@ export class PosService {
 
   async crearCorte(dto: CreateCorteDto, cajeroId: string) {
     const fecha = new Date(dto.fecha);
-    if (isNaN(fecha.getTime())) throw new BadRequestException('Fecha inválida');
+    // Un día imposible ('2026-02-30') pasa @IsDateString y se desbordaría a otro día.
+    if (isNaN(fecha.getTime()) || (/^\d{4}-\d{2}-\d{2}$/.test(dto.fecha) && !esDiaValido(dto.fecha))) {
+      throw new BadRequestException('Fecha inválida');
+    }
 
-    // Calcular totales del turno para esa fecha
-    const inicioDia = new Date(dto.fecha + 'T00:00:00.000Z');
-    const finDia    = new Date(dto.fecha + 'T23:59:59.999Z');
+    // Totales del turno: ventas de las 00:00 a las 23:59:59.999 hora de México de ese día. Antes se
+    // usaba el día UTC y las ventas desde las 18:00 de México caían en el corte del día siguiente.
+    const { desde: inicioDia, hasta: finDia } = rangoDiaMexico(diaDelCorte(dto.fecha));
 
     const ventas = await this.prisma.ventaLocal.findMany({
       where: {

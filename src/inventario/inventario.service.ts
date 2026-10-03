@@ -9,7 +9,8 @@ import { CreateAjusteDto } from './dto/create-ajuste.dto';
 import { CreateEntradaDto } from './dto/create-entrada.dto';
 import { CreateSalidaDto } from './dto/create-salida.dto';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
-import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
+import { normalizarRangoFechas, normalizarRangoFechasSoloDia } from '../common/utils/fecha-rango.util';
+import { diaEnMexico, diasHastaDiaCalendario, sumarDias } from '../common/utils/zona-mexico';
 
 type MovimientoRow = {
   id: number;
@@ -427,7 +428,9 @@ export class InventarioService {
   async caducidades(query: CaducidadesDto) {
     const dias = query.dias ?? 30;
     const ahora = new Date();
-    const limite = new Date(ahora.getTime() + dias * 24 * 60 * 60 * 1000);
+    // fechaCaducidad es un día de calendario guardado en UTC (mediodía desde el formulario,
+    // medianoche desde importaciones): la ventana llega hasta el final de ese día, hoy (México) + dias.
+    const { lte: limite } = normalizarRangoFechasSoloDia(undefined, sumarDias(diaEnMexico(ahora), dias));
 
     const presentaciones = await this.prisma.productoPresentacion.findMany({
       where: { fechaCaducidad: { lte: limite } },
@@ -441,18 +444,16 @@ export class InventarioService {
       },
     });
 
-    const ahora2 = new Date();
     return {
       success: true,
       dias,
       count: presentaciones.length,
-      data: presentaciones.map((p) => ({
-        ...p,
-        vencida: p.fechaCaducidad! < ahora2,
-        diasRestantes: Math.ceil(
-          (p.fechaCaducidad!.getTime() - ahora2.getTime()) / (1000 * 60 * 60 * 24),
-        ),
-      })),
+      data: presentaciones.map((p) => {
+        // Por día de calendario en México, como el frontend: hoy 0, mañana 1, ayer -1, a cualquier
+        // hora. Antes se restaban milisegundos y lo de hoy contaba como vencido desde las 06:00.
+        const diasRestantes = diasHastaDiaCalendario(p.fechaCaducidad!, ahora);
+        return { ...p, vencida: diasRestantes < 0, diasRestantes };
+      }),
     };
   }
 }
