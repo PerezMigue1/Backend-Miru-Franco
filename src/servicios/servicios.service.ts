@@ -157,7 +157,13 @@ export class ServiciosService {
     }
     if (dto.descripcion !== undefined) data.descripcion = dto.descripcion ? sanitizeInput(dto.descripcion) : null;
     if (dto.descripcionLarga !== undefined) data.descripcionLarga = dto.descripcionLarga ? sanitizeInput(dto.descripcionLarga) : null;
-    if (dto.precio !== undefined) data.precio = dto.precio;
+    if (dto.precio !== undefined) {
+      // Las citas guardan el anticipo: un precio menor dejaría citas que el POS no puede cobrar.
+      if (existe.anticipoMonto && Math.round(dto.precio * 100) < Math.round(Number(existe.anticipoMonto) * 100)) {
+        throw new BadRequestException('El precio no puede ser menor que el anticipo del servicio; ajusta primero el anticipo');
+      }
+      data.precio = dto.precio;
+    }
     if (dto.duracionMinutos !== undefined) data.duracionMinutos = dto.duracionMinutos;
     if (dto.categoria !== undefined) {
       const v = sanitizeInput(dto.categoria);
@@ -223,5 +229,17 @@ export class ServiciosService {
       success: true,
       message: 'Servicio deshabilitado correctamente',
     };
+  }
+
+  /** Anticipo que se pide al agendar en línea. 0 o nulo: el servicio no pide anticipo. No puede pasar del precio. */
+  async actualizarAnticipo(id: number, anticipoMonto: number | null | undefined) {
+    const servicio = await this.prisma.servicio.findUnique({ where: { id }, select: { id: true, precio: true } });
+    if (!servicio) throw new NotFoundException('Servicio no encontrado');
+    const monto = anticipoMonto && anticipoMonto > 0 ? anticipoMonto : null;
+    if (monto !== null && Math.round(monto * 100) > Math.round(Number(servicio.precio) * 100)) {
+      throw new BadRequestException('El anticipo no puede ser mayor que el precio del servicio');
+    }
+    const data = await this.prisma.servicio.update({ where: { id }, data: { anticipoMonto: monto } });
+    return { success: true, data };
   }
 }

@@ -1,4 +1,4 @@
-import { IsDateString, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateCitaDto {
@@ -24,4 +24,9 @@ export class CreateCitaDto {
   @IsOptional()
   @IsString()
   notas?: string;
+
+  /** Desde /operacion: el personal pide el anticipo del servicio (en el portal se pide siempre que el servicio lo tenga). */
+  @IsOptional()
+  @IsBoolean()
+  pedirAnticipo?: boolean;
 }

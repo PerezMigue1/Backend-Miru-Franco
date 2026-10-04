@@ -43,10 +43,13 @@ export interface VentaLocalPagadaEvent {
  *  pedido), sin cascada a otros roles — a diferencia de citas, aquí no hay un
  *  segundo actor (especialista) que notificar. */
 export interface PagoRevisionEvent {
-  pedidoId: number;
+  /** Pago de un pedido o del anticipo de una cita (uno de los dos). */
+  pedidoId?: number;
+  citaId?: number;
   referencia: string;
-  motivo: 'pedido_no_pendiente' | 'monto_distinto';
-  estadoPedido: string;
+  motivo: 'pedido_no_pendiente' | 'monto_distinto' | 'cita_no_vigente' | 'cita_cancelada_por_clienta';
+  estadoPedido?: string;
+  estadoCita?: string;
 }
 
 export interface PedidoEvent {
@@ -344,6 +347,7 @@ export class NotificacionesListener {
   /** Un pago de la pasarela que no se pudo aplicar al pedido: aviso por la app a cada admin. */
   @OnEvent('pago.requiere_revision')
   async onPagoRequiereRevision(payload: PagoRevisionEvent): Promise<void> {
+    if (payload.citaId) return this.avisarAnticipoEnRevision(payload);
     const mensaje =
       payload.motivo === 'monto_distinto'
         ? `Pago con un monto distinto al del pedido #${payload.pedidoId}: revisar devolución`
@@ -372,6 +376,71 @@ export class NotificacionesListener {
       });
     } catch (e) {
       this.logger.error(`No se pudo avisar del pago en revisión del pedido ${payload.pedidoId}`, e);
+      return;
+    }
+    this.despachador.drenarInmediatas(envioIds);
+  }
+
+  /**
+   * Anticipo de cita en revisión (pago tardío de una cita liberada, monto distinto o la clienta canceló):
+   * aviso a quien maneja la caja (estilista y admin) para reembolsar o retener desde Gestión de citas.
+   */
+  private async avisarAnticipoEnRevision(payload: PagoRevisionEvent): Promise<void> {
+    const mensaje =
+      payload.motivo === 'cita_cancelada_por_clienta'
+        ? `La clienta canceló la cita #${payload.citaId} con anticipo pagado: decidir si se reembolsa o se retiene`
+        : payload.motivo === 'monto_distinto'
+          ? `Anticipo con un monto distinto en la cita #${payload.citaId}: revisar devolución`
+          : `Anticipo pagado de una cita que ya se liberó o canceló (#${payload.citaId}): revisar devolución`;
+    let envioIds: string[] = [];
+    try {
+      const destinatarios = await this.resolver.resolverUsuariosPorPermiso('caja:escritura');
+      await this.prisma.$transaction(async (tx) => {
+        for (const usuarioId of destinatarios) {
+          const canales = await this.resolver.resolverCanales(usuarioId, 'pago_revision', ['in_app']);
+          const { envios } = await this.outbox.encolar(tx, {
+            usuarioId,
+            tipo: 'pago_revision',
+            titulo: 'Anticipo por revisar',
+            mensaje,
+            metadata: { referencia: payload.referencia, motivo: payload.motivo },
+            entidadTipo: 'cita',
+            entidadId: String(payload.citaId),
+            urlAccion: '/operacion/gestion-citas',
+            canales,
+          });
+          envioIds = envioIds.concat(envios.map((e) => e.id));
+        }
+      });
+    } catch (e) {
+      this.logger.error(`No se pudo avisar del anticipo en revisión de la cita ${payload.citaId}`, e);
+      return;
+    }
+    this.despachador.drenarInmediatas(envioIds);
+  }
+
+  /** Anticipo recibido (en línea o en el salón): la clienta sabe que su cita quedó confirmada. */
+  @OnEvent('cita.anticipo_pagado')
+  async onAnticipoPagado(payload: { citaId: number; clienteId: string | null }): Promise<void> {
+    if (!payload.clienteId) return;
+    let envioIds: string[] = [];
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const canales = await this.resolver.resolverCanales(payload.clienteId as string, 'cita_confirmada', ['in_app']);
+        const { envios } = await this.outbox.encolar(tx, {
+          usuarioId: payload.clienteId as string,
+          tipo: 'cita_confirmada',
+          titulo: 'Anticipo recibido',
+          mensaje: 'Recibimos tu anticipo: tu cita quedó confirmada.',
+          entidadTipo: 'cita',
+          entidadId: String(payload.citaId),
+          urlAccion: `/cliente/servicios-citas/mis-citas/${payload.citaId}`,
+          canales,
+        });
+        envioIds = envios.map((e) => e.id);
+      });
+    } catch (e) {
+      this.logger.error(`No se pudo avisar del anticipo pagado de la cita ${payload.citaId}`, e);
       return;
     }
     this.despachador.drenarInmediatas(envioIds);

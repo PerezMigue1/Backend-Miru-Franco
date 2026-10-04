@@ -35,6 +35,7 @@ function montar(opciones: { citas?: CitaMem[]; comision?: { servicioId: number; 
     cita: { findUnique: jest.fn(async ({ where }: any) => citas.find((c) => c.id === where.id) ?? null) },
     usuario: { findMany: jest.fn(async ({ where }: any) => personal.filter((u) => where.id.in.includes(u.id))) },
     perfilEmpleado: { findMany: jest.fn(async ({ where }: any) => (opciones.recibe ?? []).filter((id) => where.usuarioId.in.includes(id)).map((usuarioId) => ({ usuarioId, recibeComisiones: true }))) },
+    pago: { findMany: jest.fn(async () => []) },
     comisionServicio: { findUnique: jest.fn(async ({ where }: any) => (opciones.comision && opciones.comision.servicioId === where.servicioId ? { ...opciones.comision, monto: new Prisma.Decimal(opciones.comision.monto) } : null)) },
     $transaction: jest.fn(async (fn: any) => fn(tx)),
   };

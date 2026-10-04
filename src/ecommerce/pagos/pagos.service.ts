@@ -71,7 +71,8 @@ export class PagosService {
 
   async obtenerPorId(id: number, solicitanteId: string) {
     const pago = await this.prisma.pago.findUnique({ where: { id } });
-    if (!pago) throw new NotFoundException('Pago no encontrado');
+    // Los pagos de anticipos de citas se consultan y gestionan desde la cita (/citas/:id/anticipo).
+    if (!pago || pago.pedidoId === null) throw new NotFoundException('Pago no encontrado');
     await this.assertLecturaPago(solicitanteId, pago.pedidoId);
     return { success: true, data: pago };
   }
@@ -110,7 +111,7 @@ export class PagosService {
     permisosUsuario?: string[],
   ) {
     const pago = await this.prisma.pago.findUnique({ where: { id } });
-    if (!pago) throw new NotFoundException('Pago no encontrado');
+    if (!pago || pago.pedidoId === null) throw new NotFoundException('Pago no encontrado');
     await this.assertPuedeGestionarPago(pago.pedidoId, solicitanteId, rolUsuario, permisosUsuario);
 
     const data = await this.prisma.pago.update({

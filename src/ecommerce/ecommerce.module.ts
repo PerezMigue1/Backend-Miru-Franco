@@ -27,9 +27,10 @@ import { PagosEnLineaController } from './mercadopago/pagos-en-linea.controller'
 import { PagosEnLineaService } from './mercadopago/pagos-en-linea.service';
 import { MercadoPagoClient } from './mercadopago/mercadopago.client';
 import { ApartadosService } from './pedidos/apartados.service';
+import { AnticiposModule } from '../citas/anticipos/anticipos.module';
 
 @Module({
-  imports: [NotificacionesModule],
+  imports: [NotificacionesModule, AnticiposModule],
   controllers: [
     DireccionesUsuarioController,
     PedidoItemsController,

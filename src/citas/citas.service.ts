@@ -19,6 +19,7 @@ import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
 import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante } from '../common/utils/permisos-citas.util';
+import { PLAZO_ANTICIPO_MS, anticiposDesde, referenciaCita, requiereAnticipo } from './anticipos/anticipos.util';
 
 const ROLES_ESPECIALISTA = ['estilista', 'empleado', 'becario'] as const;
 const ESTADOS_FINALES = ['cancelada', 'completada', 'no_asistio'] as const;
@@ -44,6 +45,8 @@ export class CitasService {
       cliente:     { select: { id: true, nombre: true, email: true, telefono: true } },
       especialista: { select: { id: true, nombre: true, rol: true } },
       servicio:    { select: { id: true, nombre: true, duracionMinutos: true, precio: true } },
+      // Pagos del anticipo (en línea o en el salón): estado del anticipo en el portal, la agenda y el POS.
+      pagos:       { select: { id: true, estado: true, monto: true, metodo: true, proveedor: true, pagadoEn: true, retenidoEn: true }, orderBy: { id: 'asc' } },
     } as const;
   }
 
@@ -470,9 +473,18 @@ export class CitasService {
     // Validar servicio
     const servicio = await this.prisma.servicio.findUnique({
       where: { id: dto.servicioId },
-      select: { id: true, activo: true },
+      select: { id: true, activo: true, anticipoMonto: true },
     });
     if (!servicio || !servicio.activo) throw new NotFoundException('Servicio no encontrado o inactivo');
+
+    // Anticipo: al agendar en línea (portal, o quien no tiene escritura) si el servicio lo pide; desde
+    // /operacion solo si el personal lo marca. Se guarda la foto del monto y el plazo para pagarlo.
+    const enLinea = propios || !puedeEscribirCualquierCita(solicitante);
+    const pideAnticipo =
+      (enLinea || dto.pedirAnticipo === true) && requiereAnticipo({ anticipoRequerido: servicio.anticipoMonto }) && anticiposDesde() !== null;
+    const anticipo = pideAnticipo
+      ? { anticipoRequerido: servicio.anticipoMonto, anticipoVenceEn: new Date(Date.now() + PLAZO_ANTICIPO_MS) }
+      : {};
 
     const fechaHoraInicio = new Date(dto.fechaHoraInicio);
     const fechaHoraFin    = new Date(dto.fechaHoraFin);
@@ -488,7 +500,7 @@ export class CitasService {
     }
 
     const cita = await this.prisma.cita.create({
-      data: { clienteId, especialistaId: dto.especialistaId, servicioId: dto.servicioId, fechaHoraInicio, fechaHoraFin, notas },
+      data: { clienteId, especialistaId: dto.especialistaId, servicioId: dto.servicioId, fechaHoraInicio, fechaHoraFin, notas, ...anticipo },
       include: this.incluirRelaciones(),
     });
 
@@ -649,7 +661,44 @@ export class CitasService {
       motivo: motivoLimpio,
     });
 
+    // La clienta canceló una cita con anticipo pagado: el pago queda en revisión para que el personal
+    // decida entre reembolsar o retener (Términos, sección 6). Si cancela el salón, reembolsa el personal.
+    const comoClienta = cita.clienteId === solicitante.id && (propios || !puedeEscribirCualquierCita(solicitante));
+    // Sin depender de anticipoPagadoEn leído antes: si el webhook lo marcó justo ahora, el pago también se revisa.
+    if (comoClienta && requiereAnticipo(cita)) {
+      const enRevision = await this.prisma.pago.updateMany({
+        where: { citaId: id, estado: 'aprobado' },
+        data: { estado: 'en_revision' },
+      });
+      if (enRevision.count > 0) {
+        this.eventEmitter.emit('pago.requiere_revision', {
+          citaId: id,
+          referencia: referenciaCita(id),
+          motivo: 'cita_cancelada_por_clienta',
+          estadoCita: 'cancelada',
+        });
+      }
+    }
+
     return { success: true, data: actualizada };
+  }
+
+  /**
+   * La clienta no llegó: la cita queda 'no_asistio' (libera el horario) y el anticipo pagado se retiene
+   * (Términos, sección 6). Solo desde una cita que seguía vigente.
+   */
+  async marcarNoAsistio(id: number) {
+    const r = await this.prisma.cita.updateMany({
+      where: { id, estado: { in: ['pendiente', 'confirmada', 'reprogramada'] } },
+      data: { estado: 'no_asistio' },
+    });
+    if (r.count !== 1) {
+      const existe = await this.prisma.cita.findUnique({ where: { id } });
+      if (!existe) throw new NotFoundException(`Cita ${id} no encontrada`);
+      throw new BadRequestException(`No se puede marcar "no asistió" una cita en estado '${existe.estado}'`);
+    }
+    const cita = await this.prisma.cita.findUnique({ where: { id }, include: this.incluirRelaciones() });
+    return { success: true, data: cita };
   }
 
   async registrarMateriales(id: number, dto: MaterialesCitaDto, solicitante: Solicitante) {

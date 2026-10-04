@@ -271,7 +271,17 @@ export class PosService {
     if (descuento.gt(subtotal)) {
       throw new BadRequestException('El descuento no puede ser mayor que el subtotal');
     }
-    const total = subtotal.sub(descuento);
+    // Anticipo ya pagado de las citas del ticket: entró a caja por la tabla pagos (con su método y el día
+    // en que se pagó), así que aquí solo se cobra el saldo y la venta lo guarda aparte.
+    const citasDelTicket = itemsValidados.map((i) => i.citaId).filter((c): c is number => c !== null && c !== undefined);
+    const anticipo = citasDelTicket.length === 0
+      ? new Decimal(0)
+      : (await this.prisma.pago.findMany({ where: { citaId: { in: citasDelTicket }, estado: 'aprobado' }, select: { monto: true } }))
+          .reduce((acc, p) => acc.add(p.monto), new Decimal(0));
+    if (descuento.add(anticipo).gt(subtotal)) {
+      throw new BadRequestException('El descuento más el anticipo no pueden ser mayores que el subtotal');
+    }
+    const total = subtotal.sub(descuento).sub(anticipo);
 
     // Pago mixto: el reparto por método es obligatorio y debe sumar el total (entra así al corte).
     let montosMixto: { montoEfectivo: Decimal; montoTarjeta: Decimal; montoTransferencia: Decimal } | null = null;
@@ -309,6 +319,7 @@ export class PosService {
           metodoPago: dto.metodoPago as any,
           subtotal,
           descuento,
+          anticipo,
           total,
           notas,
           cajeroId,
@@ -458,7 +469,9 @@ export class PosService {
   private async cobrosDelSalon(filtro: { cobradoPorId?: string; pagadoEn?: { gte?: Date; lte?: Date }; soloSinCorte?: boolean }) {
     const cobros = await this.prisma.pago.findMany({
       where: {
-        estado: 'aprobado',
+        // Anticipos de citas en revisión también: si la clienta canceló, el efectivo cobrado sigue en caja
+        // hasta que el personal decide reembolsarlo o retenerlo. Los cobros de pedidos, solo aprobados.
+        OR: [{ estado: 'aprobado' }, { estado: 'en_revision', citaId: { not: null } }],
         metodo: { in: Object.keys(CAJA_POR_METODO_COBRO) },
         cobradoPorId: filtro.cobradoPorId ?? { not: null },
         ...(filtro.pagadoEn && { pagadoEn: filtro.pagadoEn }),

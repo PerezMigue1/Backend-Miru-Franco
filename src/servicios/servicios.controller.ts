@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseIntPipe,
   Post,
   Put,
   Query,
@@ -16,6 +17,7 @@ import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
+import { ActualizarAnticipoServicioDto } from './dto/actualizar-anticipo.dto';
 
 @Controller('servicios')
 export class ServiciosController {
@@ -51,6 +53,14 @@ export class ServiciosController {
   @Permisos('servicios:escritura')
   async crear(@Body() dto: CreateServicioDto) {
     return this.serviciosService.crear(dto);
+  }
+
+  /** PUT /api/servicios/:id/anticipo: anticipo que pide el servicio al agendar en línea (estilista y admin). */
+  @Put(':id/anticipo')
+  @UseGuards(JwtAuthGuard, PermisosGuard)
+  @Permisos('servicios:escritura')
+  async actualizarAnticipo(@Param('id', ParseIntPipe) id: number, @Body() dto: ActualizarAnticipoServicioDto) {
+    return this.serviciosService.actualizarAnticipo(id, dto.anticipoMonto ?? null);
   }
 
   @Put(':id')

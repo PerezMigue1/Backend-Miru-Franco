@@ -284,11 +284,16 @@ model Pago {
   errorMensaje      String?    @map("error_mensaje") @db.Text
   payload           Json?
   pagadoEn          DateTime?  @map("pagado_en")
+  /// Anticipo de cita que el salón decidió retener (decisión firme: ya no se reembolsa).
+  retenidoEn        DateTime?  @map("retenido_en")
   creadoEn          DateTime   @default(now()) @map("creado_en")
   actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
 
-  pedido       Pedido       @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
-  pedidoId     Int          @map("pedido_id")
+  /// Un pago es de un pedido o del anticipo de una cita (CHECK en la base: exactamente uno de los dos).
+  pedido       Pedido?      @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId     Int?         @map("pedido_id")
+  cita         Cita?        @relation(fields: [citaId], references: [id], onDelete: Restrict)
+  citaId       Int?         @map("cita_id")
   devoluciones Devolucion[]
 
   // Quién cobró en el salón y en qué corte de caja entró (cobros de pedidos para recoger).
@@ -300,6 +305,7 @@ model Pago {
   // Un mismo pago de la pasarela se registra una sola vez (webhook idempotente).
   @@unique([proveedor, referenciaExterna])
   @@index([pedidoId])
+  @@index([citaId])
   @@index([estado])
   @@index([referenciaExterna])
   @@index([cobradoPorId, pagadoEn])
@@ -616,6 +622,8 @@ model Servicio {
   descripcion        String?  @db.Text
   descripcionLarga   String?  @map("descripcion_larga") @db.Text
   precio             Decimal  @db.Decimal(10, 2)
+  /// Anticipo que se pide al agendar en línea. Nulo o 0: el servicio no pide anticipo.
+  anticipoMonto      Decimal? @map("anticipo_monto") @db.Decimal(10, 2)
   duracionMinutos    Int      @map("duracion_minutos")
   categoria          String
   requiereEvaluacion Boolean  @default(false) @map("requiere_evaluacion")
@@ -858,6 +866,10 @@ model Cita {
   nombreInvitado    String?    @map("nombre_invitado")
   telefonoInvitado  String?    @map("telefono_invitado")
   origen            OrigenCita @default(en_linea)
+  /// Anticipo pedido al agendar (foto del monto del servicio en ese momento) y su plazo de pago.
+  anticipoRequerido Decimal?   @map("anticipo_requerido") @db.Decimal(10, 2)
+  anticipoVenceEn   DateTime?  @map("anticipo_vence_en")
+  anticipoPagadoEn  DateTime?  @map("anticipo_pagado_en")
   creadoEn          DateTime   @default(now()) @map("creado_en")
   actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
 
@@ -871,11 +883,15 @@ model Cita {
   seguimientos SeguimientoPostServicio[]
   /// Línea de venta con la que se cobró (única: una cita no se cobra dos veces).
   ventaItem    VentaLocalItem?
+  /// Pagos del anticipo (en línea o en el salón).
+  pagos        Pago[]
 
   @@index([clienteId])
   @@index([especialistaId])
   @@index([fechaHoraInicio])
   @@index([estado])
+  /// Barrida de anticipos vencidos.
+  @@index([anticipoVenceEn])
   @@map("citas")
 }
 
@@ -901,6 +917,8 @@ model VentaLocal {
   metodoPago         MetodoPagoLocal  @map("metodo_pago")
   subtotal           Decimal          @db.Decimal(10, 2)
   descuento          Decimal          @default(0) @db.Decimal(10, 2)
+  /// Anticipo ya pagado de las citas del ticket (entró a caja por la tabla pagos): no se suma al total.
+  anticipo           Decimal          @default(0) @db.Decimal(10, 2)
   total              Decimal          @db.Decimal(10, 2)
   notas              String?          @db.Text
   motivoCancelacion  String?          @map("motivo_cancelacion") @db.Text

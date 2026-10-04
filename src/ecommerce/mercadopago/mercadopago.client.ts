@@ -59,7 +59,15 @@ export class MercadoPagoClient {
     return this.llamar<PagoMercadoPago>('GET', `/v1/payments/${encodeURIComponent(id)}`);
   }
 
-  /** El intento de pago más reciente de un pedido (external_reference = id del pedido). */
+  /**
+   * Reembolso total de un pago (API de refunds de Mercado Pago, mismo token). La clave de idempotencia es
+   * por pago: si se reintenta, Mercado Pago no reembolsa dos veces.
+   */
+  reembolsarPago(paymentId: string, claveIdempotencia: string) {
+    return this.llamar<{ id: number; status: string }>('POST', `/v1/payments/${encodeURIComponent(paymentId)}/refunds`, {}, claveIdempotencia);
+  }
+
+  /** El intento de pago más reciente de un pedido (external_reference = id del pedido) o de una cita ("cita-<id>"). */
   async buscarUltimoPago(referencia: string): Promise<PagoMercadoPago | null> {
     const q = new URLSearchParams({ external_reference: referencia, sort: 'date_created', criteria: 'desc', limit: '1' });
     const res = await this.llamar<{ results?: PagoMercadoPago[] }>('GET', `/v1/payments/search?${q}`);

@@ -31,3 +31,31 @@ describe('Corte de caja con pagos mixtos', () => {
     expect(prisma.ventaLocal.findMany.mock.calls[0][0].select).toMatchObject({ montoEfectivo: true, montoTarjeta: true, montoTransferencia: true });
   });
 });
+
+describe('Corte de caja con anticipos de citas', () => {
+  it('el anticipo cobrado en el salón entra una sola vez (por pagos) y la venta solo trae el saldo', async () => {
+    const d = (n: number) => new Prisma.Decimal(n);
+    // Cita de $900 con anticipo de $150 en efectivo: el POS cobró $750 (anticipo guardado aparte en la venta).
+    const ventas = [{ id: 1, total: d(750), anticipo: d(150), metodoPago: 'efectivo', montoEfectivo: null, montoTarjeta: null, montoTransferencia: null }];
+    const pagos = [{ id: 9, citaId: 40, pedidoId: null, monto: d(150), metodo: 'efectivo', estado: 'aprobado', cobradoPorId: 'caj-1' }];
+    const creados: any[] = [];
+    const prisma: any = {
+      pago: { findMany: jest.fn(async () => pagos) },
+      ventaLocal: { findMany: jest.fn(async () => ventas) },
+      corteCaja: { count: jest.fn(async () => 0), findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          corteCaja: { create: jest.fn(async ({ data }: any) => (creados.push(data), { id: 1, ...data })) },
+          ventaLocal: { updateMany: jest.fn(async () => ({ count: 1 })) },
+          pago: { updateMany: jest.fn(async () => ({ count: 1 })) },
+        }),
+      ),
+    };
+    const pos = new PosService(prisma, {} as any, { emit: jest.fn() } as any);
+    await pos.crearCorte({ fecha: '2026-10-20', efectivoInicial: 0, efectivoFinal: 900 } as any, 'caj-1');
+    const c = creados[0];
+    expect([c.totalVentas, c.totalEfectivo, c.diferencia].map(Number)).toEqual([900, 900, 0]);
+    // Un anticipo cobrado en el salón que pasa a revisión (la clienta canceló) sigue en caja: el corte lo cuenta.
+    expect(prisma.pago.findMany.mock.calls[0][0].where.OR).toEqual([{ estado: 'aprobado' }, { estado: 'en_revision', citaId: { not: null } }]);
+  });
+});

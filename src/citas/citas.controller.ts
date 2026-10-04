@@ -156,6 +156,13 @@ export class CitasController {
     return this.citasService.actualizar(id, dto, solicitanteDe(req));
   }
 
+  /** PATCH /api/citas/:id/no-asistio: la clienta no llegó; el anticipo pagado se retiene. */
+  @Patch(':id/no-asistio')
+  @Permisos('citas:escritura')
+  noAsistio(@Param('id', ParseIntPipe) id: number) {
+    return this.citasService.marcarNoAsistio(id);
+  }
+
   /** PATCH /api/citas/:id/check-in */
   @Patch(':id/check-in')
   @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias')

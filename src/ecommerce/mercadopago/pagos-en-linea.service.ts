@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPago, EstadoPedido } from '@prisma/client';
@@ -14,6 +15,8 @@ import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
 import { METODO_PAGO_MERCADOPAGO, VIGENCIA_PEDIDO_EN_LINEA_MS } from '../pedidos/flujo-pedido';
 import { MercadoPagoClient, PagoMercadoPago } from './mercadopago.client';
+import { AnticiposCitasService } from '../../citas/anticipos/anticipos-citas.service';
+import { citaDeReferencia } from '../../citas/anticipos/anticipos.util';
 
 export type ResultadoPago = 'pagado' | 'ya_procesado' | 'revision' | 'no_aprobado' | 'ignorado';
 export type EstadoPagoEnLinea = 'aprobado' | 'pendiente' | 'rechazado' | 'revision' | 'sin_pago' | 'cancelado';
@@ -41,6 +44,7 @@ export class PagosEnLineaService {
     private readonly access: EcommerceAccessService,
     private readonly mercadoPago: MercadoPagoClient,
     private readonly eventEmitter: EventEmitter2,
+    @Optional() private readonly anticipos?: AnticiposCitasService,
   ) {}
 
   async crearPreferencia(pedidoId: number, usuarioId: string, ahora: Date = new Date()) {
@@ -92,6 +96,9 @@ export class PagosEnLineaService {
   /** Aplica un pago de Mercado Pago a su pedido. Idempotente: llamarlo varias veces no duplica nada. */
   async procesarPago(paymentId: string): Promise<ResultadoPago> {
     const pago = await this.mercadoPago.obtenerPago(paymentId);
+    // Anticipo de cita ("cita-<id>"): misma firma e idempotencia, otra tabla.
+    const citaId = citaDeReferencia(pago.external_reference);
+    if (citaId !== null) return this.anticipos ? this.anticipos.procesarPagoCita(pago, citaId) : 'ignorado';
     const pedidoId = Number(pago.external_reference);
     if (!Number.isInteger(pedidoId) || pedidoId <= 0) return 'ignorado';
     if (pago.status !== 'approved') return 'no_aprobado';

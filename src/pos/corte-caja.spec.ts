@@ -1,6 +1,6 @@
 import { PosService, diaDelCorte } from './pos.service';
 
-type Cobro = { id: number; pagadoEn: string; metodo: string; monto: number; estado?: string; cobradoPorId: string | null; corteId?: number | null };
+type Cobro = { id: number; pagadoEn: string; metodo: string; monto: number; estado?: string; cobradoPorId: string | null; corteId?: number | null; citaId?: number | null };
 
 /** Prisma en memoria: ventas y cobros se filtran como lo haría la base (gte/lte, cajera, sin corte). */
 function prismaConVentas(ventas: { id: number; creadoEn: string; metodoPago: string; total: number }[], cobros: Cobro[] = []) {
@@ -11,7 +11,9 @@ function prismaConVentas(ventas: { id: number; creadoEn: string; metodoPago: str
     cobros.filter((c) => {
       const t = new Date(c.pagadoEn).getTime();
       return (
-        (c.estado ?? 'aprobado') === where.estado &&
+        (where.OR
+          ? where.OR.some((o: any) => (c.estado ?? 'aprobado') === o.estado && (!o.citaId || (c.citaId ?? null) !== null))
+          : (c.estado ?? 'aprobado') === where.estado) &&
         (where.cobradoPorId === undefined ||
           (typeof where.cobradoPorId === 'object' ? c.cobradoPorId !== null : c.cobradoPorId === where.cobradoPorId)) &&
         (where.corteId === undefined || (c.corteId ?? null) === where.corteId) &&
@@ -123,6 +125,14 @@ describe('El corte de caja suma los cobros de pedidos en el salón', () => {
     { id: 16, pagadoEn: '2026-10-04T07:00:00.000Z', metodo: 'efectivo', monto: 70, cobradoPorId: 'cajero-1' }, // 4 oct 01:00
     { id: 17, pagadoEn: '2026-10-03T19:00:00.000Z', metodo: 'efectivo', monto: 80, cobradoPorId: 'cajero-1', estado: 'en_revision' },
   ];
+
+  it('el anticipo de una cita cobrado en el salón sigue en el corte aunque pase a revisión (el de un pedido no)', async () => {
+    const conAnticipo: Cobro[] = [...cobros(), { id: 18, pagadoEn: '2026-10-03T20:00:00.000Z', metodo: 'efectivo', monto: 150, cobradoPorId: 'cajero-1', estado: 'en_revision', citaId: 7 }];
+    const { prisma, creados, cobrosVinculados } = prismaConVentas(ventas, conAnticipo);
+    await servicioCon(prisma).crearCorte({ fecha: '2026-10-03', efectivoInicial: 500, efectivoFinal: 940 }, 'cajero-1');
+    expect(Number(creados[0].totalEfectivo)).toBe(450);
+    expect(cobrosVinculados.sort((a, b) => a - b)).toEqual([11, 12, 13, 18]);
+  });
 
   it('efectivo, tarjeta en terminal y transferencia de esa cajera ese día van cada uno a su total', async () => {
     const { prisma, creados, cobrosVinculados } = prismaConVentas(ventas, cobros());
