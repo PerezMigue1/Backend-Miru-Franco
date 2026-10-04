@@ -25,6 +25,8 @@ import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
 import { RiesgoCancelacionService } from './riesgo-cancelacion.service';
 import { solicitanteDe } from '../common/utils/permisos-citas.util';
 
+import { esPropios } from '../common/utils/alcance-propio.util';
+
 @Controller('citas')
 @UseGuards(JwtAuthGuard, PermisosGuard)
 export class CitasController {
@@ -130,15 +132,18 @@ export class CitasController {
   /** GET /api/citas/:id */
   @Get(':id')
   @Permisos('citas:propias', 'citas:asignadas', 'citas:escritura', 'citas:propia')
-  obtener(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
-    return this.citasService.obtener(id, req.user.id, req.rolUsuario);
+  obtener(@Param('id', ParseIntPipe) id: number, @Query('propios') propios: string | undefined, @Request() req: any) {
+    return this.citasService.obtener(id, req.user.id, req.rolUsuario, esPropios(propios));
   }
 
-  /** POST /api/citas */
+  /**
+   * POST /api/citas. Cualquier rol agenda su propia cita (el becario también); quién queda como
+   * clienta lo decide el servicio: con ?propios=true o sin 'citas:escritura', siempre quien la crea.
+   */
   @Post()
-  @Permisos('citas:escritura', 'citas:propia')
-  crear(@Body() dto: CreateCitaDto, @Request() req: any) {
-    return this.citasService.crear(dto, req.user.id, req.rolUsuario);
+  @Permisos('citas:escritura', 'citas:propia', 'citas:asignadas', 'citas:propias')
+  crear(@Body() dto: CreateCitaDto, @Query('propios') propios: string | undefined, @Request() req: any) {
+    return this.citasService.crear(dto, solicitanteDe(req), esPropios(propios));
   }
 
   /**
@@ -171,9 +176,10 @@ export class CitasController {
   reprogramar(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReprogramarCitaDto,
+    @Query('propios') propios: string | undefined,
     @Request() req: any,
   ) {
-    return this.citasService.reprogramar(id, dto, solicitanteDe(req));
+    return this.citasService.reprogramar(id, dto, solicitanteDe(req), esPropios(propios));
   }
 
   /** PATCH /api/citas/:id/cancelar. Clienta y becario: solo sus citas (lo valida el servicio). */
@@ -182,9 +188,10 @@ export class CitasController {
   cancelar(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CancelarCitaDto,
+    @Query('propios') propios: string | undefined,
     @Request() req: any,
   ) {
-    return this.citasService.cancelar(id, dto, solicitanteDe(req));
+    return this.citasService.cancelar(id, dto, solicitanteDe(req), esPropios(propios));
   }
 
   /** POST /api/citas/:id/materiales */

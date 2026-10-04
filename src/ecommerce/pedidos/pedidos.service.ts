@@ -63,10 +63,12 @@ export class PedidosService {
       sort?: string;
       page?: number;
       limit?: number;
+      /** Portal de clienta: solo los pedidos de quien consulta, sea del rol que sea. */
+      propios?: boolean;
     },
   ) {
     const rol = await this.access.getRol(solicitanteId);
-    const puedeVerOtros = await puedeVerPedidosDeOtros(this.prisma, rol);
+    const puedeVerOtros = !filtros?.propios && (await puedeVerPedidosDeOtros(this.prisma, rol));
     const {
       usuarioId: filtroUsuarioId,
       estado,
@@ -80,7 +82,9 @@ export class PedidosService {
     } = filtros ?? {};
     const where: Prisma.PedidoWhereInput = {};
 
-    if (filtroUsuarioId) {
+    if (filtros?.propios) {
+      where.usuarioId = solicitanteId;
+    } else if (filtroUsuarioId) {
       if (!puedeVerOtros) {
         throw new ForbiddenException(
           'No tienes permiso para filtrar pedidos por usuarioId',
@@ -162,7 +166,7 @@ export class PedidosService {
     };
   }
 
-  async obtenerPorId(id: number, solicitanteId: string) {
+  async obtenerPorId(id: number, solicitanteId: string, propios = false) {
     const data = await this.prisma.pedido.findUnique({
       where: { id },
       include: this.includeDefault(),
@@ -170,6 +174,8 @@ export class PedidosService {
     if (!data) throw new NotFoundException('Pedido no encontrado');
 
     const esDueno = data.usuarioId === solicitanteId;
+    // Portal de clienta: el pedido ajeno responde 404 para cualquier rol.
+    if (propios && !esDueno) throw new NotFoundException('Pedido no encontrado');
     if (!esDueno) {
       const rol = await this.access.getRol(solicitanteId);
       const puedeVerOtros = await puedeVerPedidosDeOtros(this.prisma, rol);
@@ -223,11 +229,12 @@ export class PedidosService {
     return detalles;
   }
 
-  async crear(solicitanteId: string, dto: CreatePedidoDto) {
+  async crear(solicitanteId: string, dto: CreatePedidoDto, propios = false) {
     const rol = await this.access.getRol(solicitanteId);
     let usuarioId = solicitanteId;
-    if (dto.usuarioId) {
-      if (!this.access.isAdmin(rol)) {
+    if (dto.usuarioId && dto.usuarioId !== solicitanteId) {
+      // Desde el portal el pedido es siempre de quien compra, también para admin.
+      if (propios || !this.access.isAdmin(rol)) {
         throw new ForbiddenException(
           'Solo un administrador puede crear pedidos para otro usuario',
         );
@@ -241,7 +248,8 @@ export class PedidosService {
     }
 
     const estado = dto.estado ?? EstadoPedido.borrador;
-    const esPersonal = await puedeGestionarPedidos(this.prisma, rol);
+    // Desde el portal compra como clienta: mismos estados iniciales que ella, aunque tenga caja.
+    const esPersonal = !propios && (await puedeGestionarPedidos(this.prisma, rol));
     if (!esPersonal && !ESTADOS_INICIALES_CLIENTA.includes(estado)) {
       throw new ForbiddenException('Solo el personal del salón puede fijar ese estado');
     }
@@ -333,13 +341,17 @@ export class PedidosService {
     id: number,
     solicitanteId: string,
     dto: UpdatePedidoDto,
+    propios = false,
   ) {
     const actual = await this.prisma.pedido.findUnique({ where: { id } });
     if (!actual) throw new NotFoundException('Pedido no encontrado');
     const usuarioIdPedido = actual.usuarioId;
+    // Portal de clienta: el pedido ajeno responde 404 para cualquier rol.
+    if (propios && usuarioIdPedido !== solicitanteId) throw new NotFoundException('Pedido no encontrado');
 
     const rol = await this.access.getRol(solicitanteId);
-    const puedeCambiarEstado = await puedeGestionarPedidos(this.prisma, rol);
+    // Desde el portal se actúa como clienta (solo cancelar a tiempo), aunque el rol tenga caja.
+    const puedeCambiarEstado = !propios && (await puedeGestionarPedidos(this.prisma, rol));
 
     // Entrada al método: dueño, admin, o quien tenga caja:escritura. Qué campos puede tocar cada quien
     // se decide más abajo, campo por campo — esto solo decide quién puede intentarlo.
@@ -428,7 +440,7 @@ export class PedidosService {
       };
 
       // costoEnvio/impuestos/descuento: SOLO admin, sin cambios respecto a antes.
-      if (!this.access.isAdmin(rol)) {
+      if (propios || !this.access.isAdmin(rol)) {
         delete (updateData as any).costoEnvio;
         delete (updateData as any).impuestos;
         delete (updateData as any).descuento;

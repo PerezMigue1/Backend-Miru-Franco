@@ -1,5 +1,6 @@
 import { IsDateString, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { esPropios } from '../../common/utils/alcance-propio.util';
 
 const ESTADOS_CITA = ['pendiente', 'confirmada', 'en_curso', 'completada', 'cancelada', 'reprogramada', 'no_asistio'] as const;
 
@@ -28,6 +29,11 @@ export class ListCitasDto {
   @IsOptional()
   @IsIn(['fechaHoraInicio', 'creadoEn'])
   orden?: 'fechaHoraInicio' | 'creadoEn';
+
+  /** Portal de clienta: solo las citas donde quien consulta es la clienta, sea del rol que sea. */
+  @IsOptional()
+  @Transform(({ value }) => esPropios(value))
+  propios?: boolean;
 
   @IsOptional()
   @Type(() => Number)

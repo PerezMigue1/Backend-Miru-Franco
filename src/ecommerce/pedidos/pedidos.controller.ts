@@ -22,6 +22,7 @@ import { PedidosService } from './pedidos.service';
 import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
 import { EntregarPedidoDto } from './dto/entregar-pedido.dto';
+import { esPropios } from '../../common/utils/alcance-propio.util';
 
 @Controller('pedidos')
 @UseGuards(JwtAuthGuard)
@@ -40,6 +41,7 @@ export class PedidosController {
     @Query('sort') sort?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('propios') propios?: string,
   ) {
     const parsedPage =
       page === undefined || page === '' ? 1 : Number.parseInt(page, 10);
@@ -64,12 +66,13 @@ export class PedidosController {
       sort,
       page: parsedPage,
       limit: Math.min(parsedLimit, 100),
+      propios: esPropios(propios),
     });
   }
 
   @Get(':id')
-  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.obtenerPorId(Number(id), user.id);
+  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }, @Query('propios') propios?: string) {
+    return this.service.obtenerPorId(Number(id), user.id, esPropios(propios));
   }
 
   @Post()
@@ -77,8 +80,9 @@ export class PedidosController {
   crear(
     @CurrentUser() user: { id: string },
     @Body() dto: CreatePedidoDto,
+    @Query('propios') propios?: string,
   ) {
-    return this.service.crear(user.id, dto);
+    return this.service.crear(user.id, dto, esPropios(propios));
   }
 
   @Put(':id')
@@ -86,8 +90,9 @@ export class PedidosController {
     @Param('id') id: string,
     @CurrentUser() user: { id: string },
     @Body() dto: UpdatePedidoDto,
+    @Query('propios') propios?: string,
   ) {
-    return this.service.actualizar(Number(id), user.id, dto);
+    return this.service.actualizar(Number(id), user.id, dto, esPropios(propios));
   }
 
   /** "Marcar listo para recoger" (Pedidos por recoger): permiso pedidos:entregar. */

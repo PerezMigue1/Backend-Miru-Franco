@@ -53,8 +53,9 @@ export class CitasService {
    * admin ven todas las citas del salón — pueden acotar por especialista vía
    * el query param `especialistaId` (ver `listar`/`listarDia`/`listarCalendario`).
    */
-  private aplicarScope(usuarioId: string, rolUsuario?: string): Record<string, unknown> {
-    if (rolUsuario === 'cliente') return { clienteId: usuarioId };
+  private aplicarScope(usuarioId: string, rolUsuario?: string, propios = false): Record<string, unknown> {
+    // Portal de clienta: cualquier rol ve solo las citas donde es la clienta.
+    if (rolUsuario === 'cliente' || propios) return { clienteId: usuarioId };
     return {};
   }
 
@@ -96,7 +97,7 @@ export class CitasService {
       where.fechaHoraInicio = normalizarRangoFechas(query.desde, query.hasta);
     }
     // El scope va al final: una clienta no puede pisarlo con ?clienteId= de otra persona.
-    Object.assign(where, this.aplicarScope(usuarioId, rolUsuario));
+    Object.assign(where, this.aplicarScope(usuarioId, rolUsuario, query.propios === true));
 
     const orderBy =
       query.orden === 'creadoEn'
@@ -164,12 +165,14 @@ export class CitasService {
     return { success: true, count: citas.length, data: citas };
   }
 
-  async obtener(id: number, usuarioId: string, rolUsuario?: string) {
+  async obtener(id: number, usuarioId: string, rolUsuario?: string, propios = false) {
     const cita = await this.prisma.cita.findUnique({
       where: { id },
       include: this.incluirRelaciones(),
     });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    // Portal de clienta: la cita ajena responde 404 para cualquier rol (no revela que existe).
+    if (propios && cita.clienteId !== usuarioId) throw new NotFoundException(`Cita ${id} no encontrada`);
 
     if (rolUsuario === 'cliente' && cita.clienteId !== usuarioId) {
       throw new ForbiddenException('No tienes acceso a esta cita');
@@ -438,9 +441,10 @@ export class CitasService {
     return { success: true, data: cita };
   }
 
-  async crear(dto: CreateCitaDto, solicitanteId: string, rolUsuario?: string) {
-    // Si el solicitante es cliente, se ignora el clienteId del DTO y se usa el propio
-    const clienteId = rolUsuario === 'cliente' ? solicitanteId : dto.clienteId;
+  async crear(dto: CreateCitaDto, solicitante: Solicitante, propios = false) {
+    // Desde el portal, o sin 'citas:escritura' (clienta, becario), la cita es siempre de quien la crea.
+    // Solo el personal con escritura agenda a nombre de otra clienta, y solo desde su panel.
+    const clienteId = propios || !puedeEscribirCualquierCita(solicitante) ? solicitante.id : dto.clienteId;
 
     // Validar especialista
     const especialista = await this.prisma.usuario.findUnique({
@@ -579,10 +583,10 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
-  async reprogramar(id: number, dto: ReprogramarCitaDto, solicitante: Solicitante) {
+  async reprogramar(id: number, dto: ReprogramarCitaDto, solicitante: Solicitante, propios = false) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
-    assertPuedeEscribirCita(cita, solicitante);
+    assertPuedeEscribirCita(cita, solicitante, propios);
     if (ESTADOS_FINALES.includes(cita.estado as any)) {
       throw new BadRequestException(`No se puede reprogramar una cita en estado '${cita.estado}'`);
     }
@@ -619,10 +623,10 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
-  async cancelar(id: number, dto: CancelarCitaDto, solicitante: Solicitante) {
+  async cancelar(id: number, dto: CancelarCitaDto, solicitante: Solicitante, propios = false) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
-    assertPuedeEscribirCita(cita, solicitante);
+    assertPuedeEscribirCita(cita, solicitante, propios);
     if (ESTADOS_FINALES.includes(cita.estado as any)) {
       throw new BadRequestException(`No se puede cancelar una cita en estado '${cita.estado}'`);
     }

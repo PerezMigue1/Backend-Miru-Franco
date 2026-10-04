@@ -179,7 +179,8 @@ describe('Guard de permisos por rol (claves de producción)', () => {
   it.each([
     // [método, admin, estilista, empleado, becario, cliente]
     ['listar', true, true, true, true, true],
-    ['crear', true, true, true, false, true],
+    // El becario agenda su propia cita como clienta; el servicio la deja siempre a su nombre.
+    ['crear', true, true, true, true, true],
     ['actualizar', true, true, true, true, false],
     ['checkIn', true, true, true, true, false],
     ['checkOut', true, true, true, true, false],
