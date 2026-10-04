@@ -5,9 +5,11 @@ const prisma = new PrismaClient();
 // Nota: el valor de BD para "Becado" es 'becario' (ver ROLES_DB en roles.constants.ts).
 const SEMILLAS_PERMISO_ROL = [
   { rol: 'admin',     claves: ['*'] },
-  { rol: 'estilista', claves: ['citas:propias',   'servicios:lectura',  'clientes:lectura', 'pedidos:entregar'] },
-  { rol: 'empleado',  claves: ['ventas:escritura', 'citas:escritura',    'inventario:lectura', 'pedidos:entregar'] },
-  { rol: 'becario',   claves: ['citas:asignadas',  'servicios:lectura',  'clientes:lectura'] },
+  // Citas y seguimientos: estilista y empleado escriben en cualquiera; el becario solo atiende sus citas
+  // asignadas y lee seguimientos (igual que permisos_rol en producción).
+  { rol: 'estilista', claves: ['citas:escritura',  'seguimientos:lectura', 'seguimientos:escritura', 'servicios:lectura', 'clientes:lectura', 'pedidos:entregar'] },
+  { rol: 'empleado',  claves: ['ventas:escritura', 'citas:escritura', 'seguimientos:lectura', 'seguimientos:escritura', 'inventario:lectura', 'pedidos:entregar'] },
+  { rol: 'becario',   claves: ['citas:asignadas',  'seguimientos:lectura', 'servicios:lectura', 'clientes:lectura'] },
   { rol: 'cliente',   claves: ['tienda:propia',    'citas:propia',       'perfil:propio'] },
 ];
 

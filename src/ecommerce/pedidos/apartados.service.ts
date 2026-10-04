@@ -12,10 +12,29 @@ const DIAS_APARTADO_SIN_PREPARAR = 3;
 /** Listo para recoger: recordatorio al día 3 y cancelación al día 7. */
 const DIAS_RECORDATORIO_RECOGER = 3;
 const DIAS_CANCELAR_NO_RECOGIDO = 7;
+/** Pedidos por consulta: se recorren de 50 en 50 por id hasta terminar cada grupo. */
 const LOTE = 50;
 export const TIPO_RECORDATORIO_RECOGER = 'pedido_recordatorio_recoger';
 
 export type MotivoVencido = 'apartado_sin_preparar' | 'no_recogido' | 'pago_en_linea_vencido';
+
+/** Filtro de cursor: solo los pedidos con id mayor al último del lote anterior. */
+const despuesDe = (id: number | undefined) => (id === undefined ? {} : { id: { gt: id } });
+
+/**
+ * Recorre una consulta de 50 en 50 por id ascendente hasta terminar. El cursor es `id > último` y no
+ * `cursor + skip: 1`: el último pedido del lote suele cancelarse y deja de cumplir el filtro, y con
+ * skip se brincaría la siguiente fila válida.
+ */
+async function* porLotes<T extends { id: number }>(consulta: (idDespuesDe?: number) => Promise<T[]>): AsyncGenerator<T> {
+  let ultimo: number | undefined;
+  for (;;) {
+    const lote = await consulta(ultimo);
+    for (const fila of lote) yield fila;
+    if (lote.length < LOTE) return;
+    ultimo = lote[lote.length - 1].id;
+  }
+}
 
 /**
  * Apartados y pedidos en línea vencidos. Corre con cada tick de la barrida existente (BarridoService
@@ -61,43 +80,64 @@ export class ApartadosService {
     const recordatorios: number[] = [];
     const antesDe = (ms: number) => ({ gte: desde, lte: new Date(ahora.getTime() - ms) });
 
-    const apartados = await this.prisma.pedido.findMany({
-      where: { metodoPago: METODO_PAGO_EN_SALON, estado: EstadoPedido.pendiente_pago, creadoEn: antesDe(DIAS_APARTADO_SIN_PREPARAR * DIA_MS) },
-      select: { id: true, usuarioId: true },
-      orderBy: { creadoEn: 'asc' },
-      take: LOTE,
-    });
-    for (const p of apartados) {
+    const apartados = porLotes((idDespuesDe) =>
+      this.prisma.pedido.findMany({
+        where: {
+          metodoPago: METODO_PAGO_EN_SALON,
+          estado: EstadoPedido.pendiente_pago,
+          creadoEn: antesDe(DIAS_APARTADO_SIN_PREPARAR * DIA_MS),
+          ...despuesDe(idDespuesDe),
+        },
+        select: { id: true, usuarioId: true },
+        orderBy: { id: 'asc' },
+        take: LOTE,
+      }),
+    );
+    for await (const p of apartados) {
       if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'apartado_sin_preparar')) cancelados.push(p.id);
     }
 
-    const enLinea = await this.prisma.pedido.findMany({
-      where: { metodoPago: METODO_PAGO_MERCADOPAGO, estado: EstadoPedido.pendiente_pago, creadoEn: antesDe(VIGENCIA_PEDIDO_EN_LINEA_MS) },
-      select: { id: true, usuarioId: true },
-      orderBy: { creadoEn: 'asc' },
-      take: LOTE,
-    });
-    for (const p of enLinea) {
+    const enLinea = porLotes((idDespuesDe) =>
+      this.prisma.pedido.findMany({
+        where: {
+          metodoPago: METODO_PAGO_MERCADOPAGO,
+          estado: EstadoPedido.pendiente_pago,
+          creadoEn: antesDe(VIGENCIA_PEDIDO_EN_LINEA_MS),
+          ...despuesDe(idDespuesDe),
+        },
+        select: { id: true, usuarioId: true },
+        orderBy: { id: 'asc' },
+        take: LOTE,
+      }),
+    );
+    for await (const p of enLinea) {
       if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'pago_en_linea_vencido')) cancelados.push(p.id);
     }
 
-    const listos = await this.prisma.pedido.findMany({
-      where: { metodoPago: METODO_PAGO_EN_SALON, estado: EstadoPedido.listo_recoger, creadoEn: { gte: desde } },
-      select: {
-        id: true,
-        usuarioId: true,
-        creadoEn: true,
-        historialEstado: {
-          where: { estadoNuevo: EstadoPedido.listo_recoger },
-          orderBy: { creadoEn: 'desc' },
-          take: 1,
-          select: { creadoEn: true },
+    const listos = porLotes((idDespuesDe) =>
+      this.prisma.pedido.findMany({
+        where: {
+          metodoPago: METODO_PAGO_EN_SALON,
+          estado: EstadoPedido.listo_recoger,
+          creadoEn: { gte: desde },
+          ...despuesDe(idDespuesDe),
         },
-      },
-      orderBy: { creadoEn: 'asc' },
-      take: LOTE,
-    });
-    for (const p of listos) {
+        select: {
+          id: true,
+          usuarioId: true,
+          creadoEn: true,
+          historialEstado: {
+            where: { estadoNuevo: EstadoPedido.listo_recoger },
+            orderBy: { creadoEn: 'desc' },
+            take: 1,
+            select: { creadoEn: true },
+          },
+        },
+        orderBy: { id: 'asc' },
+        take: LOTE,
+      }),
+    );
+    for await (const p of listos) {
       const listoDesde = p.historialEstado[0]?.creadoEn ?? p.creadoEn;
       const dias = (ahora.getTime() - new Date(listoDesde).getTime()) / DIA_MS;
       if (dias >= DIAS_CANCELAR_NO_RECOGIDO) {

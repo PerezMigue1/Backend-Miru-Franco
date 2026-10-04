@@ -17,6 +17,7 @@ import { ReprogramarCitaDto } from './dto/reprogramar-cita.dto';
 import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
+import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante } from '../common/utils/permisos-citas.util';
 
 const ROLES_ESPECIALISTA = ['estilista', 'empleado', 'becario'] as const;
 const ESTADOS_FINALES = ['cancelada', 'completada', 'no_asistio'] as const;
@@ -86,13 +87,15 @@ export class CitasService {
     const limit = Math.min(query.limit ?? 50, 200);
     const skip  = (page - 1) * limit;
 
-    const where: Record<string, unknown> = { ...this.aplicarScope(usuarioId, rolUsuario) };
+    const where: Record<string, unknown> = {};
     if (query.estado)        where.estado        = query.estado;
     if (query.especialistaId) where.especialistaId = query.especialistaId;
     if (query.clienteId)     where.clienteId     = query.clienteId;
     if (query.desde || query.hasta) {
       where.fechaHoraInicio = normalizarRangoFechas(query.desde, query.hasta);
     }
+    // El scope va al final: una clienta no puede pisarlo con ?clienteId= de otra persona.
+    Object.assign(where, this.aplicarScope(usuarioId, rolUsuario));
 
     const orderBy =
       query.orden === 'creadoEn'
@@ -367,9 +370,18 @@ export class CitasService {
     return { success: true, data: cita };
   }
 
-  async actualizar(id: number, dto: UpdateCitaDto) {
+  async actualizar(id: number, dto: UpdateCitaDto, solicitante: Solicitante) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    assertPuedeEscribirCita(cita, solicitante);
+    // Quien solo edita sus citas asignadas (becario) no puede pasárselas a otra persona.
+    if (
+      dto.especialistaId !== undefined &&
+      dto.especialistaId !== cita.especialistaId &&
+      !puedeEscribirCualquierCita(solicitante)
+    ) {
+      throw new ForbiddenException('No puedes reasignar la cita a otra especialista');
+    }
 
     const data: Record<string, unknown> = {};
 
@@ -406,9 +418,10 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
-  async checkIn(id: number) {
+  async checkIn(id: number, solicitante: Solicitante) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    assertPuedeEscribirCita(cita, solicitante);
     if (!['pendiente', 'confirmada'].includes(cita.estado)) {
       throw new BadRequestException(`No se puede hacer check-in en estado '${cita.estado}'`);
     }
@@ -420,9 +433,10 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
-  async checkOut(id: number) {
+  async checkOut(id: number, solicitante: Solicitante) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    assertPuedeEscribirCita(cita, solicitante);
     if (cita.estado !== 'en_curso') {
       throw new BadRequestException(`Solo se puede hacer check-out de citas en estado 'en_curso'`);
     }
@@ -434,9 +448,10 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
-  async reprogramar(id: number, dto: ReprogramarCitaDto) {
+  async reprogramar(id: number, dto: ReprogramarCitaDto, solicitante: Solicitante) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    assertPuedeEscribirCita(cita, solicitante);
     if (ESTADOS_FINALES.includes(cita.estado as any)) {
       throw new BadRequestException(`No se puede reprogramar una cita en estado '${cita.estado}'`);
     }
@@ -473,9 +488,10 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
-  async cancelar(id: number, dto: CancelarCitaDto) {
+  async cancelar(id: number, dto: CancelarCitaDto, solicitante: Solicitante) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    assertPuedeEscribirCita(cita, solicitante);
     if (ESTADOS_FINALES.includes(cita.estado as any)) {
       throw new BadRequestException(`No se puede cancelar una cita en estado '${cita.estado}'`);
     }
@@ -501,9 +517,11 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
-  async registrarMateriales(id: number, dto: MaterialesCitaDto, usuarioId: string) {
+  async registrarMateriales(id: number, dto: MaterialesCitaDto, solicitante: Solicitante) {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    assertPuedeEscribirCita(cita, solicitante);
+    const usuarioId = solicitante.id;
     if (!['en_curso', 'completada'].includes(cita.estado)) {
       throw new BadRequestException(
         'Solo se pueden registrar materiales en citas en_curso o completadas',

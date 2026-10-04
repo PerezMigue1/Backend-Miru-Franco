@@ -22,6 +22,7 @@ import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { PredecirRiesgoCitasDto } from './dto/predecir-riesgo-citas.dto';
 import { RiesgoCancelacionService } from './riesgo-cancelacion.service';
+import { solicitanteDe } from '../common/utils/permisos-citas.util';
 
 @Controller('citas')
 @UseGuards(JwtAuthGuard, PermisosGuard)
@@ -108,45 +109,50 @@ export class CitasController {
     return this.citasService.crear(dto, req.user.id, req.rolUsuario);
   }
 
-  /** PATCH /api/citas/:id — admin only (estado, reasignación, etc.) */
+  /**
+   * PATCH /api/citas/:id (estado, notas, fechas, reasignación). Con escritura: cualquier cita;
+   * becario ('citas:asignadas'): solo las suyas y sin reasignarlas (lo valida el servicio).
+   */
   @Patch(':id')
-  @Permisos('citas:escritura')
-  actualizar(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateCitaDto) {
-    return this.citasService.actualizar(id, dto);
+  @Permisos('citas:escritura', 'citas:asignadas')
+  actualizar(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateCitaDto, @Request() req: any) {
+    return this.citasService.actualizar(id, dto, solicitanteDe(req));
   }
 
   /** PATCH /api/citas/:id/check-in */
   @Patch(':id/check-in')
   @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias')
-  checkIn(@Param('id', ParseIntPipe) id: number) {
-    return this.citasService.checkIn(id);
+  checkIn(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    return this.citasService.checkIn(id, solicitanteDe(req));
   }
 
   /** PATCH /api/citas/:id/check-out */
   @Patch(':id/check-out')
   @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias')
-  checkOut(@Param('id', ParseIntPipe) id: number) {
-    return this.citasService.checkOut(id);
+  checkOut(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    return this.citasService.checkOut(id, solicitanteDe(req));
   }
 
-  /** PATCH /api/citas/:id/reprogramar */
+  /** PATCH /api/citas/:id/reprogramar. Clienta y becario: solo sus citas (lo valida el servicio). */
   @Patch(':id/reprogramar')
-  @Permisos('citas:escritura', 'citas:propias', 'citas:propia')
+  @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias', 'citas:propia')
   reprogramar(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReprogramarCitaDto,
+    @Request() req: any,
   ) {
-    return this.citasService.reprogramar(id, dto);
+    return this.citasService.reprogramar(id, dto, solicitanteDe(req));
   }
 
-  /** PATCH /api/citas/:id/cancelar */
+  /** PATCH /api/citas/:id/cancelar. Clienta y becario: solo sus citas (lo valida el servicio). */
   @Patch(':id/cancelar')
-  @Permisos('citas:escritura', 'citas:propias', 'citas:propia')
+  @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias', 'citas:propia')
   cancelar(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CancelarCitaDto,
+    @Request() req: any,
   ) {
-    return this.citasService.cancelar(id, dto);
+    return this.citasService.cancelar(id, dto, solicitanteDe(req));
   }
 
   /** POST /api/citas/:id/materiales */
@@ -157,6 +163,6 @@ export class CitasController {
     @Body() dto: MaterialesCitaDto,
     @Request() req: any,
   ) {
-    return this.citasService.registrarMateriales(id, dto, req.user.id);
+    return this.citasService.registrarMateriales(id, dto, solicitanteDe(req));
   }
 }

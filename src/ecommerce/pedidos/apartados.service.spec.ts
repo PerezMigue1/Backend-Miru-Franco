@@ -21,14 +21,18 @@ type PedidoPrueba = {
   listoDesde?: Date;
 };
 
-/** Prisma en memoria que aplica el where (método, estado y rango de creadoEn) como lo haría la base. */
+/**
+ * Prisma en memoria que aplica el where (método, estado, rango de creadoEn e id > cursor), el orderBy
+ * por un campo y el take, como lo haría la base. Sin take devuelve todo, igual que Prisma.
+ */
 function montar(pedidos: PedidoPrueba[], notificacionesPrevias: { entidadId: string; tipo: string }[] = []) {
   const historial: Record<string, unknown>[] = [];
   const cumple = (p: PedidoPrueba, where: any) =>
     (!where.metodoPago || p.metodoPago === where.metodoPago) &&
     (!where.estado || p.estado === where.estado) &&
     (!where.creadoEn?.gte || p.creadoEn >= where.creadoEn.gte) &&
-    (!where.creadoEn?.lte || p.creadoEn <= where.creadoEn.lte);
+    (!where.creadoEn?.lte || p.creadoEn <= where.creadoEn.lte) &&
+    (where.id?.gt === undefined || p.id > where.id.gt);
   const tx = {
     pedido: {
       updateMany: jest.fn(async ({ where, data }: any) => {
@@ -43,17 +47,19 @@ function montar(pedidos: PedidoPrueba[], notificacionesPrevias: { entidadId: str
   };
   const prisma = {
     pedido: {
-      findMany: jest.fn(async ({ where }: any) =>
-        pedidos
+      findMany: jest.fn(async ({ where, orderBy, take }: any) => {
+        const campo = orderBy ? (Object.keys(orderBy)[0] as keyof PedidoPrueba) : undefined;
+        const filas = pedidos
           .filter((p) => cumple(p, where))
-          .map((p) => ({
+          .sort((a, b) => (campo ? Number(a[campo] as any) - Number(b[campo] as any) : 0));
+        return (take === undefined ? filas : filas.slice(0, take)).map((p) => ({
             id: p.id,
             usuarioId: p.usuarioId,
             estado: p.estado,
             creadoEn: p.creadoEn,
             historialEstado: p.listoDesde ? [{ creadoEn: p.listoDesde }] : [],
-          })),
-      ),
+          }));
+      }),
     },
     notificacion: {
       findFirst: jest.fn(async ({ where }: any) =>
@@ -181,6 +187,41 @@ describe('Apartados y pedidos en línea vencidos (barrida)', () => {
     expect(inventario.incrementarStockPorLineas).not.toHaveBeenCalled();
     expect(historial).toHaveLength(0);
     expect(eventos.emit).not.toHaveBeenCalled();
+  });
+
+  it('más de un lote: cancela los 120 apartados vencidos en una sola barrida, de 50 en 50 por id', async () => {
+    const lista = Array.from({ length: 120 }, (_, i) => apartado({ id: i + 1, creadoEn: hace(4 * DIA + i * 1000) }));
+    const { servicio, prisma, pedidos } = montar(lista);
+    const r = await servicio.barrer(AHORA);
+    expect(pedidos.every((p) => p.estado === 'cancelado')).toBe(true);
+    expect('cancelados' in r && r.cancelados).toHaveLength(120);
+    const llamadasApartados = prisma.pedido.findMany.mock.calls
+      .map(([args]: any[]) => args)
+      .filter((a: any) => a.where.metodoPago === 'pago_en_salon' && a.where.estado === 'pendiente_pago');
+    expect(llamadasApartados.map((a: any) => a.take)).toEqual([50, 50, 50]);
+    expect(llamadasApartados.every((a: any) => a.orderBy?.id === 'asc')).toBe(true);
+    expect(llamadasApartados.map((a: any) => a.where.id?.gt)).toEqual([undefined, 50, 100]);
+  });
+
+  it('más de un lote de listos para recoger: 55 ya avisados no tapan a los que cumplen 7 días', async () => {
+    const avisados = Array.from({ length: 55 }, (_, i) =>
+      apartado({ id: i + 1, estado: EstadoPedido.listo_recoger, creadoEn: hace(10 * DIA), listoDesde: hace(4 * DIA) }),
+    );
+    const vencidos = Array.from({ length: 5 }, (_, i) =>
+      apartado({ id: 56 + i, estado: EstadoPedido.listo_recoger, creadoEn: hace(10 * DIA), listoDesde: hace(8 * DIA) }),
+    );
+    const previas = avisados.map((p) => ({ entidadId: String(p.id), tipo: 'pedido_recordatorio_recoger' }));
+    const { servicio, pedidos, eventos } = montar([...avisados, ...vencidos], previas);
+    await servicio.barrer(AHORA);
+    expect(pedidos.filter((p) => p.estado === 'cancelado').map((p) => p.id)).toEqual([56, 57, 58, 59, 60]);
+    expect(eventos.emit).not.toHaveBeenCalledWith('pedido.recordatorio_recoger', expect.anything());
+  });
+
+  it('exactamente 100 pedidos en línea vencidos: los 100 se cancelan y la barrida termina', async () => {
+    const lista = Array.from({ length: 100 }, (_, i) => apartado({ id: i + 1, metodoPago: 'mercado_pago', creadoEn: hace(2 * DIA) }));
+    const { servicio, pedidos } = montar(lista);
+    await servicio.barrer(AHORA);
+    expect(pedidos.filter((p) => p.estado === 'cancelado')).toHaveLength(100);
   });
 
   it('APARTADOS_DESDE como día (YYYY-MM-DD) cuenta desde el inicio de ese día en México', async () => {

@@ -4,11 +4,15 @@ import { ActualizarConfiguracionDto } from './dto/actualizar-configuracion.dto';
 
 /** Fila fija: toda operación es contra id=1, nunca se crea una segunda fila. */
 const ID_CONFIG = 1;
-const DEFAULTS = {
-  entradaLunesViernes: '09:00',
-  salidaLunesViernes: '18:00',
-  entradaSabado: '09:00',
-  salidaSabado: '18:00',
+/**
+ * Valores con los que se recrea la fila si no existiera: el horario real del salón
+ * (lunes a viernes de 9:30 a 19:30, sábado de 9:30 a 19:00, domingo cerrado).
+ */
+export const CONFIGURACION_POR_DEFECTO = {
+  entradaLunesViernes: '09:30',
+  salidaLunesViernes: '19:30',
+  entradaSabado: '09:30',
+  salidaSabado: '19:00',
   tarifaHoraExtra: 0,
 };
 
@@ -21,7 +25,7 @@ export class ConfiguracionService {
     const config = await this.prisma.configuracionSalon.upsert({
       where: { id: ID_CONFIG },
       update: {},
-      create: { id: ID_CONFIG, ...DEFAULTS },
+      create: { id: ID_CONFIG, ...CONFIGURACION_POR_DEFECTO },
     });
 
     return { success: true, data: config };
@@ -31,7 +35,7 @@ export class ConfiguracionService {
     const actual = await this.prisma.configuracionSalon.upsert({
       where: { id: ID_CONFIG },
       update: {},
-      create: { id: ID_CONFIG, ...DEFAULTS },
+      create: { id: ID_CONFIG, ...CONFIGURACION_POR_DEFECTO },
     });
 
     const entradaLVFinal = dto.entradaLunesViernes ?? actual.entradaLunesViernes;

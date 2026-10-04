@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CONFIGURACION_POR_DEFECTO } from '../configuracion/configuracion.service';
 
 const ZONA_SALON = 'America/Mexico_City';
 const ID_CONFIG = 1;
@@ -49,14 +50,7 @@ export class HorasExtraService {
     const config = await this.prisma.configuracionSalon.upsert({
       where: { id: ID_CONFIG },
       update: {},
-      create: {
-        id: ID_CONFIG,
-        entradaLunesViernes: '09:00',
-        salidaLunesViernes: '18:00',
-        entradaSabado: '09:00',
-        salidaSabado: '18:00',
-        tarifaHoraExtra: 0,
-      },
+      create: { id: ID_CONFIG, ...CONFIGURACION_POR_DEFECTO },
     });
     const tarifaConfigurada = Number(config.tarifaHoraExtra) > 0;
 
