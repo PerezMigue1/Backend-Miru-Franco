@@ -7,7 +7,8 @@ import { DespachadorService } from './despachador.service';
 
 export interface CitaCreadaEvent {
   citaId: number;
-  clienteId: string;
+  /** null en citas sin cita de una persona sin cuenta: no hay a quién avisar. */
+  clienteId: string | null;
   especialistaId: string;
   servicioNombre: string;
   fechaHoraInicio: Date;
@@ -15,14 +16,16 @@ export interface CitaCreadaEvent {
 
 export interface CitaCanceladaEvent {
   citaId: number;
-  clienteId: string;
+  /** null en citas sin cita de una persona sin cuenta: no hay a quién avisar. */
+  clienteId: string | null;
   especialistaId: string;
   motivo: string;
 }
 
 export interface CitaReprogramadaEvent {
   citaId: number;
-  clienteId: string;
+  /** null en citas sin cita de una persona sin cuenta: no hay a quién avisar. */
+  clienteId: string | null;
   especialistaId: string;
   servicioNombre: string;
   fechaHoraInicioNueva: Date;
@@ -73,18 +76,21 @@ export class NotificacionesListener {
     const fecha = this.formatearFecha(payload.fechaHoraInicio);
     const envioIds: string[] = [];
 
+    const clienteId = payload.clienteId;
     await this.prisma.$transaction(async (tx) => {
-      const canalesCliente = await this.resolver.resolverCanales(payload.clienteId, 'cita_creada', ['in_app']);
-      const { envios: enviosCliente } = await this.outbox.encolar(tx, {
-        usuarioId: payload.clienteId,
-        tipo: 'cita_creada',
-        titulo: 'Cita agendada',
-        mensaje: `Tu cita de ${payload.servicioNombre} quedó agendada para el ${fecha}`,
-        entidadTipo: 'cita',
-        entidadId: String(payload.citaId),
-        canales: canalesCliente,
-      });
-      envioIds.push(...enviosCliente.map((e) => e.id));
+      if (clienteId) {
+        const canalesCliente = await this.resolver.resolverCanales(clienteId, 'cita_creada', ['in_app']);
+        const { envios: enviosCliente } = await this.outbox.encolar(tx, {
+          usuarioId: clienteId,
+          tipo: 'cita_creada',
+          titulo: 'Cita agendada',
+          mensaje: `Tu cita de ${payload.servicioNombre} quedó agendada para el ${fecha}`,
+          entidadTipo: 'cita',
+          entidadId: String(payload.citaId),
+          canales: canalesCliente,
+        });
+        envioIds.push(...enviosCliente.map((e) => e.id));
+      }
 
       const canalesEspecialista = await this.resolver.resolverCanales(payload.especialistaId, 'cita_asignada', [
         'in_app',
@@ -106,17 +112,17 @@ export class NotificacionesListener {
       // `drenarInmediatas` de abajo, `drenar()` los despacharía ahora mismo
       // (no filtra por `programadoPara`), rompiendo el propósito de programarlos.
       const ahora = Date.now();
-      for (const antesMs of RECORDATORIOS_ANTES_MS) {
+      for (const antesMs of clienteId ? RECORDATORIOS_ANTES_MS : []) {
         const programadoPara = new Date(payload.fechaHoraInicio.getTime() - antesMs);
         if (programadoPara.getTime() <= ahora) continue; // la cita se creó con menos antelación que este recordatorio
 
         const canalesRecordatorio = await this.resolver.resolverCanales(
-          payload.clienteId,
+          clienteId as string,
           TIPO_RECORDATORIO_CITA,
           ['in_app', 'email'],
         );
         await this.outbox.encolar(tx, {
-          usuarioId: payload.clienteId,
+          usuarioId: clienteId as string,
           tipo: TIPO_RECORDATORIO_CITA,
           titulo: 'Recordatorio de cita',
           mensaje: `Tu cita de ${payload.servicioNombre} es el ${fecha}`,
@@ -135,18 +141,21 @@ export class NotificacionesListener {
   async onCitaCancelada(payload: CitaCanceladaEvent): Promise<void> {
     const envioIds: string[] = [];
 
+    const clienteId = payload.clienteId;
     await this.prisma.$transaction(async (tx) => {
-      const canalesCliente = await this.resolver.resolverCanales(payload.clienteId, 'cita_cancelada', ['in_app']);
-      const { envios: enviosCliente } = await this.outbox.encolar(tx, {
-        usuarioId: payload.clienteId,
-        tipo: 'cita_cancelada',
-        titulo: 'Cita cancelada',
-        mensaje: `Tu cita fue cancelada. Motivo: ${payload.motivo}`,
-        entidadTipo: 'cita',
-        entidadId: String(payload.citaId),
-        canales: canalesCliente,
-      });
-      envioIds.push(...enviosCliente.map((e) => e.id));
+      if (clienteId) {
+        const canalesCliente = await this.resolver.resolverCanales(clienteId, 'cita_cancelada', ['in_app']);
+        const { envios: enviosCliente } = await this.outbox.encolar(tx, {
+          usuarioId: clienteId,
+          tipo: 'cita_cancelada',
+          titulo: 'Cita cancelada',
+          mensaje: `Tu cita fue cancelada. Motivo: ${payload.motivo}`,
+          entidadTipo: 'cita',
+          entidadId: String(payload.citaId),
+          canales: canalesCliente,
+        });
+        envioIds.push(...enviosCliente.map((e) => e.id));
+      }
 
       const canalesEspecialista = await this.resolver.resolverCanales(
         payload.especialistaId,
@@ -186,6 +195,7 @@ export class NotificacionesListener {
   async onCitaReprogramada(payload: CitaReprogramadaEvent): Promise<void> {
     const fecha = this.formatearFecha(payload.fechaHoraInicioNueva);
     const envioIds: string[] = [];
+    const clienteId = payload.clienteId;
 
     await this.prisma.$transaction(async (tx) => {
       // (a) Cancelar primero los recordatorios viejos (apuntan a la hora
@@ -205,17 +215,19 @@ export class NotificacionesListener {
 
       // (b) Notificación inmediata a cliente + especialista — sí entran a
       // envioIds → drenarInmediatas, deben llegar ya.
-      const canalesCliente = await this.resolver.resolverCanales(payload.clienteId, 'cita_reprogramada', ['in_app']);
-      const { envios: enviosCliente } = await this.outbox.encolar(tx, {
-        usuarioId: payload.clienteId,
-        tipo: 'cita_reprogramada',
-        titulo: 'Cita reprogramada',
-        mensaje: `Tu cita de ${payload.servicioNombre} fue reprogramada para el ${fecha}`,
-        entidadTipo: 'cita',
-        entidadId: String(payload.citaId),
-        canales: canalesCliente,
-      });
-      envioIds.push(...enviosCliente.map((e) => e.id));
+      if (clienteId) {
+        const canalesCliente = await this.resolver.resolverCanales(clienteId, 'cita_reprogramada', ['in_app']);
+        const { envios: enviosCliente } = await this.outbox.encolar(tx, {
+          usuarioId: clienteId,
+          tipo: 'cita_reprogramada',
+          titulo: 'Cita reprogramada',
+          mensaje: `Tu cita de ${payload.servicioNombre} fue reprogramada para el ${fecha}`,
+          entidadTipo: 'cita',
+          entidadId: String(payload.citaId),
+          canales: canalesCliente,
+        });
+        envioIds.push(...enviosCliente.map((e) => e.id));
+      }
 
       const canalesEspecialista = await this.resolver.resolverCanales(
         payload.especialistaId,
@@ -236,17 +248,17 @@ export class NotificacionesListener {
       // (c) Recordatorios nuevos con la fecha nueva — mismo guard de
       // antelación que onCitaCreada, y mismo cuidado: NO entran a envioIds.
       const ahora = Date.now();
-      for (const antesMs of RECORDATORIOS_ANTES_MS) {
+      for (const antesMs of clienteId ? RECORDATORIOS_ANTES_MS : []) {
         const programadoPara = new Date(payload.fechaHoraInicioNueva.getTime() - antesMs);
         if (programadoPara.getTime() <= ahora) continue;
 
         const canalesRecordatorio = await this.resolver.resolverCanales(
-          payload.clienteId,
+          clienteId as string,
           TIPO_RECORDATORIO_CITA,
           ['in_app', 'email'],
         );
         await this.outbox.encolar(tx, {
-          usuarioId: payload.clienteId,
+          usuarioId: clienteId as string,
           tipo: TIPO_RECORDATORIO_CITA,
           titulo: 'Recordatorio de cita',
           mensaje: `Tu cita de ${payload.servicioNombre} es el ${fecha}`,

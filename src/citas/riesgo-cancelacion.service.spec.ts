@@ -84,4 +84,27 @@ describe('RiesgoCancelacionService', () => {
       }),
     );
   });
+
+  it('una cita sin clienta registrada (sin cita) no rompe el lote: cuenta como clienta nueva', async () => {
+    const creadoEn = new Date('2026-10-04T16:00:00.000Z');
+    const findMany = jest.fn()
+      .mockResolvedValueOnce([
+        {
+          id: 50, clienteId: null, especialistaId: 'esp-1', fechaHoraInicio: creadoEn, creadoEn, cliente: null,
+          servicio: { id: 5, categoria: 'Corte', precio: 200, duracionMinutos: 30, requiereEvaluacion: false },
+        },
+        {
+          id: 51, clienteId: null, especialistaId: 'esp-1', fechaHoraInicio: creadoEn, creadoEn, cliente: null,
+          servicio: { id: 5, categoria: 'Corte', precio: 200, duracionMinutos: 30, requiereEvaluacion: false },
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const predecir = jest.fn().mockReturnValue({ probabilidadCancelacion: 0.1, nivelRiesgo: 'bajo' });
+    const servicio = new RiesgoCancelacionService({ cita: { findMany } } as any, { predecir } as any);
+    const resultado = await servicio.predecirLote([50, 51]);
+    expect(resultado).toHaveLength(2);
+    // El histórico solo se busca para clientas registradas (nunca `in: [null]`).
+    expect(findMany.mock.calls[1]?.[0]?.where?.clienteId?.in ?? []).toEqual([]);
+    expect(predecir).toHaveBeenCalledWith(expect.objectContaining({ cliente_nuevo: 1, citas_previas_cliente: 0, antiguedad_cliente_dias: 0 }));
+  });
 });

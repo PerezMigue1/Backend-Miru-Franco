@@ -21,7 +21,7 @@ export function puedeEscribirCualquierCita(s: Solicitante): boolean {
  * - especialista sin escritura (becario, 'citas:asignadas'): solo las que tiene asignadas.
  * El guard ya decidió qué rol entra a cada endpoint; esto limita a qué cita.
  */
-export function assertPuedeEscribirCita(cita: { clienteId: string; especialistaId: string }, s: Solicitante): void {
+export function assertPuedeEscribirCita(cita: { clienteId: string | null; especialistaId: string }, s: Solicitante): void {
   if (puedeEscribirCualquierCita(s)) return;
   if (s.rol === 'cliente') {
     if (cita.clienteId === s.id) return;

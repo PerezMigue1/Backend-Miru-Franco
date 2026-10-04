@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Prisma } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
@@ -32,6 +33,20 @@ const CAJA_POR_METODO_COBRO: Record<string, 'efectivo' | 'tarjeta' | 'transferen
 export function diaDelCorte(fecha: string): string {
   return esDiaValido(fecha) ? fecha : diaEnMexico(new Date(fecha));
 }
+
+/** Personal que puede participar en un servicio cobrado. */
+const ROLES_PERSONAL = ['estilista', 'empleado', 'becario', 'admin'];
+
+type ItemValidado = {
+  presentacionId: number | null;
+  servicioId: number | null;
+  cantidad: number;
+  precioUnitario: Decimal;
+  subtotal: Decimal;
+  citaId: number | null;
+  especialistaId: string | null;
+  participantes: string[];
+};
 
 @Injectable()
 export class PosService {
@@ -131,14 +146,10 @@ export class PosService {
   }
 
   async crearVenta(dto: CreateVentaDto, cajeroId: string) {
-    // 1. Validar cada ítem (producto O servicio) y calcular precios
-    const itemsValidados: Array<{
-      presentacionId: number | null;
-      servicioId: number | null;
-      cantidad: number;
-      precioUnitario: Decimal;
-      subtotal: Decimal;
-    }> = [];
+    // 1. Validar cada ítem (producto O servicio). El precio sale SIEMPRE de la base: el que mande el
+    //    frontend se ignora. Para bajar el precio está el campo descuento, con motivo.
+    const itemsValidados: ItemValidado[] = [];
+    const citasEnTicket = new Set<number>();
 
     for (const item of dto.items) {
       const tienePresentacion = item.presentacionId !== undefined && item.presentacionId !== null;
@@ -150,6 +161,9 @@ export class PosService {
       }
 
       if (tienePresentacion) {
+        if (item.citaId !== undefined || (item.participantes?.length ?? 0) > 0) {
+          throw new BadRequestException('Solo las líneas de servicio llevan cita o participantes');
+        }
         const presentacion = await this.prisma.productoPresentacion.findUnique({
           where: { id: item.presentacionId },
           select: { id: true, precio: true, stock: true, disponible: true },
@@ -162,50 +176,132 @@ export class PosService {
             `Stock insuficiente para presentación ${item.presentacionId}: disponible ${presentacion.stock}, solicitado ${item.cantidad}`,
           );
         }
-        const precioUnitario = item.precioUnitario !== undefined
-          ? new Decimal(item.precioUnitario)
-          : presentacion.precio;
+        const precioUnitario = new Decimal(presentacion.precio);
         itemsValidados.push({
           presentacionId: item.presentacionId!,
           servicioId:     null,
           cantidad:       item.cantidad,
           precioUnitario,
           subtotal:       precioUnitario.mul(item.cantidad),
+          citaId:         null,
+          especialistaId: null,
+          participantes:  [],
         });
-      } else {
-        const servicio = await this.prisma.servicio.findUnique({
-          where: { id: item.servicioId },
-          select: { id: true, precio: true, activo: true },
-        });
-        if (!servicio || !servicio.activo) {
-          throw new NotFoundException(`Servicio ${item.servicioId} no encontrado o inactivo`);
-        }
-        const precioUnitario = item.precioUnitario !== undefined
-          ? new Decimal(item.precioUnitario)
-          : servicio.precio;
-        itemsValidados.push({
-          presentacionId: null,
-          servicioId:     item.servicioId!,
-          cantidad:       item.cantidad,
-          precioUnitario,
-          subtotal:       precioUnitario.mul(item.cantidad),
-        });
+        continue;
       }
+
+      const servicio = await this.prisma.servicio.findUnique({
+        where: { id: item.servicioId },
+        select: { id: true, precio: true, activo: true },
+      });
+      if (!servicio || !servicio.activo) {
+        throw new NotFoundException(`Servicio ${item.servicioId} no encontrado o inactivo`);
+      }
+
+      let especialistaId: string | null = null;
+      let citaId: number | null = null;
+      if (item.citaId !== undefined && item.citaId !== null) {
+        if (citasEnTicket.has(item.citaId)) throw new ConflictException(`La cita ${item.citaId} está dos veces en el ticket`);
+        citasEnTicket.add(item.citaId);
+        const cita = await this.prisma.cita.findUnique({
+          where: { id: item.citaId },
+          select: { id: true, estado: true, servicioId: true, especialistaId: true, ventaItem: { select: { id: true } } },
+        });
+        if (!cita) throw new NotFoundException(`Cita ${item.citaId} no encontrada`);
+        if (cita.ventaItem) throw new ConflictException(`La cita ${item.citaId} ya se cobró`);
+        if (cita.estado !== 'completada') throw new BadRequestException('Solo se cobra una cita ya finalizada');
+        if (cita.servicioId !== item.servicioId) throw new BadRequestException('El servicio no coincide con el de la cita');
+        if (item.cantidad !== 1) throw new BadRequestException('Una cita se cobra con cantidad 1');
+        citaId = cita.id;
+        especialistaId = cita.especialistaId;
+      }
+
+      // La especialista de la cita siempre participa; las demás las elige quien cobra.
+      const participantes = [...new Set([...(especialistaId ? [especialistaId] : []), ...(item.participantes ?? [])])];
+      const precioUnitario = new Decimal(servicio.precio);
+      itemsValidados.push({
+        presentacionId: null,
+        servicioId:     item.servicioId!,
+        cantidad:       item.cantidad,
+        precioUnitario,
+        subtotal:       precioUnitario.mul(item.cantidad),
+        citaId,
+        especialistaId,
+        participantes,
+      });
     }
 
-    // 2. Calcular totales
+    // Participantes elegidas: solo personal activo. La especialista de la cita no se revisa (pudo darse de
+    // baja después de atender y la cita se cobra igual). Comisión fija por servicio para quien tiene recibe_comisiones.
+    const idsParticipantes = [...new Set(itemsValidados.flatMap((i) => i.participantes))];
+    const idsElegidos = [...new Set(itemsValidados.flatMap((i) => i.participantes.filter((p) => p !== i.especialistaId)))];
+    const recibenComision = new Set<string>();
+    if (idsParticipantes.length > 0) {
+      const personal = idsElegidos.length > 0
+        ? await this.prisma.usuario.findMany({
+            where: { id: { in: idsElegidos } },
+            select: { id: true, rol: true, activo: true },
+          })
+        : [];
+      const validos = new Set(personal.filter((u) => u.activo && ROLES_PERSONAL.includes(u.rol)).map((u) => u.id));
+      const invalido = idsElegidos.find((id) => !validos.has(id));
+      if (invalido) throw new BadRequestException(`El participante ${invalido} no es parte del personal activo`);
+      const perfiles = await this.prisma.perfilEmpleado.findMany({
+        where: { usuarioId: { in: idsParticipantes }, recibeComisiones: true },
+        select: { usuarioId: true },
+      });
+      for (const p of perfiles) recibenComision.add(p.usuarioId);
+    }
+    const comisionPorServicio = new Map<number, Decimal>();
+    for (const servicioId of new Set(itemsValidados.filter((i) => i.participantes.length > 0).map((i) => i.servicioId!))) {
+      const comision = await this.prisma.comisionServicio.findUnique({
+        where: { servicioId },
+        select: { monto: true, activo: true },
+      });
+      if (comision?.activo) comisionPorServicio.set(servicioId, new Decimal(comision.monto));
+    }
+
+    // 2. Calcular totales. El descuento es el único ajuste de precio y requiere motivo.
     const subtotal  = itemsValidados.reduce((acc, i) => acc.add(i.subtotal), new Decimal(0));
     const descuento = new Decimal(dto.descuento ?? 0);
-    const total     = Decimal.max(subtotal.sub(descuento), new Decimal(0));
+    const motivoDescuento = dto.motivoDescuento ? sanitizeInput(dto.motivoDescuento).trim() : '';
+    if (descuento.gt(0) && !motivoDescuento) {
+      throw new BadRequestException('Indica el motivo del descuento');
+    }
+    if (descuento.gt(subtotal)) {
+      throw new BadRequestException('El descuento no puede ser mayor que el subtotal');
+    }
+    const total = subtotal.sub(descuento);
 
-    const notas = dto.notas ? sanitizeInput(dto.notas) : null;
-    if (notas && containsSQLInjection(notas)) {
+    // Pago mixto: el reparto por método es obligatorio y debe sumar el total (entra así al corte).
+    let montosMixto: { montoEfectivo: Decimal; montoTarjeta: Decimal; montoTransferencia: Decimal } | null = null;
+    if (dto.metodoPago === 'mixto') {
+      if (!dto.pagos) throw new BadRequestException('Un pago mixto necesita cuánto fue en efectivo, tarjeta y transferencia');
+      montosMixto = {
+        montoEfectivo: new Decimal(dto.pagos.efectivo ?? 0),
+        montoTarjeta: new Decimal(dto.pagos.tarjeta ?? 0),
+        montoTransferencia: new Decimal(dto.pagos.transferencia ?? 0),
+      };
+      const suma = montosMixto.montoEfectivo.add(montosMixto.montoTarjeta).add(montosMixto.montoTransferencia);
+      if (!suma.equals(total)) {
+        throw new BadRequestException(`El pago mixto suma ${suma.toFixed(2)} y el total es ${total.toFixed(2)}`);
+      }
+    } else if (dto.pagos) {
+      throw new BadRequestException('Solo los pagos mixtos llevan desglose por método');
+    }
+
+    const notasBase = dto.notas ? sanitizeInput(dto.notas) : '';
+    if (notasBase && containsSQLInjection(notasBase)) {
       throw new BadRequestException('Las notas contienen caracteres no permitidos');
     }
+    if (motivoDescuento && containsSQLInjection(motivoDescuento)) {
+      throw new BadRequestException('El motivo del descuento contiene caracteres no permitidos');
+    }
+    const notas = [notasBase, descuento.gt(0) ? `Descuento: ${motivoDescuento}` : ''].filter(Boolean).join(' · ') || null;
 
     // 3. Crear venta + items + descuento de inventario, TODO en una transacción.
     //    Si alguna salida falla (stock insuficiente por concurrencia), se revierte la venta completa.
-    const venta = await this.prisma.$transaction(async (tx) => {
+    const crear = () => this.prisma.$transaction(async (tx) => {
       const nueva = await tx.ventaLocal.create({
         data: {
           folio:      'TMP',
@@ -217,6 +313,7 @@ export class PosService {
           notas,
           cajeroId,
           clienteId: dto.clienteId ?? null,
+          ...(montosMixto ?? {}),
           items: {
             create: itemsValidados.map((i) => ({
               presentacionId: i.presentacionId,
@@ -224,6 +321,20 @@ export class PosService {
               cantidad:       i.cantidad,
               precioUnitario: i.precioUnitario,
               subtotal:       i.subtotal,
+              citaId:         i.citaId,
+              especialistaId: i.especialistaId,
+              ...(i.participantes.length > 0 && {
+                participantes: {
+                  create: i.participantes.map((usuarioId) => {
+                    const monto = comisionPorServicio.get(i.servicioId!);
+                    return {
+                      usuarioId,
+                      // Foto del monto al cobrar: si después cambia la comisión, esta venta no cambia.
+                      comisionMonto: monto && recibenComision.has(usuarioId) ? monto.mul(i.cantidad) : new Decimal(0),
+                    };
+                  }),
+                },
+              }),
             })),
           },
         },
@@ -254,6 +365,18 @@ export class PosService {
         include: this.incluirVentaRelaciones(),
       });
     });
+
+    let venta: Awaited<ReturnType<typeof crear>>;
+    try {
+      venta = await crear();
+    } catch (e) {
+      // Dos cobros simultáneos de la misma cita: el índice único de cita_id rechaza el segundo.
+      const objetivo = e instanceof Prisma.PrismaClientKnownRequestError ? String((e.meta as { target?: unknown } | undefined)?.target ?? '') : '';
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002' && /cita_id|citaId/.test(objetivo)) {
+        throw new ConflictException('Esta cita ya se cobró');
+      }
+      throw e;
+    }
 
     // Fuera de la transacción a propósito: la venta ya está comprometida en BD en este
     // punto. Un fallo aquí nunca debe poder revertir la venta — por eso nunca se hace
@@ -296,6 +419,9 @@ export class PosService {
         where: { id },
         data: { estado: 'cancelada', motivoCancelacion: motivoLimpio },
       });
+
+      // La cita cobrada con esta venta vuelve a quedar por cobrar (el índice único de cita_id la bloquearía).
+      await tx.ventaLocalItem.updateMany({ where: { ventaId: id, citaId: { not: null } }, data: { citaId: null } });
 
       // Revertir inventario: una entrada por cada item de producto (los servicios no mueven stock)
       for (const item of venta.items) {
@@ -455,16 +581,23 @@ export class PosService {
         creadoEn:  { gte: inicioDia, lte: finDia },
         corteId:   null,
       },
-      select: { id: true, total: true, metodoPago: true },
+      select: { id: true, total: true, metodoPago: true, montoEfectivo: true, montoTarjeta: true, montoTransferencia: true },
     });
 
     // Cobros de pedidos en el salón de esta cajera ese día, todavía sin corte.
     const cobros = await this.cobrosDelSalon({ cobradoPorId: cajeroId, pagadoEn: { gte: inicioDia, lte: finDia }, soloSinCorte: true });
 
     const totalVentas        = ventas.reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.total);
-    const totalEfectivo      = ventas.filter((v) => v.metodoPago === 'efectivo').reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.efectivo);
-    const totalTarjeta       = ventas.filter((v) => v.metodoPago === 'tarjeta').reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.tarjeta);
-    const totalTransferencia = ventas.filter((v) => v.metodoPago === 'transferencia').reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.transferencia);
+    // Cada venta suma a su método; una mixta reparte su total según los montos que se registraron al cobrar.
+    const porMetodo = (metodo: 'efectivo' | 'tarjeta' | 'transferencia', campoMixto: 'montoEfectivo' | 'montoTarjeta' | 'montoTransferencia') =>
+      ventas.reduce((acc, v) => {
+        if (v.metodoPago === metodo) return acc.add(v.total);
+        if (v.metodoPago === 'mixto' && v[campoMixto] != null) return acc.add(v[campoMixto] as Decimal);
+        return acc;
+      }, new Decimal(0));
+    const totalEfectivo      = porMetodo('efectivo', 'montoEfectivo').add(cobros.efectivo);
+    const totalTarjeta       = porMetodo('tarjeta', 'montoTarjeta').add(cobros.tarjeta);
+    const totalTransferencia = porMetodo('transferencia', 'montoTransferencia').add(cobros.transferencia);
     const efectivoFinal      = new Decimal(dto.efectivoFinal);
     const efectivoInicial    = new Decimal(dto.efectivoInicial);
     // diferencia = efectivo_final - (efectivo_inicial + total_ventas_efectivo)

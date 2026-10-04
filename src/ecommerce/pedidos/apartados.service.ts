@@ -94,7 +94,9 @@ export class ApartadosService {
       }),
     );
     for await (const p of apartados) {
-      if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'apartado_sin_preparar')) cancelados.push(p.id);
+      await this.aislado(p.id, async () => {
+        if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'apartado_sin_preparar')) cancelados.push(p.id);
+      });
     }
 
     const enLinea = porLotes((idDespuesDe) =>
@@ -111,7 +113,9 @@ export class ApartadosService {
       }),
     );
     for await (const p of enLinea) {
-      if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'pago_en_linea_vencido')) cancelados.push(p.id);
+      await this.aislado(p.id, async () => {
+        if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'pago_en_linea_vencido')) cancelados.push(p.id);
+      });
     }
 
     const listos = porLotes((idDespuesDe) =>
@@ -138,22 +142,36 @@ export class ApartadosService {
       }),
     );
     for await (const p of listos) {
-      const listoDesde = p.historialEstado[0]?.creadoEn ?? p.creadoEn;
-      const dias = (ahora.getTime() - new Date(listoDesde).getTime()) / DIA_MS;
-      if (dias >= DIAS_CANCELAR_NO_RECOGIDO) {
-        if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.listo_recoger, 'no_recogido')) cancelados.push(p.id);
-      } else if (dias >= DIAS_RECORDATORIO_RECOGER) {
-        const yaAvisado = await this.prisma.notificacion.findFirst({
-          where: { entidadTipo: 'pedido', entidadId: String(p.id), tipo: TIPO_RECORDATORIO_RECOGER },
-          select: { id: true },
-        });
-        if (!yaAvisado) {
-          this.eventEmitter.emit('pedido.recordatorio_recoger', { pedidoId: p.id, usuarioId: p.usuarioId });
-          recordatorios.push(p.id);
+      await this.aislado(p.id, async () => {
+        const listoDesde = p.historialEstado[0]?.creadoEn ?? p.creadoEn;
+        const dias = (ahora.getTime() - new Date(listoDesde).getTime()) / DIA_MS;
+        if (dias >= DIAS_CANCELAR_NO_RECOGIDO) {
+          if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.listo_recoger, 'no_recogido')) cancelados.push(p.id);
+        } else if (dias >= DIAS_RECORDATORIO_RECOGER) {
+          const yaAvisado = await this.prisma.notificacion.findFirst({
+            where: { entidadTipo: 'pedido', entidadId: String(p.id), tipo: TIPO_RECORDATORIO_RECOGER },
+            select: { id: true },
+          });
+          if (!yaAvisado) {
+            this.eventEmitter.emit('pedido.recordatorio_recoger', { pedidoId: p.id, usuarioId: p.usuarioId });
+            recordatorios.push(p.id);
+          }
         }
-      }
+      });
     }
     return { cancelados, recordatorios };
+  }
+
+  /**
+   * Un pedido que falla (timeout, stock, etc.) no detiene la barrida: se registra su id y el error,
+   * y sigue con los demás. Como el cursor empieza de cero en cada barrida, se reintenta en la siguiente.
+   */
+  private async aislado(pedidoId: number, accion: () => Promise<void>): Promise<void> {
+    try {
+      await accion();
+    } catch (e) {
+      this.logger.error(`Barrida de apartados: falló el pedido ${pedidoId}`, e instanceof Error ? e.stack ?? e.message : e);
+    }
   }
 
   /**

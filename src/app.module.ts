@@ -28,6 +28,7 @@ import { ProveedoresModule } from './proveedores/proveedores.module';
 import { ComprasModule } from './compras/compras.module';
 import { CotizacionesModule } from './cotizaciones/cotizaciones.module';
 import { ReportesModule } from './reportes/reportes.module';
+import { ComisionesModule } from './comisiones/comisiones.module';
 import { SolicitudesPermisoModule } from './solicitudes-permiso/solicitudes-permiso.module';
 import { ConfiguracionModule } from './configuracion/configuracion.module';
 import { AsistenciaModule } from './asistencia/asistencia.module';
@@ -62,6 +63,7 @@ import { AppController } from './app.controller';
     ComprasModule,
     CotizacionesModule,
     ReportesModule,
+    ComisionesModule,
     DbModule,
     EcommerceModule,
     PaymentsModule,

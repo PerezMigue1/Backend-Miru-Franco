@@ -21,6 +21,7 @@ import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { PredecirRiesgoCitasDto } from './dto/predecir-riesgo-citas.dto';
+import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
 import { RiesgoCancelacionService } from './riesgo-cancelacion.service';
 import { solicitanteDe } from '../common/utils/permisos-citas.util';
 
@@ -80,6 +81,37 @@ export class CitasController {
   @Get('disponibilidad')
   disponibilidad(@Query() query: DisponibilidadCitasDto) {
     return this.citasService.disponibilidad(query);
+  }
+
+  /**
+   * GET /api/citas/especialistas-libres?servicioId= — personal que puede hacer el servicio y está libre ahora
+   * (para registrar un turno sin cita). Debe ir antes de `:id`.
+   */
+  @Get('especialistas-libres')
+  @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias')
+  especialistasLibres(@Query('servicioId', ParseIntPipe) servicioId: number) {
+    return this.citasService.especialistasLibres(servicioId);
+  }
+
+  /** GET /api/citas/personal — personal activo que atiende, para elegir participantes. Antes de `:id`. */
+  @Get('personal')
+  @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias', 'ventas:escritura')
+  personal() {
+    return this.citasService.personal();
+  }
+
+  /** GET /api/citas/por-cobrar — citas finalizadas sin venta, para el punto de venta. Antes de `:id`. */
+  @Get('por-cobrar')
+  @Permisos('ventas:escritura')
+  porCobrar() {
+    return this.citasService.porCobrar();
+  }
+
+  /** POST /api/citas/sin-cita — turno inmediato de alguien que llega sin cita (recepción). */
+  @Post('sin-cita')
+  @Permisos('citas:escritura')
+  crearSinCita(@Body() dto: CrearCitaSinCitaDto) {
+    return this.citasService.crearSinCita(dto);
   }
 
   /**

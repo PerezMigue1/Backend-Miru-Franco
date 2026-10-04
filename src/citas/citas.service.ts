@@ -17,6 +17,7 @@ import { ReprogramarCitaDto } from './dto/reprogramar-cita.dto';
 import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
+import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
 import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante } from '../common/utils/permisos-citas.util';
 
 const ROLES_ESPECIALISTA = ['estilista', 'empleado', 'becario'] as const;
@@ -305,7 +306,137 @@ export class CitasService {
     return { ...base, abierto: true, motivo: null, slots };
   }
 
+  /**
+   * Personal que puede hacer el servicio y está libre ahora. Si el servicio tiene especialistas asignadas
+   * (servicio_especialistas) solo cuentan ellas; si no tiene ninguna, cuenta todo el personal que atiende.
+   * Ocupada = con una cita en curso, o con una cita pendiente/confirmada que choca con [ahora, ahora + duración].
+   */
+  async especialistasLibres(servicioId: number) {
+    const servicio = await this.prisma.servicio.findUnique({
+      where: { id: servicioId },
+      select: { id: true, activo: true, duracionMinutos: true },
+    });
+    if (!servicio || !servicio.activo) throw new NotFoundException('Servicio no encontrado o inactivo');
+
+    const asignadas = await this.prisma.servicioEspecialista.findMany({
+      where: { servicioId },
+      select: { usuarioId: true },
+    });
+    const candidatas = await this.prisma.usuario.findMany({
+      where: {
+        activo: true,
+        rol: { in: [...ROLES_ESPECIALISTA] },
+        ...(asignadas.length > 0 ? { id: { in: asignadas.map((a) => a.usuarioId) } } : {}),
+      },
+      select: { id: true, nombre: true, foto: true },
+      orderBy: { nombre: 'asc' },
+    });
+    if (candidatas.length === 0) return { success: true, count: 0, data: [] };
+
+    const ahora = new Date();
+    const fin = new Date(ahora.getTime() + servicio.duracionMinutos * 60_000);
+    const ocupadas = await this.prisma.cita.findMany({
+      where: {
+        especialistaId: { in: candidatas.map((c) => c.id) },
+        OR: [
+          { estado: 'en_curso' },
+          { estado: { in: ['pendiente', 'confirmada'] }, fechaHoraInicio: { lt: fin }, fechaHoraFin: { gt: ahora } },
+        ],
+      },
+      select: { especialistaId: true },
+    });
+    const idsOcupadas = new Set(ocupadas.map((c) => c.especialistaId));
+    const data = candidatas.filter((c) => !idsOcupadas.has(c.id));
+    return { success: true, count: data.length, data };
+  }
+
+  /** Personal activo que atiende (estilista, empleado, becario): para elegir participantes al cobrar. */
+  async personal() {
+    const data = await this.prisma.usuario.findMany({
+      where: { activo: true, rol: { in: [...ROLES_ESPECIALISTA] } },
+      select: { id: true, nombre: true, foto: true },
+      orderBy: { nombre: 'asc' },
+    });
+    return { success: true, count: data.length, data };
+  }
+
+  /** Citas finalizadas en el flujo nuevo (con hora de salida) que todavía no se cobraron. */
+  async porCobrar() {
+    const citas = await this.prisma.cita.findMany({
+      where: { estado: 'completada', horaCheckOut: { not: null }, ventaItem: null },
+      include: this.incluirRelaciones(),
+      orderBy: { horaCheckOut: 'desc' },
+      take: 100,
+    });
+    return { success: true, count: citas.length, data: citas };
+  }
+
   // ─── escrituras ──────────────────────────────────────────────────────────────
+
+  /**
+   * Turno de alguien que llega sin cita: cita inmediata (ahora + duración del servicio) con origen
+   * sin_cita. Persona sin cuenta: nombre (y teléfono). Clienta registrada: clienteId.
+   */
+  async crearSinCita(dto: CrearCitaSinCitaDto) {
+    const nombre = dto.nombre ? sanitizeInput(dto.nombre).trim() : '';
+    if (!dto.clienteId && !nombre) {
+      throw new BadRequestException('Indica el nombre de la persona o elige a una clienta registrada');
+    }
+
+    const especialista = await this.prisma.usuario.findUnique({
+      where: { id: dto.especialistaId },
+      select: { id: true, rol: true, activo: true },
+    });
+    if (!especialista || !especialista.activo || !ROLES_ESPECIALISTA.includes(especialista.rol as any)) {
+      throw new NotFoundException('Especialista no encontrada o inactiva');
+    }
+
+    if (dto.clienteId) {
+      const cliente = await this.prisma.usuario.findUnique({ where: { id: dto.clienteId }, select: { id: true, activo: true } });
+      if (!cliente || !cliente.activo) throw new NotFoundException('Clienta no encontrada o inactiva');
+    }
+
+    const servicio = await this.prisma.servicio.findUnique({
+      where: { id: dto.servicioId },
+      select: { id: true, activo: true, duracionMinutos: true },
+    });
+    if (!servicio || !servicio.activo) throw new NotFoundException('Servicio no encontrado o inactivo');
+
+    const inicio = new Date();
+    const fin = new Date(inicio.getTime() + servicio.duracionMinutos * 60_000);
+    await this.validarSolapamiento(dto.especialistaId, inicio, fin);
+
+    const notas = dto.notas ? sanitizeInput(dto.notas) : null;
+    if (notas && containsSQLInjection(notas)) throw new BadRequestException('Las notas contienen caracteres no permitidos');
+
+    const cita = await this.prisma.cita.create({
+      data: {
+        clienteId: dto.clienteId ?? null,
+        nombreInvitado: dto.clienteId ? null : nombre,
+        telefonoInvitado: dto.clienteId ? null : dto.telefono?.trim() || null,
+        origen: 'sin_cita',
+        especialistaId: dto.especialistaId,
+        servicioId: dto.servicioId,
+        fechaHoraInicio: inicio,
+        fechaHoraFin: fin,
+        estado: dto.iniciarAhora ? 'en_curso' : 'pendiente',
+        horaCheckIn: dto.iniciarAhora ? inicio : null,
+        notas,
+      },
+      include: this.incluirRelaciones(),
+    });
+
+    // La especialista recibe su aviso; la clienta solo si tiene cuenta (el listener omite la parte sin cliente).
+    this.eventEmitter.emit('cita.creada', {
+      citaId: cita.id,
+      clienteId: cita.clienteId,
+      especialistaId: cita.especialistaId,
+      servicioNombre: cita.servicio.nombre,
+      fechaHoraInicio: cita.fechaHoraInicio,
+    });
+
+    return { success: true, data: cita };
+  }
 
   async crear(dto: CreateCitaDto, solicitanteId: string, rolUsuario?: string) {
     // Si el solicitante es cliente, se ignora el clienteId del DTO y se usa el propio
@@ -442,7 +573,7 @@ export class CitasService {
     }
     const actualizada = await this.prisma.cita.update({
       where: { id },
-      data: { estado: 'completada' },
+      data: { estado: 'completada', horaCheckOut: new Date() },
       include: this.incluirRelaciones(),
     });
     return { success: true, data: actualizada };

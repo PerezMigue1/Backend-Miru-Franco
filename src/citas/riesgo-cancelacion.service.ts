@@ -82,7 +82,8 @@ export class RiesgoCancelacionService {
     });
     if (citas.length === 0) return [];
 
-    const clientes = [...new Set(citas.map((cita) => cita.clienteId))];
+    // Citas sin cita de personas sin cuenta: sin clienta no hay historial que buscar.
+    const clientes = [...new Set(citas.map((cita) => cita.clienteId).filter((id): id is string => !!id))];
     const fechaCorteMaxima = new Date(
       Math.max(...citas.map((cita) => cita.creadoEn.getTime())),
     );
@@ -111,6 +112,7 @@ export class RiesgoCancelacionService {
 
       const historialDisponible = historicos.filter(
         (previa) =>
+          !!cita.clienteId &&
           previa.id !== cita.id &&
           previa.clienteId === cita.clienteId &&
           previa.fechaHoraFin < cita.creadoEn,
@@ -142,7 +144,7 @@ export class RiesgoCancelacionService {
         antiguedad_cliente_dias: Math.max(
           0,
           Math.floor(
-            (cita.creadoEn.getTime() - cita.cliente.creadoEn.getTime()) /
+            (cita.creadoEn.getTime() - (cita.cliente?.creadoEn ?? cita.creadoEn).getTime()) /
               MILISEGUNDOS_DIA,
           ),
         ),

@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { CreateDevolucionDto } from './dto/create-devolucion.dto';
 import { UpdateDevolucionDto } from './dto/update-devolucion.dto';
+import { motivoConPolitica, validarPoliticaDevolucion } from './politica-devolucion';
 
 @Injectable()
 export class DevolucionesService {
@@ -62,13 +63,49 @@ export class DevolucionesService {
     await this.access.assertPedido(solicitanteId, dto.pedidoId);
     await this.validarRefs(dto);
 
+    // Con tipo (panel de admin) se aplica la política de cambios y reembolsos de los términos.
+    let motivo = dto.motivo ?? null;
+    if (dto.tipo) {
+      if (!dto.causa) throw new BadRequestException('Indica la causa del cambio o reembolso');
+      const pedido = await this.prisma.pedido.findUnique({
+        where: { id: dto.pedidoId },
+        select: {
+          estado: true,
+          pagadoEn: true,
+          metodoPago: true,
+          historialEstado: {
+            where: { estadoNuevo: { in: ['listo_recoger', 'entregado'] } },
+            select: { estadoNuevo: true, creadoEn: true },
+            orderBy: { creadoEn: 'desc' },
+          },
+        },
+      });
+      if (!pedido) throw new NotFoundException('Pedido no encontrado');
+      const entrega = pedido.historialEstado.find((h) => h.estadoNuevo === 'entregado');
+      const error = validarPoliticaDevolucion({
+        tipo: dto.tipo,
+        causa: dto.causa,
+        sellado: dto.sellado,
+        pedidoItemId: dto.pedidoItemId,
+        pedido: {
+          estado: pedido.estado,
+          pagadoEn: pedido.pagadoEn,
+          metodoPago: pedido.metodoPago,
+          entregadoEn: entrega?.creadoEn ?? null,
+          llegoAListo: pedido.historialEstado.some((h) => h.estadoNuevo === 'listo_recoger'),
+        },
+      });
+      if (error) throw new BadRequestException(error);
+      motivo = motivoConPolitica(dto.tipo, dto.causa, dto.motivo);
+    }
+
     const data = await this.prisma.devolucion.create({
       data: {
         pedidoId: dto.pedidoId,
         pedidoItemId: dto.pedidoItemId ?? null,
         pagoId: dto.pagoId ?? null,
         estado: dto.estado,
-        motivo: dto.motivo ?? null,
+        motivo,
         monto: dto.monto ?? null,
       },
       include: { pedidoItem: true, pago: true },

@@ -32,4 +32,11 @@ export class CreateSeguimientoDto {
 
   @IsBoolean()
   requiereAccion: boolean;
+
+  /** Cita a la que corresponde el seguimiento (opcional). Se valida que exista. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  citaId?: number;
 }

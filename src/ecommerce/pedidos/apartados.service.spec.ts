@@ -224,6 +224,35 @@ describe('Apartados y pedidos en línea vencidos (barrida)', () => {
     expect(pedidos.filter((p) => p.estado === 'cancelado')).toHaveLength(100);
   });
 
+  it('un pedido que falla en medio de un lote no detiene la barrida: se registra y siguen los demás', async () => {
+    const lista = [1, 2, 3].map((id) => apartado({ id, creadoEn: hace(4 * DIA) }));
+    const { servicio, prisma, pedidos } = montar(lista);
+    const transaccion = prisma.$transaction.getMockImplementation()!;
+    let txOriginal: any;
+    await transaccion(async (t: any) => (txOriginal = t));
+    // El pedido 2 falla dentro de su transacción (por ejemplo, un timeout de la base).
+    prisma.$transaction.mockImplementation(async (fn: any) =>
+      fn({
+        ...txOriginal,
+        pedido: {
+          updateMany: async (args: any) => {
+            if (args.where.id === 2) throw new Error('timeout');
+            return txOriginal.pedido.updateMany(args);
+          },
+        },
+      }),
+    );
+    const errores = jest.spyOn((servicio as any).logger, 'error').mockImplementation(() => undefined);
+    const r = await servicio.barrer(AHORA);
+    expect(pedidos.map((p) => p.estado)).toEqual(['cancelado', 'pendiente_pago', 'cancelado']);
+    expect('cancelados' in r && r.cancelados).toEqual([1, 3]);
+    expect(errores).toHaveBeenCalledWith(expect.stringContaining('pedido 2'), expect.anything());
+    // La siguiente barrida vuelve a intentarlo: no queda bloqueada.
+    prisma.$transaction.mockImplementation(transaccion);
+    await servicio.barrer(AHORA);
+    expect(pedidos[1].estado).toBe('cancelado');
+  });
+
   it('APARTADOS_DESDE como día (YYYY-MM-DD) cuenta desde el inicio de ese día en México', async () => {
     process.env.APARTADOS_DESDE = '2026-10-15';
     const { servicio, pedidos } = montar([

@@ -76,9 +76,16 @@ export class SeguimientosService {
     });
     if (!usuarioExiste) throw new NotFoundException(`Usuario ${dto.usuarioId} no encontrado`);
 
+    if (dto.citaId !== undefined) {
+      const cita = await this.prisma.cita.findUnique({ where: { id: dto.citaId }, select: { id: true, clienteId: true } });
+      if (!cita) throw new NotFoundException(`Cita ${dto.citaId} no encontrada`);
+      if (cita.clienteId && cita.clienteId !== dto.usuarioId) throw new BadRequestException('La cita es de otra clienta');
+    }
+
     const seg = await this.prisma.seguimientoPostServicio.create({
       data: {
         usuarioId:     dto.usuarioId,
+        citaId:        dto.citaId ?? null,
         notas:         notasLimpias,
         fechaContacto: new Date(dto.fechaContacto),
         satisfaccion:  dto.satisfaccion ?? null,
