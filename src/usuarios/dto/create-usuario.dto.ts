@@ -1,6 +1,7 @@
 import { IsString, IsEmail, IsOptional, IsBoolean, IsDateString, ValidateNested, IsNotEmpty, MinLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsStrongPassword } from '../../common/validators/password.validator';
+import { ConsentimientoDatosSensibles } from './consentimiento-datos-sensibles';
 
 class PreguntaSeguridadDto {
   @IsString()
@@ -86,6 +87,10 @@ export class CreateUsuarioDto {
   @IsBoolean()
   @IsOptional()
   recibePromociones?: boolean;
+
+  /** Obligatorio (true) si perfilCapilar.alergias trae texto. No se guarda. */
+  @ConsentimientoDatosSensibles()
+  consienteDatosSensibles?: boolean;
 
   /** Cuenta confirmada (para usuarios creados por admin; omitir en registro público) */
   @IsBoolean()

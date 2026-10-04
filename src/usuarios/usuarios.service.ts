@@ -13,6 +13,7 @@ import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
 import { sanitizeInput, containsSQLInjection, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone, buildPhoneLookupCandidates, formaEscapadaAnterior } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
+import { sinConsentimiento } from './dto/consentimiento-datos-sensibles';
 
 /**
  * Select seguro y único para cualquier respuesta que exponga un Usuario al cliente.
@@ -458,7 +459,8 @@ export class UsuariosService {
   }
 
   async actualizarUsuario(id: string, updateData: any) {
-    const { email, password, ...camposActualizables } = updateData;
+    // El consentimiento de datos sensibles solo se valida en el DTO: no es una columna.
+    const { email, password, ...camposActualizables } = sinConsentimiento(updateData);
 
     if (camposActualizables.fechaNacimiento !== undefined) {
       camposActualizables.fechaNacimiento = this.normalizarFechaNacimiento(

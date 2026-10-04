@@ -9,6 +9,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { ROLES_DB } from '../../common/constants/roles.constants';
+import { ConsentimientoDatosSensibles } from './consentimiento-datos-sensibles';
 
 /** Roles permitidos en BD: cliente, becario, empleado, estilista, admin. Solo admin puede asignar. */
 export const ROLES_PERMITIDOS = [...ROLES_DB] as const;
@@ -56,6 +57,10 @@ export class UpdateUsuarioDto {
   @IsString()
   @MaxLength(1000)
   alergias?: string;
+
+  /** Obligatorio (true) si alergias (o perfilCapilar.alergias) trae texto. No se guarda. */
+  @ConsentimientoDatosSensibles()
+  consienteDatosSensibles?: boolean;
 
   @IsBoolean()
   @IsOptional()
