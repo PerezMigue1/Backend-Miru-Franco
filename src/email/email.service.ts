@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import { escaparHtml } from '../common/utils/security.util';
 
 @Injectable()
 export class EmailService {
@@ -125,6 +126,67 @@ export class EmailService {
     } catch (err: any) {
       console.error('Error enviando correo de recuperación:', err.response?.body || err.message);
       throw new Error('No se pudo enviar el correo de recuperación de contraseña');
+    }
+  }
+
+  /**
+   * Código para cambiar la contraseña desde el perfil. El código solo va en el HTML: nunca en los logs.
+   */
+  async sendCodigoCambioPasswordEmail(correo: string, codigo: string, vigenciaMinutos: number): Promise<void> {
+    await this.enviarCorreoCuenta(
+      correo,
+      'Código para cambiar tu contraseña - Miru Franco',
+      `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #710014;">Cambio de contraseña</h2>
+            <p>Para cambiar la contraseña de tu cuenta de Miru Franco, ingresa este código:</p>
+            <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
+              <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${codigo}</h1>
+            </div>
+            <p style="color: #666; font-size: 12px;">Este código vence en ${vigenciaMinutos} minutos y solo sirve una vez.</p>
+            <p style="color: #666; font-size: 12px;">Si no fuiste tú, ignora este correo y cambia tu contraseña.</p>
+          </div>
+        `,
+      'código de cambio de contraseña',
+    );
+  }
+
+  /** Aviso después de cambiar la contraseña: fecha y hora, y cómo recuperar la cuenta. Sin datos sensibles. */
+  async sendAvisoPasswordCambiadaEmail(correo: string, fechaHora: string): Promise<void> {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://miru-franco.vercel.app';
+    const recuperar = `${frontendUrl}/forgot-password`;
+    await this.enviarCorreoCuenta(
+      correo,
+      'Tu contraseña cambió - Miru Franco',
+      `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #710014;">Tu contraseña cambió</h2>
+            <p>La contraseña de tu cuenta de Miru Franco se cambió el ${escaparHtml(fechaHora)} (hora del centro de México).</p>
+            <p>Por seguridad cerramos todas tus sesiones: inicia sesión de nuevo con tu nueva contraseña.</p>
+            <p style="color: #666;">Si no fuiste tú, recupera tu cuenta ahora desde <a href="${recuperar}" style="color: #710014;">¿Olvidaste tu contraseña?</a> y elige una contraseña nueva.</p>
+          </div>
+        `,
+      'aviso de cambio de contraseña',
+    );
+  }
+
+  /** Envío de los correos de la cuenta: el log de error no lleva destinatario ni contenido. */
+  private async enviarCorreoCuenta(to: string, subject: string, html: string, tipo: string): Promise<void> {
+    const apiKey = this.configService.get<string>('RESEND_API_KEY');
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
+
+    if (!apiKey || !fromEmail || !this.resend) {
+      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
+    }
+
+    try {
+      const { error } = await this.resend.emails.send({ to, from: `${fromName} <${fromEmail}>`, subject, html });
+      if (error) throw error;
+      this.logger.log(`Correo enviado: ${tipo}`);
+    } catch (err: any) {
+      this.logger.error(`Error enviando correo (${tipo}): ${err?.name ?? 'Error'}`);
+      throw new Error(`No se pudo enviar el correo (${tipo})`);
     }
   }
 

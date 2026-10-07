@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, BadGatewayException, HttpException, HttpStatus, InternalServerErrorException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { SecurityService } from '../common/services/security.service';
@@ -15,6 +15,20 @@ import { validatePasswordAgainstPersonalData } from '../common/validators/passwo
 import twilio from 'twilio';
 import { sinConsentimiento } from './dto/consentimiento-datos-sensibles';
 import { esFotoPerfilPermitida } from '../common/utils/foto-perfil.util';
+import { jwtSecretObligatorio } from '../auth/jwt-secret';
+import {
+  MAX_INTENTOS_CODIGO,
+  VIGENCIA_CODIGO_MINUTOS,
+  cuentaDeCodigos,
+  esCodigoConFormato,
+  esCodigoDeCambio,
+  fechaHoraMexico,
+  generarCodigo,
+  guardarCodigo,
+  hashCodigo,
+  hashesIguales,
+  leerCodigo,
+} from './cambio-password';
 
 /**
  * Select seguro y único para cualquier respuesta que exponga un Usuario al cliente.
@@ -311,7 +325,9 @@ export class UsuariosService {
       throw new NotFoundException('Usuario no encontrado.');
     }
 
-    if (!usuario.codigoOTP) {
+    // Un código de cambio de contraseña (cuentas confirmadas, ver cambio-password.ts) no es de activación:
+    // se responde igual que sin código para no revelar que alguien pidió uno.
+    if (!usuario.codigoOTP || esCodigoDeCambio(usuario.codigoOTP)) {
       throw new BadRequestException('No hay código activo. Solicita uno nuevo.');
     }
 
@@ -979,21 +995,90 @@ export class UsuariosService {
     };
   }
 
-  async cambiarPasswordDesdePerfil(id: string, actualPassword: string, nuevaPassword: string) {
-    const usuario = await this.prisma.usuario.findUnique({
-      where: { id },
-    });
-
-    if (!usuario || !usuario.password) {
+  /**
+   * Comprueba la contraseña actual de la cuenta con sesión. Errores con `code` (el filtro global lo
+   * devuelve): 400 y no 401, porque la app trata el 401 como sesión vencida.
+   */
+  private async validarPasswordActual(id: string, actualPassword: string) {
+    const usuario = await this.prisma.usuario.findUnique({ where: { id } });
+    if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');
     }
+    if (!usuario.password) {
+      throw new ConflictException({ message: 'Tu cuenta entra con Google y no tiene contraseña.', code: 'CUENTA_SIN_PASSWORD' });
+    }
+    // codigoOTP/otpExpira son de la activación mientras la cuenta no está confirmada: no se pisan.
+    if (!usuario.confirmado) {
+      throw new ConflictException({ message: 'Activa tu cuenta antes de cambiar la contraseña.', code: 'CUENTA_NO_CONFIRMADA' });
+    }
+    if (!(await bcrypt.compare(actualPassword, usuario.password))) {
+      throw new BadRequestException({ message: 'La contraseña actual no es correcta.', code: 'PASSWORD_ACTUAL_INCORRECTA' });
+    }
+    return { ...usuario, password: usuario.password };
+  }
 
-    const esValida = await bcrypt.compare(actualPassword, usuario.password);
-    if (!esValida) {
-      throw new UnauthorizedException('Contraseña actual incorrecta');
+  /** POST /auth/me/password/codigo: envía al correo de la cuenta un código para cambiar la contraseña. */
+  async solicitarCodigoCambioPassword(id: string, actualPassword: string) {
+    const usuario = await this.validarPasswordActual(id, actualPassword);
+
+    // Tope por cuenta: MAX_CODIGOS_POR_HORA en la hora en curso, aunque cambie la IP o la instancia.
+    const cuenta = cuentaDeCodigos(leerCodigo(usuario.codigoOTP), Date.now());
+    if ('minutosRestantes' in cuenta) {
+      throw new HttpException(
+        {
+          message: `Pediste demasiados códigos. Intenta de nuevo en ${cuenta.minutosRestantes} minutos.`,
+          code: 'DEMASIADOS_CODIGOS',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
-    // Validar que la nueva contraseña no sea igual a la anterior
+    const codigo = generarCodigo();
+    const hash = hashCodigo(jwtSecretObligatorio(process.env.JWT_SECRET), id, codigo);
+    const guardado = guardarCodigo({ intentos: 0, ...cuenta, hash });
+    // Un código nuevo reemplaza al anterior. Update condicional: dos pedidos a la vez no pueden
+    // leer la misma cuenta y colar un código de más.
+    const escritura = await this.prisma.usuario.updateMany({
+      where: { id, codigoOTP: usuario.codigoOTP },
+      data: { codigoOTP: guardado, otpExpira: new Date(Date.now() + VIGENCIA_CODIGO_MINUTOS * 60_000) },
+    });
+    if (escritura.count === 0) {
+      throw new ConflictException({
+        message: 'Ya estamos enviando un código a tu correo. Revísalo en un momento.',
+        code: 'CODIGO_EN_CURSO',
+      });
+    }
+
+    try {
+      await this.emailService.sendCodigoCambioPasswordEmail(usuario.email, codigo, VIGENCIA_CODIGO_MINUTOS);
+    } catch {
+      // Sin correo el código no sirve: queda inservible (sin reiniciar la cuenta de la hora).
+      await this.prisma.usuario.updateMany({
+        where: { id, codigoOTP: guardado },
+        data: { codigoOTP: guardarCodigo({ intentos: MAX_INTENTOS_CODIGO, ...cuenta, hash }) },
+      });
+      this.logger.warn(`No se pudo enviar el código de cambio de contraseña (usuario ${id})`);
+      throw new BadGatewayException({
+        message: 'No pudimos enviar el código a tu correo. Intenta de nuevo en unos minutos.',
+        code: 'CORREO_NO_ENVIADO',
+      });
+    }
+
+    return {
+      success: true,
+      message: `Te enviamos un código a tu correo. Vence en ${VIGENCIA_CODIGO_MINUTOS} minutos.`,
+      vigenciaMinutos: VIGENCIA_CODIGO_MINUTOS,
+    };
+  }
+
+  /**
+   * POST /auth/me/password (y PUT /usuarios/:id/cambiar-password, solo la dueña): cambia la contraseña
+   * con la actual y el código del correo. Al cambiarla cierra todas las sesiones y avisa por correo.
+   */
+  async cambiarPasswordConCodigo(id: string, actualPassword: string, nuevaPassword: string, codigo: string) {
+    const usuario = await this.validarPasswordActual(id, actualPassword);
+
+    // Reglas de la nueva antes de tocar el código: un error aquí no gasta intentos.
     const esMismaContraseña = await bcrypt.compare(nuevaPassword, usuario.password);
     if (esMismaContraseña) {
       throw new BadRequestException('La nueva contraseña no puede ser igual a la contraseña actual');
@@ -1014,19 +1099,50 @@ export class UsuariosService {
       throw new BadRequestException(passwordValidation.reason);
     }
 
-    const hashedPassword = await bcrypt.hash(nuevaPassword, 10);
+    const codigoInvalido = () =>
+      new BadRequestException({ message: 'El código no es válido o ya venció.', code: 'CODIGO_INVALIDO' });
+    const guardado = leerCodigo(usuario.codigoOTP);
+    const vigente =
+      guardado && guardado.intentos < MAX_INTENTOS_CODIGO && !!usuario.otpExpira && usuario.otpExpira.getTime() > Date.now();
+    if (!vigente || !esCodigoConFormato(codigo)) {
+      throw codigoInvalido();
+    }
 
-    await this.prisma.usuario.update({
-      where: { id },
-      data: {
-        password: hashedPassword,
-      },
+    // Se aparta el intento ANTES de comparar, con un update condicional: aunque lleguen varias
+    // peticiones a la vez, nunca se prueban más de MAX_INTENTOS_CODIGO códigos.
+    // Al llegar a MAX_INTENTOS_CODIGO el código queda inservible pero registrado (cuenta la hora).
+    const apartado = guardarCodigo({ ...guardado, intentos: guardado.intentos + 1 });
+    const reserva = await this.prisma.usuario.updateMany({
+      where: { id, codigoOTP: usuario.codigoOTP },
+      data: { codigoOTP: apartado },
     });
+    if (reserva.count === 0) {
+      throw codigoInvalido();
+    }
+    if (!hashesIguales(guardado.hash, hashCodigo(jwtSecretObligatorio(process.env.JWT_SECRET), id, codigo))) {
+      throw codigoInvalido();
+    }
 
-    return {
-      success: true,
-      message: 'Contraseña actualizada correctamente',
-    };
+    const hashedPassword = await bcrypt.hash(nuevaPassword, 10);
+    // En una sola escritura: contraseña nueva, código gastado y todas las sesiones revocadas.
+    // tokensRevocadosDesde es el mismo mecanismo de logoutAll (SecurityService.revokeAllUserTokens):
+    // JwtStrategy rechaza todo token emitido antes, incluido el de esta petición.
+    const cambio = await this.prisma.usuario.updateMany({
+      where: { id, codigoOTP: apartado },
+      data: { password: hashedPassword, codigoOTP: null, otpExpira: null, tokensRevocadosDesde: new Date() },
+    });
+    if (cambio.count === 0) {
+      throw codigoInvalido();
+    }
+
+    try {
+      await this.emailService.sendAvisoPasswordCambiadaEmail(usuario.email, fechaHoraMexico(new Date()));
+    } catch {
+      // El cambio se mantiene; solo se registra (sin correo ni nombre).
+      this.logger.warn(`No se pudo enviar el aviso de cambio de contraseña (usuario ${id})`);
+    }
+
+    return { success: true, message: 'Tu contraseña cambió. Inicia sesión de nuevo.' };
   }
 
   async obtenerPerfilUsuario(id: string) {

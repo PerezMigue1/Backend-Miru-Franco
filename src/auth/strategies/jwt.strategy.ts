@@ -6,6 +6,7 @@ import { SecurityService } from '../../common/services/security.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Request } from 'express';
 import { leerTokenDeCookie } from '../auth-cookie';
+import { jwtSecretObligatorio } from '../jwt-secret';
 
 // Extender ExtractJwt para obtener el token raw.
 // Bearer (integraciones/scripts) tiene prioridad; si no hay, se usa la cookie httpOnly del
@@ -42,7 +43,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwtFromRequest,
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET') || 'tu_secreto_temporal',
+      secretOrKey: jwtSecretObligatorio(configService.get<string>('JWT_SECRET')),
       passReqToCallback: true, // Permitir acceso al request completo
     });
   }

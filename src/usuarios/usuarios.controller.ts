@@ -13,8 +13,13 @@ import {
   Req,
   ForbiddenException,
   Query,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { UsuariosService } from './usuarios.service';
+import { RateLimitGuard } from '../common/guards/rate-limit.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { clearAuthCookie } from '../auth/auth-cookie';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { OwnerOrAdminGuard } from '../common/guards/owner-or-admin.guard';
@@ -91,17 +96,24 @@ export class UsuariosController {
     return this.usuariosService.actualizarPerfilUsuario(id, updateUsuarioDto);
   }
 
+  /**
+   * Ruta anterior de la app móvil: ya no cambia la contraseña sin el código del correo. Mismo cuerpo
+   * y misma lógica que POST /auth/me/password, y solo para la dueña de la cuenta (ni admin).
+   */
   @Put(':id/cambiar-password')
-  @UseGuards(JwtAuthGuard, OwnerOrAdminGuard)
+  @UseGuards(JwtAuthGuard, new RateLimitGuard(5, 60000))
   async cambiarPasswordDesdePerfil(
     @Param('id') id: string,
-    @Body() cambiarPasswordPerfilDto: CambiarPasswordPerfilDto,
+    @CurrentUser() user: any,
+    @Body() dto: CambiarPasswordPerfilDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.usuariosService.cambiarPasswordDesdePerfil(
-      id,
-      cambiarPasswordPerfilDto.actualPassword,
-      cambiarPasswordPerfilDto.nuevaPassword,
-    );
+    if (!user?.id || user.id !== id) {
+      throw new ForbiddenException('Solo puedes cambiar la contraseña de tu propia cuenta.');
+    }
+    const resultado = await this.usuariosService.cambiarPasswordConCodigo(id, dto.actualPassword, dto.nuevaPassword, dto.codigo);
+    clearAuthCookie(res);
+    return resultado;
   }
 
   /**

@@ -227,13 +227,26 @@ export class AuthService {
     const permisoRol = rol
       ? await this.prisma.permisoRol.findUnique({ where: { rol }, select: { claves: true } })
       : null;
+    // tienePassword: la app ofrece "cambiar contraseña" solo si la cuenta tiene una. El hash no sale de aquí.
+    const cuenta = await this.prisma.usuario.findUnique({ where: { id: user.id }, select: { password: true } });
     return {
       ...resultado,
       data: {
         ...resultado.data,
         permisos: permisoRol?.claves ?? [],
+        tienePassword: !!cuenta?.password,
       },
     };
+  }
+
+  /** POST /auth/me/password/codigo */
+  async solicitarCodigoCambioPassword(userId: string, actualPassword: string) {
+    return this.usuariosService.solicitarCodigoCambioPassword(userId, actualPassword);
+  }
+
+  /** POST /auth/me/password */
+  async cambiarPasswordConCodigo(userId: string, actualPassword: string, nuevaPassword: string, codigo: string) {
+    return this.usuariosService.cambiarPasswordConCodigo(userId, actualPassword, nuevaPassword, codigo);
   }
 
   /** PATCH /auth/me: mismos campos permitidos que PUT usuarios/:id/perfil (incl. `foto`). */

@@ -24,6 +24,8 @@ import { LoginDto } from '../usuarios/dto/login.dto';
 import { VerificarOtpDto } from '../usuarios/dto/verificar-otp.dto';
 import { ReenviarCodigoDto } from '../usuarios/dto/reenviar-codigo.dto';
 import { CambiarPasswordDto } from '../usuarios/dto/cambiar-password.dto';
+import { CambiarPasswordPerfilDto } from '../usuarios/dto/cambiar-password-perfil.dto';
+import { SolicitarCodigoPasswordDto } from '../usuarios/dto/solicitar-codigo-password.dto';
 import { EnviarCodigoRecuperacionSmsDto } from '../usuarios/dto/enviar-codigo-recuperacion-sms.dto';
 import { VerificarCodigoRecuperacionSmsDto } from '../usuarios/dto/verificar-codigo-recuperacion-sms.dto';
 import { sanitizeForLogOutput } from '../common/utils/security.util';
@@ -149,6 +151,34 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async patchMe(@CurrentUser() user: any, @Body() dto: UpdateUsuarioDto) {
     return this.authService.updateProfileMe(user.id, dto);
+  }
+
+  /**
+   * Paso 1 del cambio de contraseña desde el perfil: con la contraseña actual, envía un código de
+   * 6 dígitos al correo de la cuenta (vence en 10 minutos; uno nuevo invalida el anterior).
+   */
+  @Post('me/password/codigo')
+  @UseGuards(JwtAuthGuard, new RateLimitGuard(3, 60000))
+  @HttpCode(HttpStatus.OK)
+  async solicitarCodigoPassword(@CurrentUser() user: any, @Body() dto: SolicitarCodigoPasswordDto) {
+    return this.authService.solicitarCodigoCambioPassword(user.id, dto.actualPassword);
+  }
+
+  /**
+   * Paso 2: cambia la contraseña con la actual y el código. Cierra todas las sesiones de la cuenta
+   * (incluida esta) y avisa por correo: la app debe volver a iniciar sesión.
+   */
+  @Post('me/password')
+  @UseGuards(JwtAuthGuard, new RateLimitGuard(5, 60000))
+  @HttpCode(HttpStatus.OK)
+  async cambiarPasswordMe(
+    @CurrentUser() user: any,
+    @Body() dto: CambiarPasswordPerfilDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const resultado = await this.authService.cambiarPasswordConCodigo(user.id, dto.actualPassword, dto.nuevaPassword, dto.codigo);
+    clearAuthCookie(res);
+    return resultado;
   }
 
   /**

@@ -10,6 +10,7 @@ import { UsuariosModule } from '../usuarios/usuarios.module';
 import { SecurityModule } from '../common/services/security.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { JWT_TTL_SEGUNDOS } from './jwt-ttl';
+import { jwtSecretObligatorio } from './jwt-secret';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { JWT_TTL_SEGUNDOS } from './jwt-ttl';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'tu_secreto_temporal',
+        secret: jwtSecretObligatorio(configService.get<string>('JWT_SECRET')),
         signOptions: { expiresIn: JWT_TTL_SEGUNDOS },
       }),
       inject: [ConfigService],
