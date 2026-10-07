@@ -151,6 +151,17 @@ export class AuthController {
     return this.authService.updateProfileMe(user.id, dto);
   }
 
+  /**
+   * Firma de corta duración para subir la foto de perfil directo a Cloudinary (subida firmada).
+   * Con la URL resultante se llama a PATCH /auth/me con `foto`.
+   */
+  @Post('me/foto/firma')
+  @UseGuards(JwtAuthGuard, new RateLimitGuard(10, 60000))
+  @HttpCode(HttpStatus.OK)
+  firmaSubidaFoto(@CurrentUser() user: any) {
+    return this.authService.firmaSubidaFoto(user.id);
+  }
+
   // ===== SESIÓN =====
 
   @Post('login')

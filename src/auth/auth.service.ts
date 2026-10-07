@@ -10,6 +10,7 @@ import { SecurityService } from '../common/services/security.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { JWT_TTL_SEGUNDOS, VENTANA_REFRESH_SEGUNDOS } from './jwt-ttl';
+import { crearFirmaSubidaFoto } from './firma-cloudinary';
 
 @Injectable()
 export class AuthService {
@@ -238,6 +239,11 @@ export class AuthService {
   /** PATCH /auth/me: mismos campos permitidos que PUT usuarios/:id/perfil (incl. `foto`). */
   async updateProfileMe(userId: string, dto: UpdateUsuarioDto) {
     return this.usuariosService.actualizarPerfilUsuario(userId, dto);
+  }
+
+  /** POST /auth/me/foto/firma: firma para subir la foto de perfil del usuario a Cloudinary. */
+  firmaSubidaFoto(userId: string) {
+    return { success: true, data: crearFirmaSubidaFoto(userId) };
   }
 
   // ===== Delegados: sesión y recuperación de contraseña =====

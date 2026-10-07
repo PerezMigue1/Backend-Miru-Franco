@@ -14,6 +14,7 @@ import { sanitizeInput, containsSQLInjection, sanitizeRegisterData, sanitizeEmai
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
 import { sinConsentimiento } from './dto/consentimiento-datos-sensibles';
+import { esFotoPerfilPermitida } from '../common/utils/foto-perfil.util';
 
 /**
  * Select seguro y único para cualquier respuesta que exponga un Usuario al cliente.
@@ -458,7 +459,24 @@ export class UsuariosService {
     return fecha;
   }
 
+  /**
+   * La foto que llega del cliente solo puede ser null/vacía, una imagen de la cuenta propia de
+   * Cloudinary o la que el usuario ya tiene guardada (p. ej. la de Google). Si no, 400.
+   */
+  private async validarFotoDelCliente(id: string, foto: unknown): Promise<void> {
+    if (typeof foto !== 'string' || foto.trim() === '') return;
+    const actual = await this.prisma.usuario.findUnique({ where: { id }, select: { foto: true } });
+    const permitida = esFotoPerfilPermitida(foto, {
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      fotoActual: actual?.foto ?? null,
+    });
+    if (!permitida) {
+      throw new BadRequestException('La foto no es válida: debe ser una imagen subida desde el sitio.');
+    }
+  }
+
   async actualizarUsuario(id: string, updateData: any) {
+    await this.validarFotoDelCliente(id, updateData.foto);
     // El consentimiento de datos sensibles solo se valida en el DTO: no es una columna.
     const { email, password, ...camposActualizables } = sinConsentimiento(updateData);
 
@@ -1051,6 +1069,7 @@ export class UsuariosService {
   }
 
   async actualizarPerfilUsuario(id: string, updateData: any) {
+    await this.validarFotoDelCliente(id, updateData.foto);
     const camposPermitidos = [
       'nombre', 'telefono', 'fechaNacimiento', 'recibePromociones', 'foto',
       // Campos de perfil capilar embebidos
