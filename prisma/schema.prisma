@@ -95,6 +95,9 @@ model Usuario {
   colorActual     String?      @map("color_actual")
   productosUsados String?      @map("productos_usados")
   alergias        String?
+  /// Si tratamientosQuimicos es false, tratamientos queda en null.
+  tratamientosQuimicos Boolean @default(false) @map("tratamientos_quimicos")
+  tratamientos         String?
 
   // Campos de pregunta de seguridad (embebidos)
   preguntaSeguridad  String? @map("pregunta_seguridad")
@@ -131,6 +134,7 @@ model Usuario {
   asistenciasCorregidas        RegistroAsistencia[]      @relation("AsistenciaComoCorrector")
   preferenciasNotificacion     PreferenciaNotificacion[]
   dispositivosPush             DispositivoPush[]
+  sesionesMoviles              SesionMovil[]
 
   @@index([activo])
   @@index([email])
@@ -523,6 +527,28 @@ model TokenRevocado {
 
   @@index([expiraEn])
   @@map("tokens_revocados")
+}
+
+/// Sesión de la app móvil de clientas: el token de renovación rota en cada uso (solo se guarda su
+/// SHA-256). Cada rotación crea una fila nueva de la misma familia y marca la anterior como revocada
+/// y reemplazada; reusar un token rotado revoca la familia completa. Vence a los 30 días sin uso.
+model SesionMovil {
+  id               String    @id @default(uuid())
+  usuarioId        String    @map("usuario_id")
+  tokenHash        String    @unique @map("token_hash")
+  familiaId        String    @map("familia_id")
+  creadaEn         DateTime  @default(now()) @map("creada_en")
+  ultimoUso        DateTime  @default(now()) @map("ultimo_uso")
+  expiraEn         DateTime  @map("expira_en")
+  revocadaEn       DateTime? @map("revocada_en")
+  reemplazadaPorId String?   @map("reemplazada_por_id")
+  dispositivo      String?   @db.VarChar(80)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([familiaId])
+  @@map("sesiones_moviles")
 }
 
 // Tabla para códigos temporales de OAuth (Authorization Code Flow)

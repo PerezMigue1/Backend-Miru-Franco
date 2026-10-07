@@ -20,3 +20,10 @@ export const JWT_TTL_SEGUNDOS = 24 * 60 * 60;
  * `entregarSesion` le dice al frontend cuánto le queda para renovar (`renovarEnSegundos`).
  */
 export const VENTANA_REFRESH_SEGUNDOS = 15 * 60;
+
+/**
+ * Token de acceso de la app móvil de clientas (canal "movil", ver src/auth/sesion-movil.ts): 15 min.
+ * No se renueva con /auth/refresh sino con POST /auth/movil/renovar y el token de renovación, que
+ * mantiene la sesión hasta 30 días sin uso. Corto a propósito: es lo que sirve un token robado.
+ */
+export const JWT_TTL_MOVIL_SEGUNDOS = 15 * 60;

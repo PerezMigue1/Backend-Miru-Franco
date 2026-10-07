@@ -294,12 +294,20 @@ export class SecurityService {
    * Establece tokensRevocadosDesde a la fecha actual, invalidando todos los tokens emitidos antes de esta fecha
    */
   async revokeAllUserTokens(userId: string): Promise<void> {
+    const ahora = new Date();
     await this.prisma.usuario.update({
       where: { id: userId },
       data: {
-        tokensRevocadosDesde: new Date(),
+        tokensRevocadosDesde: ahora,
       },
     });
+    // Sesiones de la app móvil: /auth/movil/renovar ya rechaza las anteriores a tokensRevocadosDesde;
+    // marcarlas revocadas es para que el registro quede claro. Si falla, el cierre sigue valiendo.
+    try {
+      await this.prisma.sesionMovil.updateMany({ where: { usuarioId: userId, revocadaEn: null }, data: { revocadaEn: ahora } });
+    } catch {
+      this.logger.warn(`No se pudieron marcar las sesiones móviles como revocadas (usuario ${userId})`);
+    }
   }
 
   /**

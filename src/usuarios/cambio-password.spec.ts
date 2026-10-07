@@ -46,6 +46,7 @@ function crearEscenario(fila: Partial<Fila> = {}) {
         return { count: 1 };
       }),
     },
+    sesionMovil: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
   const correos: { codigo: string[]; aviso: string[] } = { codigo: [], aviso: [] };
   const emailService = {
@@ -219,7 +220,7 @@ describe('Cambio de contraseña con código por correo', () => {
     const otroCodigo = (codigo: string) => (codigo === '000000' ? '111111' : '000000');
 
     it('cambia la contraseña, borra el código, revoca todas las sesiones y avisa por correo', async () => {
-      const { servicio, usuario, codigo, emailService, correos } = await conCodigo();
+      const { servicio, usuario, prisma, codigo, emailService, correos } = await conCodigo();
       const antes = Date.now();
       const respuesta = await servicio.cambiarPasswordConCodigo(ID, ACTUAL, NUEVA, codigo);
 
@@ -229,6 +230,11 @@ describe('Cambio de contraseña con código por correo', () => {
       expect(usuario.otpExpira).toBeNull();
       // Mismo mecanismo que logoutAll: todo token con iat anterior queda revocado, incluido el de esta petición.
       expect((usuario.tokensRevocadosDesde as Date).getTime()).toBeGreaterThanOrEqual(antes);
+      // También las sesiones de la app móvil: su token de renovación deja de servir.
+      expect(prisma.sesionMovil.updateMany).toHaveBeenCalledWith({
+        where: { usuarioId: ID, revocadaEn: null },
+        data: { revocadaEn: expect.any(Date) },
+      });
 
       expect(emailService.sendAvisoPasswordCambiadaEmail).toHaveBeenCalledWith('clienta.prueba@example.com', expect.any(String));
       const [fechaHora] = correos.aviso;

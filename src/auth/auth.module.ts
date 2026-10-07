@@ -11,6 +11,7 @@ import { SecurityModule } from '../common/services/security.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { JWT_TTL_SEGUNDOS } from './jwt-ttl';
 import { jwtSecretObligatorio } from './jwt-secret';
+import { SesionesMovilesService } from './sesiones-moviles.service';
 
 @Module({
   imports: [
@@ -28,7 +29,7 @@ import { jwtSecretObligatorio } from './jwt-secret';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, GoogleStrategy, JwtStrategy],
+  providers: [AuthService, GoogleStrategy, JwtStrategy, SesionesMovilesService],
   exports: [AuthService],
 })
 export class AuthModule {

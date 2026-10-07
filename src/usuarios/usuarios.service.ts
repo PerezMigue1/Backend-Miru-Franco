@@ -29,6 +29,7 @@ import {
   hashesIguales,
   leerCodigo,
 } from './cambio-password';
+import { MAX_TRATAMIENTOS, normalizarTratamientos } from './tratamientos';
 
 /**
  * Select seguro y único para cualquier respuesta que exponga un Usuario al cliente.
@@ -49,6 +50,8 @@ const SELECT_USUARIO_SEGURO = {
   colorActual: true,
   productosUsados: true,
   alergias: true,
+  tratamientosQuimicos: true,
+  tratamientos: true,
   googleId: true,
   foto: true,
   aceptaAvisoPrivacidad: true,
@@ -107,7 +110,11 @@ export class UsuariosService {
     return digits ? `+${digits}` : '';
   }
 
-  async crearUsuario(createUsuarioDto: CreateUsuarioDto) {
+  /**
+   * POST /usuarios/registro. `permitirConfirmado` lo pone el controlador solo si quien registra tiene
+   * sesión de admin; en el registro público `confirmado` se ignora (la cuenta se activa con el OTP).
+   */
+  async crearUsuario(createUsuarioDto: CreateUsuarioDto, opciones: { permitirConfirmado?: boolean } = {}) {
     // ⚠️ IMPORTANTE: Sanitizar TODOS los datos recibidos antes de procesarlos
     // Esto previene XSS incluso si alguien envía peticiones directas (bypass del frontend)
     const sanitizedData = sanitizeRegisterData(createUsuarioDto);
@@ -154,6 +161,12 @@ export class UsuariosService {
     // Hashear la respuesta de seguridad
     const respuestaHasheada = await bcrypt.hash((preguntaSeguridad?.respuesta || '').trim(), 10);
 
+    // Tratamientos tal como los manda la app y la web (bandera y texto); misma regla que el perfil.
+    const tratamientos = normalizarTratamientos(
+      createUsuarioDto.perfilCapilar?.tratamientosQuimicos,
+      createUsuarioDto.perfilCapilar?.tratamientos,
+    );
+
     // Generar código OTP de 6 dígitos
     const codigoOTP = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
@@ -176,11 +189,13 @@ export class UsuariosService {
         colorActual: perfilCapilar?.colorActual,        // ✅ Ya sanitizado
         productosUsados: perfilCapilar?.productosUsados, // ✅ Ya sanitizado
         alergias: perfilCapilar?.alergias,              // ✅ Ya sanitizado
+        tratamientosQuimicos: tratamientos.tratamientosQuimicos ?? false,
+        tratamientos: tratamientos.tratamientos ?? null, // ✅ Sanitizado en normalizarTratamientos
         aceptaAvisoPrivacidad,
         recibePromociones: recibePromociones || false,
         codigoOTP,
         otpExpira,
-        confirmado: createUsuarioDto.confirmado ?? false,
+        confirmado: opciones.permitirConfirmado ? (createUsuarioDto.confirmado ?? false) : false,
         activo: true,
       },
     });
@@ -494,7 +509,9 @@ export class UsuariosService {
   async actualizarUsuario(id: string, updateData: any) {
     await this.validarFotoDelCliente(id, updateData.foto);
     // El consentimiento de datos sensibles solo se valida en el DTO: no es una columna.
-    const { email, password, ...camposActualizables } = sinConsentimiento(updateData);
+    const { email, password, tratamientosQuimicos, tratamientos, ...camposActualizables } = sinConsentimiento(updateData);
+    // Misma regla y sanitización de tratamientos que el perfil.
+    Object.assign(camposActualizables, normalizarTratamientos(tratamientosQuimicos, tratamientos));
 
     if (camposActualizables.fechaNacimiento !== undefined) {
       camposActualizables.fechaNacimiento = this.normalizarFechaNacimiento(
@@ -986,8 +1003,16 @@ export class UsuariosService {
         resetPasswordToken: null, // Marcar como usado
         resetPasswordExpires: null, // Limpiar expiración
         confirmado: true, // Verificar cuenta automáticamente (tiene acceso al email)
+        // Cierra todas las sesiones (mismo mecanismo que logoutAll): quien recupera la cuenta saca
+        // a quien la estuviera usando, también de la app móvil (su renovación compara contra esta fecha).
+        tokensRevocadosDesde: new Date(),
       },
     });
+    try {
+      await this.prisma.sesionMovil.updateMany({ where: { usuarioId: usuario.id, revocadaEn: null }, data: { revocadaEn: new Date() } });
+    } catch {
+      this.logger.warn(`No se pudieron marcar las sesiones móviles como revocadas (usuario ${usuario.id})`);
+    }
 
     return {
       success: true,
@@ -1134,6 +1159,13 @@ export class UsuariosService {
     if (cambio.count === 0) {
       throw codigoInvalido();
     }
+    // Sesiones de la app móvil: /auth/movil/renovar ya rechaza las anteriores a tokensRevocadosDesde;
+    // se marcan revocadas para que el registro quede claro. Si falla, el cambio sigue valiendo.
+    try {
+      await this.prisma.sesionMovil.updateMany({ where: { usuarioId: id, revocadaEn: null }, data: { revocadaEn: new Date() } });
+    } catch {
+      this.logger.warn(`No se pudieron marcar las sesiones móviles como revocadas (usuario ${id})`);
+    }
 
     try {
       await this.emailService.sendAvisoPasswordCambiadaEmail(usuario.email, fechaHoraMexico(new Date()));
@@ -1227,6 +1259,26 @@ export class UsuariosService {
       if (perfilCapilar.productosUsados !== undefined) actualizaciones.productosUsados = sanitizeInput(perfilCapilar.productosUsados);
       if (perfilCapilar.alergias !== undefined) actualizaciones.alergias = sanitizeInput(perfilCapilar.alergias);
     }
+
+    // Tratamientos: sueltos (validados por el DTO) o dentro de perfilCapilar (objeto libre: se valida aquí).
+    const pc = updateData.perfilCapilar ?? {};
+    if (pc.tratamientosQuimicos !== undefined && typeof pc.tratamientosQuimicos !== 'boolean') {
+      throw new BadRequestException('perfilCapilar.tratamientosQuimicos debe ser verdadero o falso');
+    }
+    if (
+      pc.tratamientos !== undefined &&
+      pc.tratamientos !== null &&
+      (typeof pc.tratamientos !== 'string' || pc.tratamientos.length > MAX_TRATAMIENTOS)
+    ) {
+      throw new BadRequestException(`perfilCapilar.tratamientos debe ser texto de hasta ${MAX_TRATAMIENTOS} caracteres`);
+    }
+    Object.assign(
+      actualizaciones,
+      normalizarTratamientos(
+        updateData.tratamientosQuimicos !== undefined ? updateData.tratamientosQuimicos : pc.tratamientosQuimicos,
+        updateData.tratamientos !== undefined ? updateData.tratamientos : pc.tratamientos,
+      ),
+    );
 
     const usuario = await this.prisma.usuario.update({
       where: { id },

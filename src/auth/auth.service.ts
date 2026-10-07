@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
@@ -11,6 +11,8 @@ import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { JWT_TTL_SEGUNDOS, VENTANA_REFRESH_SEGUNDOS } from './jwt-ttl';
 import { crearFirmaSubidaFoto } from './firma-cloudinary';
+import { SesionesMovilesService } from './sesiones-moviles.service';
+import { CANAL_MOVIL, esTokenMovil } from './sesion-movil';
 
 @Injectable()
 export class AuthService {
@@ -20,7 +22,13 @@ export class AuthService {
     private usuariosService: UsuariosService,
     private securityService: SecurityService,
     private configService: ConfigService,
+    private sesionesMoviles?: SesionesMovilesService,
   ) {}
+
+  /** Canal movil solo en modo Bearer y para clientas; en cualquier otro caso se ignora sin error. */
+  private emiteSesionMovil(canal: unknown, enCookie: boolean, rol: unknown): boolean {
+    return canal === CANAL_MOVIL && !enCookie && rol === 'cliente' && !!this.sesionesMoviles;
+  }
 
   async generateToken(user: any, includeActivity: boolean = true) {
     const now = Math.floor(Date.now() / 1000);
@@ -82,7 +90,10 @@ export class AuthService {
    * Intercambia un código temporal por un token JWT (Authorization Code Flow)
    * El código solo puede usarse una vez y expira en 5 minutos
    */
-  async intercambiarCodigoPorToken(codigo: string) {
+  async intercambiarCodigoPorToken(
+    codigo: string,
+    opciones: { canal?: unknown; dispositivo?: unknown; enCookie?: boolean } = {},
+  ) {
     // Buscar el código
     const codigoOAuth = await this.prisma.codigoOAuth.findUnique({
       where: { codigo },
@@ -123,6 +134,18 @@ export class AuthService {
       console.error('Error actualizando última actividad en OAuth:', error);
     }
 
+    // App móvil (Google): sesión de 30 días con renovación, solo para clientas en modo Bearer.
+    if (opciones.canal === CANAL_MOVIL && !opciones.enCookie && this.sesionesMoviles) {
+      const decoded: any = this.jwtService.decode(codigoOAuth.token);
+      const usuario = decoded?.id
+        ? await this.prisma.usuario.findUnique({ where: { id: decoded.id }, select: { id: true, email: true, rol: true, activo: true } })
+        : null;
+      if (usuario?.activo && this.emiteSesionMovil(opciones.canal, false, usuario.rol)) {
+        const movil = await this.sesionesMoviles.emitir({ id: usuario.id, email: usuario.email }, opciones.dispositivo);
+        return { success: true, ...movil };
+      }
+    }
+
     // Retornar el token
     return {
       success: true,
@@ -144,7 +167,7 @@ export class AuthService {
     });
   }
 
-  async logout(token: string, _logoutAll: boolean = false) {
+  async logout(token: string, _logoutAll: boolean = false, refreshToken?: string) {
     try {
       // Decodificar token para obtener información
       const decoded: any = this.jwtService.decode(token);
@@ -156,7 +179,17 @@ export class AuthService {
       // - Revocar todos los tokens del usuario (cierra sesión en todos los dispositivos)
       // - Cumple con el requisito de que cerrar sesión en un dispositivo invalida las demás sesiones
       await this.securityService.revokeAllUserTokens(decoded.id);
-      
+
+      // App móvil: además, la sesión de ese token de renovación (solo si es de la misma cuenta).
+      // Va después y aparte: si falla, el cierre global ya quedó hecho.
+      if (refreshToken && this.sesionesMoviles) {
+        try {
+          await this.sesionesMoviles.revocarPorToken(refreshToken, decoded.id);
+        } catch {
+          // revokeAllUserTokens ya dejó la sesión sin renovación posible (tokensRevocadosDesde).
+        }
+      }
+
       return {
         success: true,
         message: 'Todas las sesiones han sido cerradas correctamente',
@@ -181,6 +214,14 @@ export class AuthService {
   }
 
   async refreshToken(oldToken: string, user: any) {
+    // El token de la app móvil se renueva con su token de renovación, no aquí.
+    if (esTokenMovil(this.jwtService.decode(oldToken))) {
+      throw new BadRequestException({
+        message: 'La app renueva su sesión con POST /api/auth/movil/renovar.',
+        code: 'USA_RENOVAR_MOVIL',
+      });
+    }
+
     // Verificar que el token no esté revocado
     const isRevoked = await this.securityService.isTokenRevoked(oldToken);
     if (isRevoked) {
@@ -261,8 +302,25 @@ export class AuthService {
 
   // ===== Delegados: sesión y recuperación de contraseña =====
 
-  login(loginDto: LoginDto) {
-    return this.usuariosService.login(loginDto);
+  /**
+   * Con canal "movil" (Bearer y rol cliente) la respuesta lleva el token de acceso corto de la app,
+   * refreshToken y refreshExpiraEn. En cualquier otro caso, la sesión de siempre.
+   */
+  async login(loginDto: LoginDto, enCookie = false) {
+    const resultado = await this.usuariosService.login(loginDto);
+    if (!this.emiteSesionMovil(loginDto.canal, enCookie, resultado?.usuario?.rol)) {
+      return resultado;
+    }
+    const movil = await this.sesionesMoviles!.emitir(
+      { id: resultado.usuario.id, email: resultado.usuario.email },
+      loginDto.dispositivo,
+    );
+    return { ...resultado, ...movil };
+  }
+
+  /** POST /auth/movil/renovar */
+  renovarSesionMovil(refreshToken: string, ip?: string) {
+    return this.sesionesMoviles!.renovar(refreshToken, ip);
   }
 
   verificarOTP(verificarOtpDto: VerificarOtpDto) {

@@ -20,6 +20,7 @@ import { UsuariosService } from './usuarios.service';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { clearAuthCookie } from '../auth/auth-cookie';
+import { SesionOpcionalGuard } from '../auth/sesion-opcional.guard';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { OwnerOrAdminGuard } from '../common/guards/owner-or-admin.guard';
@@ -68,10 +69,15 @@ export class UsuariosController {
   }
 
   // ===== POST ROUTES (rutas específicas ANTES de rutas con parámetros) =====
+  /**
+   * Pública. `confirmado` solo se respeta si quien registra tiene sesión de admin (la pantalla de
+   * admin "nuevo usuario" usa esta ruta); en el registro público la cuenta nace sin confirmar.
+   */
   @Post('registro')
+  @UseGuards(SesionOpcionalGuard)
   @HttpCode(HttpStatus.CREATED)
-  async registro(@Body() createUsuarioDto: CreateUsuarioDto) {
-    return this.usuariosService.crearUsuario(createUsuarioDto);
+  async registro(@Body() createUsuarioDto: CreateUsuarioDto, @CurrentUser() usuario: any) {
+    return this.usuariosService.crearUsuario(createUsuarioDto, { permitirConfirmado: usuario?.rol === 'admin' });
   }
 
   // ===== ROUTES CON PARÁMETROS DINÁMICOS (al final) =====

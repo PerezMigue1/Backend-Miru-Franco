@@ -1,4 +1,5 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, IsDateString, ValidateNested, IsNotEmpty, MinLength } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsDateString, ValidateNested, IsNotEmpty, MinLength, MaxLength } from 'class-validator';
+import { MAX_TRATAMIENTOS } from '../tratamientos';
 import { Type } from 'class-transformer';
 import { IsStrongPassword } from '../../common/validators/password.validator';
 import { ConsentimientoDatosSensibles } from './consentimiento-datos-sensibles';
@@ -44,6 +45,7 @@ class PerfilCapilarDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(MAX_TRATAMIENTOS)
   tratamientos?: string;
 }
 
@@ -92,7 +94,10 @@ export class CreateUsuarioDto {
   @ConsentimientoDatosSensibles()
   consienteDatosSensibles?: boolean;
 
-  /** Cuenta confirmada (para usuarios creados por admin; omitir en registro público) */
+  /**
+   * Cuenta confirmada. Solo se respeta si quien registra tiene sesión de admin (pantalla de admin
+   * "nuevo usuario"); en el registro público se ignora y la cuenta nace sin confirmar hasta el OTP.
+   */
   @IsBoolean()
   @IsOptional()
   confirmado?: boolean;

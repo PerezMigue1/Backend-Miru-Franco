@@ -26,6 +26,7 @@ import { ReenviarCodigoDto } from '../usuarios/dto/reenviar-codigo.dto';
 import { CambiarPasswordDto } from '../usuarios/dto/cambiar-password.dto';
 import { CambiarPasswordPerfilDto } from '../usuarios/dto/cambiar-password-perfil.dto';
 import { SolicitarCodigoPasswordDto } from '../usuarios/dto/solicitar-codigo-password.dto';
+import { RenovarSesionMovilDto } from './dto/renovar-sesion-movil.dto';
 import { EnviarCodigoRecuperacionSmsDto } from '../usuarios/dto/enviar-codigo-recuperacion-sms.dto';
 import { VerificarCodigoRecuperacionSmsDto } from '../usuarios/dto/verificar-codigo-recuperacion-sms.dto';
 import { sanitizeForLogOutput } from '../common/utils/security.util';
@@ -99,7 +100,7 @@ export class AuthController {
   async logout(
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
-    @Body() body?: { logoutAll?: boolean },
+    @Body() body?: { logoutAll?: boolean; refreshToken?: string },
   ) {
     // rawToken lo fija JwtStrategy con el token que autenticó la petición (Bearer o cookie);
     // leer solo el header Authorization dejaría sin revocar las sesiones con cookie.
@@ -109,7 +110,9 @@ export class AuthController {
       return { success: true, message: 'Sesión cerrada' };
     }
     const logoutAll = body?.logoutAll || false;
-    return this.authService.logout(token, logoutAll);
+    // App móvil: su token de renovación, para cerrar también esa sesión.
+    const refreshToken = typeof body?.refreshToken === 'string' && body.refreshToken ? body.refreshToken : undefined;
+    return this.authService.logout(token, logoutAll, refreshToken);
   }
 
   @Post('logout-all')
@@ -201,8 +204,20 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const resultado = await this.authService.login(loginDto);
-    return entregarSesion(res, resultado, pideSesionEnCookie(req));
+    const enCookie = pideSesionEnCookie(req);
+    const resultado = await this.authService.login(loginDto, enCookie);
+    return entregarSesion(res, resultado, enCookie);
+  }
+
+  /**
+   * App móvil de clientas: con el token de renovación entrega un token de acceso nuevo (15 min) y
+   * rota el de renovación. Pública: el token de acceso puede estar vencido.
+   */
+  // Límites: 10/min por sesión y 120/min por IP solo con tokens inexistentes (ver auth/limite-renovacion.ts).
+  @Post('movil/renovar')
+  @HttpCode(HttpStatus.OK)
+  async renovarSesionMovil(@Body() dto: RenovarSesionMovilDto, @Req() req: Request) {
+    return this.authService.renovarSesionMovil(dto.refreshToken, req.ip);
   }
 
   // ===== VERIFICACIÓN DE CUENTA =====
@@ -281,15 +296,20 @@ export class AuthController {
   @Post('exchange-code')
   @HttpCode(HttpStatus.OK)
   async exchangeCode(
-    @Body() body: { code: string },
+    @Body() body: { code: string; canal?: string; dispositivo?: string },
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
     if (!body.code) {
       throw new UnauthorizedException('Código requerido');
     }
-    const resultado = await this.authService.intercambiarCodigoPorToken(body.code);
-    return entregarSesion(res, resultado, pideSesionEnCookie(req));
+    const enCookie = pideSesionEnCookie(req);
+    const resultado = await this.authService.intercambiarCodigoPorToken(body.code, {
+      canal: body.canal,
+      dispositivo: body.dispositivo,
+      enCookie,
+    });
+    return entregarSesion(res, resultado, enCookie);
   }
 }
 

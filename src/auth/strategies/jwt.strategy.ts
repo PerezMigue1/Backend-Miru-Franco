@@ -7,6 +7,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Request } from 'express';
 import { leerTokenDeCookie } from '../auth-cookie';
 import { jwtSecretObligatorio } from '../jwt-secret';
+import { esTokenMovil } from '../sesion-movil';
 
 // Extender ExtractJwt para obtener el token raw.
 // Bearer (integraciones/scripts) tiene prioridad; si no hay, se usa la cookie httpOnly del
@@ -71,17 +72,37 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
+    // App móvil (canal movil): su token dura 15 min y la sesión la controla /auth/movil/renovar
+    // (30 días sin uso). No aplica el corte de 15 min por inactividad ni escribe ultimaActividad,
+    // que es por usuario: escribirla alargaría la sesión de la web de la misma cuenta.
+    const esMovil = esTokenMovil(payload);
+    if (esMovil) {
+      // La sesión de la app sigue viva si su familia tiene una fila sin revocar: el logout, la
+      // detección de reuso y logoutAll cortan el token de acceso al momento, sin esperar sus 15 min.
+      // (Una rotación normal deja viva a la sucesora, así que el token anterior sigue sirviendo.)
+      const familia = typeof payload.fam === 'string' ? payload.fam : null;
+      const viva = familia
+        ? await this.prisma.sesionMovil.findFirst({
+            where: { familiaId: familia, usuarioId: payload.id, revocadaEn: null },
+            select: { id: true },
+          })
+        : null;
+      if (!viva) {
+        throw new UnauthorizedException('Sesión cerrada. Por favor inicia sesión nuevamente.');
+      }
+    }
+
     // Verificar expiración y actividad contra la base de datos
     // Esto es más confiable que solo verificar el token JWT (que es inmutable)
-    const isInactive = await this.securityService.isUserInactive(payload.id, 15);
+    const isInactive = esMovil ? false : await this.securityService.isUserInactive(payload.id, 15);
 
     if (isInactive) {
       throw new UnauthorizedException('Sesión expirada por inactividad. Por favor inicia sesión nuevamente.');
     }
-    
+
     // Actualizar última actividad en la base de datos (en background, no bloquear la respuesta)
     // Usar setImmediate para no bloquear la respuesta
-    if (this.shouldWriteLastActivity(payload.id)) {
+    if (!esMovil && this.shouldWriteLastActivity(payload.id)) {
       setImmediate(async () => {
         try {
           await this.securityService.updateLastActivity(payload.id);
@@ -97,6 +118,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       where: { id: payload.id },
       select: { rol: true },
     });
+
+    // El token movil solo existe para clientas: si el rol cambió, no hereda permisos de personal.
+    if (esMovil && usuario?.rol !== 'cliente') {
+      throw new UnauthorizedException('Sesión cerrada. Por favor inicia sesión nuevamente.');
+    }
 
     return {
       id: payload.id,
