@@ -27,3 +27,9 @@ export const VENTANA_REFRESH_SEGUNDOS = 15 * 60;
  * mantiene la sesión hasta 30 días sin uso. Corto a propósito: es lo que sirve un token robado.
  */
 export const JWT_TTL_MOVIL_SEGUNDOS = 15 * 60;
+
+/**
+ * `state` firmado del inicio de sesión con Google desde la app (src/auth/google-app.ts): 10 min para
+ * completar el login en Google. No es un token de sesión: va firmado con otra llave y otro payload.
+ */
+export const JWT_TTL_STATE_GOOGLE_SEGUNDOS = 10 * 60;

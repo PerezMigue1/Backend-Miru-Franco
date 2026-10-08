@@ -69,8 +69,8 @@ describe('Vigencia del JWT', () => {
     const distintos = archivos.flatMap((ruta) =>
       readFileSync(ruta, 'utf8')
         .split('\n')
-        // Solo vigencias de jwt-ttl.ts: la común y la del token corto de la app móvil.
-        .filter((linea) => /\bexpiresIn\s*:/.test(linea) && !/\bJWT_TTL_(MOVIL_)?SEGUNDOS\b/.test(linea))
+        // Solo vigencias de jwt-ttl.ts: la común, la del token corto de la app móvil y la del state de Google.
+        .filter((linea) => /\bexpiresIn\s*:/.test(linea) && !/\bJWT_TTL_(MOVIL_|STATE_GOOGLE_)?SEGUNDOS\b/.test(linea))
         .map((linea) => `${ruta}: ${linea.trim()}`),
     );
     expect(distintos).toEqual([]);

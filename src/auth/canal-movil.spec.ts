@@ -30,6 +30,7 @@ function authCon(rol: string) {
     codigoOAuth: {
       findUnique: jest.fn().mockResolvedValue({ codigo: 'c', usado: false, expiraEn: new Date(Date.now() + 60_000), token: jwt.sign({ id: 'u-1', email: 'p@example.com' }) }),
       update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
   };
   const security = {

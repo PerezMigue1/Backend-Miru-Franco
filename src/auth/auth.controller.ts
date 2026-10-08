@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
@@ -27,6 +28,7 @@ import { CambiarPasswordDto } from '../usuarios/dto/cambiar-password.dto';
 import { CambiarPasswordPerfilDto } from '../usuarios/dto/cambiar-password-perfil.dto';
 import { SolicitarCodigoPasswordDto } from '../usuarios/dto/solicitar-codigo-password.dto';
 import { RenovarSesionMovilDto } from './dto/renovar-sesion-movil.dto';
+import { DEEP_LINK_APP, esCodeVerifier, leerStateApp } from './google-app';
 import { EnviarCodigoRecuperacionSmsDto } from '../usuarios/dto/enviar-codigo-recuperacion-sms.dto';
 import { VerificarCodigoRecuperacionSmsDto } from '../usuarios/dto/verificar-codigo-recuperacion-sms.dto';
 import { sanitizeForLogOutput } from '../common/utils/security.util';
@@ -57,6 +59,22 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(GoogleAuthGuard)
   async googleAuthRedirect(@Req() req, @Res() res: Response) {
+    // State firmado por nosotros = login iniciado desde la app; sin él, flujo web de siempre
+    const app = leerStateApp(req.query?.state);
+    if (app) {
+      try {
+        if (!req.user) {
+          return res.redirect(`${DEEP_LINK_APP}?error=authentication_failed`);
+        }
+        const result = await this.authService.googleLogin(req.user, { codeChallenge: app.codeChallenge });
+        console.log('🔍 Redirigiendo a la app (OAuth callback)');
+        return res.redirect(result.redirect);
+      } catch {
+        // Sin mensajes internos hacia la app
+        return res.redirect(`${DEEP_LINK_APP}?error=authentication_failed`);
+      }
+    }
+
     try {
       console.log('🔍 Google OAuth callback recibido');
       console.log('🔍 Usuario del request:', req.user ? req.user.id : 'NO HAY USUARIO');
@@ -296,18 +314,27 @@ export class AuthController {
   @Post('exchange-code')
   @HttpCode(HttpStatus.OK)
   async exchangeCode(
-    @Body() body: { code: string; canal?: string; dispositivo?: string },
+    @Body() body: { code: string; canal?: string; dispositivo?: string; code_verifier?: string },
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
     if (!body.code) {
       throw new UnauthorizedException('Código requerido');
     }
+    // Sin DTO: el cuerpo no pasa por ValidationPipe, así que el tipo se comprueba aquí.
+    if (typeof body.code !== 'string') {
+      throw new UnauthorizedException('Código requerido');
+    }
+    // PKCE (app móvil): si viene el verifier, debe cumplir RFC 7636 antes de intentar el canje.
+    if (body.code_verifier !== undefined && !esCodeVerifier(body.code_verifier)) {
+      throw new BadRequestException('code_verifier inválido: debe tener de 43 a 128 caracteres [A-Z a-z 0-9 - . _ ~].');
+    }
     const enCookie = pideSesionEnCookie(req);
     const resultado = await this.authService.intercambiarCodigoPorToken(body.code, {
       canal: body.canal,
       dispositivo: body.dispositivo,
       enCookie,
+      codeVerifier: body.code_verifier,
     });
     return entregarSesion(res, resultado, enCookie);
   }

@@ -13,6 +13,7 @@ import { JWT_TTL_SEGUNDOS, VENTANA_REFRESH_SEGUNDOS } from './jwt-ttl';
 import { crearFirmaSubidaFoto } from './firma-cloudinary';
 import { SesionesMovilesService } from './sesiones-moviles.service';
 import { CANAL_MOVIL, esTokenMovil } from './sesion-movil';
+import { DEEP_LINK_APP, challengeDeVerifier, codigoGuardadoApp, esCodeVerifier } from './google-app';
 
 @Injectable()
 export class AuthService {
@@ -46,7 +47,7 @@ export class AuthService {
     return this.jwtService.sign(payload, { expiresIn: JWT_TTL_SEGUNDOS }); // misma vigencia que el login
   }
 
-  async googleLogin(user: any) {
+  async googleLogin(user: any, opciones: { codeChallenge?: string } = {}) {
     if (!user || !user.id || !user.email) {
       throw new Error('Usuario inválido: falta id o email');
     }
@@ -60,14 +61,19 @@ export class AuthService {
       
       // Almacenar código con token asociado (expira en 5 minutos)
       const expiraEn = new Date(Date.now() + 5 * 60 * 1000); // 5 minutos
+      // App: el código se guarda unido a su challenge (PKCE); a la app solo va `codigo`
       await this.prisma.codigoOAuth.create({
         data: {
-          codigo,
+          codigo: opciones.codeChallenge ? codigoGuardadoApp(codigo, opciones.codeChallenge) : codigo,
           token,
           expiraEn,
           usado: false,
         },
       });
+
+      if (opciones.codeChallenge) {
+        return { redirect: `${DEEP_LINK_APP}?code=${codigo}` };
+      }
 
       const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
       
@@ -92,11 +98,29 @@ export class AuthService {
    */
   async intercambiarCodigoPorToken(
     codigo: string,
-    opciones: { canal?: unknown; dispositivo?: unknown; enCookie?: boolean } = {},
+    opciones: { canal?: unknown; dispositivo?: unknown; enCookie?: boolean; codeVerifier?: string } = {},
   ) {
+    // Llave de búsqueda. El código de la app va en la base como `codigo.challenge` (PKCE): solo se
+    // encuentra con el verifier correcto. Un verifier incorrecto da otra llave, que no existe.
+    let clave: string;
+    if (opciones.codeVerifier !== undefined) {
+      // Ya lo valida el controller; se repite por defensa.
+      if (!esCodeVerifier(opciones.codeVerifier)) {
+        throw new UnauthorizedException('Código inválido');
+      }
+      clave = codigoGuardadoApp(codigo, challengeDeVerifier(opciones.codeVerifier));
+    } else {
+      // Sin verifier no se acepta una llave con punto: así un código de app no se canjea
+      // presentando `codigo.challenge` directamente.
+      if (codigo.includes('.')) {
+        throw new UnauthorizedException('Código inválido');
+      }
+      clave = codigo;
+    }
+
     // Buscar el código
     const codigoOAuth = await this.prisma.codigoOAuth.findUnique({
-      where: { codigo },
+      where: { codigo: clave },
     });
 
     if (!codigoOAuth) {
@@ -112,16 +136,20 @@ export class AuthService {
     if (codigoOAuth.expiraEn < new Date()) {
       // Limpiar código expirado
       await this.prisma.codigoOAuth.delete({
-        where: { codigo },
+        where: { codigo: clave },
       });
       throw new UnauthorizedException('Código expirado');
     }
 
-    // Marcar como usado (single-use)
-    await this.prisma.codigoOAuth.update({
-      where: { codigo },
+    // Marcar como usado (single-use). Update condicional: si dos canjes llegan a la vez,
+    // solo uno encuentra `usado: false`; el otro no marca nada y se rechaza.
+    const marcado = await this.prisma.codigoOAuth.updateMany({
+      where: { codigo: clave, usado: false },
       data: { usado: true },
     });
+    if (marcado.count === 0) {
+      throw new UnauthorizedException('Código ya utilizado');
+    }
 
     // Actualizar última actividad del usuario asociado al token
     try {
