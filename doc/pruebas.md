@@ -1,6 +1,6 @@
 ✅ Validación de datos de entrada Postman:
 
-POST https://miru-franco.onrender.com/api/usuarios/registro
+POST https://api.mirufranco.com/api/usuarios/registro
 {
     "success": false,
     "statusCode": 404,
@@ -9,7 +9,7 @@ POST https://miru-franco.onrender.com/api/usuarios/registro
     "message": "Cannot POST /api/usuarios/registro"
 }
 
-POST https://miru-franco.onrender.com/api/usuarios/registrar
+POST https://api.mirufranco.com/api/usuarios/registrar
 {
     "success": false,
     "statusCode": 400,

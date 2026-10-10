@@ -11,8 +11,8 @@ export class EnviosService {
     private readonly access: EcommerceAccessService,
   ) {}
 
-  async listarPorPedido(pedidoId: number, solicitanteId: string) {
-    await this.access.assertPedido(solicitanteId, pedidoId);
+  async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
+    await this.access.assertPedido(solicitanteId, pedidoId, propios);
     const data = await this.prisma.envio.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'desc' },
@@ -20,10 +20,10 @@ export class EnviosService {
     return { success: true, count: data.length, data };
   }
 
-  async obtenerPorId(id: number, solicitanteId: string) {
+  async obtenerPorId(id: number, solicitanteId: string, propios = false) {
     const row = await this.prisma.envio.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Envío no encontrado');
-    await this.access.assertPedido(solicitanteId, row.pedidoId);
+    await this.access.assertPedido(solicitanteId, row.pedidoId, propios);
     return { success: true, data: row };
   }
 

@@ -1,8 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { CreateFacturaDto } from './dto/create-factura.dto';
 import { UpdateFacturaDto } from './dto/update-factura.dto';
+
+/** Leer cualquier factura (también las notas de mostrador sin pedido). */
+const PERMISOS_LECTURA_CAJA = ['caja:lectura', 'caja:escritura'];
+/** Registrar documentos fiscales, cambiarlos o borrarlos. */
+const PERMISO_ESCRITURA_CAJA = 'caja:escritura';
 
 @Injectable()
 export class FacturasService {
@@ -11,8 +16,8 @@ export class FacturasService {
     private readonly access: EcommerceAccessService,
   ) {}
 
-  async listarPorPedido(pedidoId: number, solicitanteId: string) {
-    await this.access.assertPedido(solicitanteId, pedidoId);
+  async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
+    await this.access.assertPedido(solicitanteId, pedidoId, propios);
     const data = await this.prisma.factura.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'desc' },
@@ -31,15 +36,23 @@ export class FacturasService {
   async obtenerPorId(id: number, solicitanteId: string) {
     const row = await this.prisma.factura.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Factura no encontrada');
-    if (row.pedidoId != null) {
-      await this.access.assertPedido(solicitanteId, row.pedidoId);
+    // La dueña del pedido ve su factura; todo lo demás (incluidas las notas sin pedido) es de caja.
+    // Sin permiso se responde igual que si no existiera, para no revelar qué ids existen.
+    const esDuena =
+      row.pedidoId != null &&
+      (await this.access.getPedidoUsuarioId(row.pedidoId)) === solicitanteId;
+    if (!esDuena && !(await this.access.tienePermiso(solicitanteId, ...PERMISOS_LECTURA_CAJA))) {
+      throw new NotFoundException('Factura no encontrada');
     }
     return { success: true, data: row };
   }
 
   async crear(solicitanteId: string, dto: CreateFacturaDto) {
+    if (!(await this.access.tienePermiso(solicitanteId, PERMISO_ESCRITURA_CAJA))) {
+      return this.crearSolicitud(solicitanteId, dto);
+    }
     if (dto.pedidoId != null) {
-      await this.access.assertPedido(solicitanteId, dto.pedidoId);
+      await this.access.getPedidoUsuarioId(dto.pedidoId);
     }
 
     // Regla de negocio: un CFDI debe traer al menos folio o UUID fiscal (el sistema nunca
@@ -71,12 +84,55 @@ export class FacturasService {
     return { success: true, data };
   }
 
+  /**
+   * Quien no maneja caja (la clienta) solo SOLICITA un CFDI de un pedido suyo: nace 'solicitada' y los
+   * datos fiscales (folio, UUID, serie, PDF, XML) y el monto los captura caja al timbrarla.
+   * Solo se guardan el RFC y la razón social que ella aporta.
+   */
+  private async crearSolicitud(solicitanteId: string, dto: CreateFacturaDto) {
+    if (dto.tipo !== 'cfdi') {
+      throw new ForbiddenException('Solo caja registra notas de venta');
+    }
+    if (dto.pedidoId == null) {
+      throw new ForbiddenException('Para solicitar una factura indica uno de tus pedidos');
+    }
+    const { usuarioIdPedido } = await this.access.assertPedido(solicitanteId, dto.pedidoId);
+    if (usuarioIdPedido !== solicitanteId) {
+      throw new ForbiddenException('No tienes permiso para acceder a este recurso');
+    }
+
+    const data = await this.prisma.factura.create({
+      data: {
+        tipo: 'cfdi',
+        pedidoId: dto.pedidoId,
+        creadoPorId: solicitanteId,
+        clienteNombre: null,
+        concepto: null,
+        monto: null,
+        uuidFiscal: null,
+        folio: null,
+        serie: null,
+        rfc: dto.rfc ?? null,
+        razonSocial: dto.razonSocial ?? null,
+        xmlUrl: null,
+        pdfUrl: null,
+        estado: 'solicitada',
+      },
+    });
+    return { success: true, data };
+  }
+
+  /** Solo caja (caja:escritura). El controller ya lo exige con @Permisos; aquí se repite por si se llama desde otro lado. */
+  private async assertEscrituraCaja(solicitanteId: string) {
+    if (!(await this.access.tienePermiso(solicitanteId, PERMISO_ESCRITURA_CAJA))) {
+      throw new ForbiddenException('No tienes permiso para acceder a este recurso');
+    }
+  }
+
   async actualizar(id: number, solicitanteId: string, dto: UpdateFacturaDto) {
+    await this.assertEscrituraCaja(solicitanteId);
     const row = await this.prisma.factura.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Factura no encontrada');
-    if (row.pedidoId != null) {
-      await this.access.assertPedido(solicitanteId, row.pedidoId);
-    }
 
     // Regla de negocio: una solicitud (estado 'solicitada') puede crearse sin folio/UUID,
     // pero al salir de ese estado (timbrarla/registrarla) un CFDI ya debe traer datos fiscales
@@ -112,11 +168,9 @@ export class FacturasService {
   }
 
   async eliminar(id: number, solicitanteId: string) {
+    await this.assertEscrituraCaja(solicitanteId);
     const row = await this.prisma.factura.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Factura no encontrada');
-    if (row.pedidoId != null) {
-      await this.access.assertPedido(solicitanteId, row.pedidoId);
-    }
     await this.prisma.factura.delete({ where: { id } });
     return { success: true, message: 'Factura eliminada' };
   }

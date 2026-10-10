@@ -20,7 +20,7 @@ import { CreateCorteDto } from './dto/create-corte.dto';
 import { ListCortesDto } from './dto/list-cortes.dto';
 
 /** Método de cobro de un pedido en el salón → total del corte donde se suma. */
-const CAJA_POR_METODO_COBRO: Record<string, 'efectivo' | 'tarjeta' | 'transferencia'> = {
+export const CAJA_POR_METODO_COBRO: Record<string, 'efectivo' | 'tarjeta' | 'transferencia'> = {
   efectivo: 'efectivo',
   tarjeta_terminal: 'tarjeta',
   transferencia: 'transferencia',
@@ -75,6 +75,22 @@ export class PosService {
           },
         },
       },
+    } as const;
+  }
+
+  /** Salida de efectivo tal como se muestra en el corte: concepto, monto, motivo y de qué cita, pedido o devolución viene. */
+  private seleccionSalida() {
+    return {
+      id: true,
+      concepto: true,
+      monto: true,
+      motivo: true,
+      creadoEn: true,
+      pagoId: true,
+      devolucionId: true,
+      pago: { select: { citaId: true, pedidoId: true } },
+      devolucion: { select: { pedidoId: true } },
+      registradoPor: { select: { id: true, nombre: true } },
     } as const;
   }
 
@@ -466,12 +482,23 @@ export class PosService {
    * en el corte igual que una venta local, cada uno en su método. Los pagos en línea (Mercado Pago) no entran:
    * ese dinero llega a la cuenta de Mercado Pago, no a la caja. Los pagos anteriores sin cobrado_por_id tampoco.
    */
-  private async cobrosDelSalon(filtro: { cobradoPorId?: string; pagadoEn?: { gte?: Date; lte?: Date }; soloSinCorte?: boolean }) {
+  private async cobrosDelSalon(filtro: {
+    cobradoPorId?: string;
+    pagadoEn?: { gte?: Date; lte?: Date };
+    soloSinCorte?: boolean;
+    /** Corte: también los cobros reembolsados con salida de caja (entraron y salieron; el neto es 0). */
+    conReembolsadosConSalida?: boolean;
+  }) {
     const cobros = await this.prisma.pago.findMany({
       where: {
         // Anticipos de citas en revisión también: si la clienta canceló, el efectivo cobrado sigue en caja
         // hasta que el personal decide reembolsarlo o retenerlo. Los cobros de pedidos, solo aprobados.
-        OR: [{ estado: 'aprobado' }, { estado: 'en_revision', citaId: { not: null } }],
+        // Los reembolsados viejos (sin salida registrada) no cuentan: no hay salida que los compense.
+        OR: [
+          { estado: 'aprobado' },
+          { estado: 'en_revision', citaId: { not: null } },
+          ...(filtro.conReembolsadosConSalida ? [{ estado: 'reembolsado' as const, salidaCaja: { isNot: null } }] : []),
+        ],
         metodo: { in: Object.keys(CAJA_POR_METODO_COBRO) },
         cobradoPorId: filtro.cobradoPorId ?? { not: null },
         ...(filtro.pagadoEn && { pagadoEn: filtro.pagadoEn }),
@@ -550,7 +577,10 @@ export class PosService {
         skip,
         take: limit,
         orderBy: { fecha: 'desc' },
-        include: { cajero: { select: { id: true, nombre: true, rol: true } } },
+        include: {
+          cajero: { select: { id: true, nombre: true, rol: true } },
+          movimientos: { select: this.seleccionSalida(), orderBy: { creadoEn: 'asc' } },
+        },
       }),
     ]);
 
@@ -570,6 +600,7 @@ export class PosService {
       include: {
         cajero: { select: { id: true, nombre: true, rol: true } },
         ventas: { include: this.incluirVentaRelaciones() },
+        movimientos: { select: this.seleccionSalida(), orderBy: { creadoEn: 'asc' } },
       },
     });
     if (!corte) throw new NotFoundException(`Corte de caja ${id} no encontrado`);
@@ -598,7 +629,20 @@ export class PosService {
     });
 
     // Cobros de pedidos en el salón de esta cajera ese día, todavía sin corte.
-    const cobros = await this.cobrosDelSalon({ cobradoPorId: cajeroId, pagadoEn: { gte: inicioDia, lte: finDia }, soloSinCorte: true });
+    const cobros = await this.cobrosDelSalon({
+      cobradoPorId: cajeroId,
+      pagadoEn: { gte: inicioDia, lte: finDia },
+      soloSinCorte: true,
+      conReembolsadosConSalida: true,
+    });
+
+    // Salidas de efectivo (reembolsos) que hizo esta cajera hasta el fin del día, todavía sin corte. Sin límite
+    // inferior: el reembolso de un cobro de un día ya cortado se descuenta en este corte.
+    const salidas = await this.prisma.movimientoCaja.findMany({
+      where: { registradoPorId: cajeroId, corteId: null, creadoEn: { lte: finDia } },
+      select: { id: true, monto: true },
+    });
+    const totalSalidas = salidas.reduce((acc, m) => acc.add(m.monto), new Decimal(0));
 
     const totalVentas        = ventas.reduce((acc, v) => acc.add(v.total), new Decimal(0)).add(cobros.total);
     // Cada venta suma a su método; una mixta reparte su total según los montos que se registraron al cobrar.
@@ -613,8 +657,9 @@ export class PosService {
     const totalTransferencia = porMetodo('transferencia', 'montoTransferencia').add(cobros.transferencia);
     const efectivoFinal      = new Decimal(dto.efectivoFinal);
     const efectivoInicial    = new Decimal(dto.efectivoInicial);
-    // diferencia = efectivo_final - (efectivo_inicial + total_ventas_efectivo)
-    const diferencia = efectivoFinal.sub(efectivoInicial.add(totalEfectivo));
+    // efectivo esperado = efectivo inicial + efectivo cobrado − salidas; diferencia = efectivo final − esperado
+    const efectivoEsperado = efectivoInicial.add(totalEfectivo).sub(totalSalidas);
+    const diferencia = efectivoFinal.sub(efectivoEsperado);
 
     const notas = dto.notas ? sanitizeInput(dto.notas) : null;
 
@@ -628,6 +673,7 @@ export class PosService {
           totalEfectivo,
           totalTarjeta,
           totalTransferencia,
+          totalSalidas,
           diferencia,
           notas,
           cajeroId,
@@ -651,9 +697,31 @@ export class PosService {
         }
       }
 
-      return nuevo;
+      if (salidas.length > 0) {
+        // Igual que los cobros: una salida entra a un solo corte.
+        const ligadas = await tx.movimientoCaja.updateMany({
+          where: { id: { in: salidas.map((m) => m.id) }, corteId: null },
+          data: { corteId: nuevo.id },
+        });
+        if (ligadas.count !== salidas.length) {
+          throw new ConflictException('Algunas salidas de efectivo ya entraron en otro corte. Vuelve a registrar el corte.');
+        }
+      }
+
+      const movimientos = salidas.length > 0
+        ? await tx.movimientoCaja.findMany({ where: { corteId: nuevo.id }, select: this.seleccionSalida(), orderBy: { creadoEn: 'asc' } })
+        : [];
+      return { ...nuevo, movimientos };
     });
 
-    return { success: true, data: { ...corte, ventasVinculadas: ventas.length, cobrosVinculados: cobros.ids.length } };
+    return {
+      success: true,
+      data: {
+        ...corte,
+        efectivoEsperado,
+        ventasVinculadas: ventas.length,
+        cobrosVinculados: cobros.ids.length,
+      },
+    };
   }
 }

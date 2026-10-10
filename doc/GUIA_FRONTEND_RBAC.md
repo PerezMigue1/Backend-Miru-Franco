@@ -178,7 +178,7 @@ Si usas **Axios**, puedes centralizar el manejo de errores `403` en la instancia
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'https://miru-franco.onrender.com/api',
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'https://api.mirufranco.com/api',
   headers: {
     'Content-Type': 'application/json',
   },

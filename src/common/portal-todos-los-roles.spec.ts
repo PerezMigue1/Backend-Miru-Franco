@@ -49,13 +49,15 @@ function montarCitas(citas: any[]) {
     servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true })) },
     cita: {
       findFirst: jest.fn(async () => null),
-      findUnique: jest.fn(async ({ where }: any) => citas.find((c) => c.id === where.id) ?? null),
+      findUnique: jest.fn(async ({ where }: any) => { const c = citas.find((x) => x.id === where.id); return c ? { ...c, servicio: { nombre: 'Corte' } } : null; }),
       count: jest.fn(async () => 0),
       findMany: jest.fn(async () => []),
       create: jest.fn(async ({ data }: any) => { const c = { id: 900, ...data, servicio: { nombre: 'Corte' } }; creadas.push(c); return c; }),
       update: jest.fn(async ({ where, data }: any) => ({ ...citas.find((c) => c.id === where.id), ...data, servicio: { nombre: 'Corte' } })),
+      updateMany: jest.fn(async ({ where }: any) => ({ count: citas.some((c) => c.id === where.id) ? 1 : 0 })),
     },
-    $transaction: jest.fn(async (ops: any[]) => Promise.all(ops)),
+    $transaction: jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg))),
+    $executeRaw: jest.fn(async () => 1),
   };
   const servicio = new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any);
   return { servicio, prisma, creadas };

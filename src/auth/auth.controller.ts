@@ -18,6 +18,7 @@ import { clearAuthCookie, entregarSesion, pideSesionEnCookie } from './auth-cook
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
+import { SesionOpcionalGuard } from './sesion-opcional.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VerificarCorreoDto } from '../usuarios/dto/verificar-correo.dto';
 import { UpdateUsuarioDto } from '../usuarios/dto/update-usuario.dto';
@@ -106,10 +107,17 @@ export class AuthController {
     }
   }
 
+  /**
+   * Anónimo: siempre la misma respuesta (no revela si el correo tiene cuenta). Solo con sesión de
+   * admin (pantalla admin/usuarios-roles/nuevo) consulta de verdad.
+   */
   @Post('verificar-correo')
   @HttpCode(HttpStatus.OK)
-  async verificarCorreo(@Body() verificarCorreoDto: VerificarCorreoDto) {
-    return this.authService.verificarCorreoExistente(verificarCorreoDto.correo);
+  @UseGuards(new RateLimitGuard(10, 60000), SesionOpcionalGuard)
+  async verificarCorreo(@Body() verificarCorreoDto: VerificarCorreoDto, @CurrentUser() usuario: any) {
+    return this.authService.verificarCorreoExistente(verificarCorreoDto.correo, {
+      consultaReal: usuario?.rol === 'admin',
+    });
   }
 
   @Post('logout')

@@ -4,6 +4,7 @@ import { PermisosGuard } from '../common/guards/permisos.guard';
 import { CitasController } from './citas.controller';
 import { CitasService } from './citas.service';
 import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
+import { PorCobrarDto } from './dto/por-cobrar.dto';
 
 const AHORA = new Date('2026-10-04T17:00:00.000Z');
 const minutos = (m: number) => new Date(AHORA.getTime() + m * 60_000);
@@ -19,6 +20,8 @@ function montar(opciones: { citas?: CitaMem[]; asignados?: { servicioId: number;
     { id: 'bec-1', nombre: 'Becaria', rol: 'becario', activo: true, foto: null },
   ];
   const creadas: any[] = [];
+  const porCobrar = (where: any) =>
+    citas.filter((c) => c.estado === 'completada' && c.horaCheckOut && !c.ventaItem && (where.id === undefined || c.id === where.id));
   const prisma: any = {
     usuario: {
       findUnique: jest.fn(async ({ where }: any) => personal.find((u) => u.id === where.id) ?? (where.id === 'cli-1' ? { id: 'cli-1', activo: true, rol: 'cliente' } : null)),
@@ -29,11 +32,15 @@ function montar(opciones: { citas?: CitaMem[]; asignados?: { servicioId: number;
     cita: {
       findFirst: jest.fn(async ({ where }: any) =>
         citas.find((c) => c.especialistaId === where.especialistaId && where.estado.in.includes(c.estado) && c.fechaHoraInicio < where.fechaHoraInicio.lt && c.fechaHoraFin > where.fechaHoraFin.gt) ?? null),
-      findMany: jest.fn(async ({ where }: any) => {
-        if (where.horaCheckOut) return citas.filter((c) => c.estado === 'completada' && c.horaCheckOut && !c.ventaItem);
-        return citas.filter((c) => where.especialistaId.in.includes(c.especialistaId) && where.OR.some((o: any) =>
-          o.estado === c.estado || (o.estado?.in?.includes(c.estado) && c.fechaHoraInicio < o.fechaHoraInicio.lt && c.fechaHoraFin > o.fechaHoraFin.gt)));
+      findMany: jest.fn(async ({ where, skip, take }: any) => {
+        if (where.horaCheckOut) return porCobrar(where).slice(skip ?? 0, (skip ?? 0) + (take ?? Infinity));
+        return citas.filter((c) => where.especialistaId.in.includes(c.especialistaId) && where.OR.some((o: any) => {
+          const enRango = (o.fechaHoraInicio?.gte === undefined || c.fechaHoraInicio >= o.fechaHoraInicio.gte) && (o.fechaHoraInicio?.lte === undefined || c.fechaHoraInicio <= o.fechaHoraInicio.lte);
+          if (o.estado === c.estado) return enRango;
+          return o.estado?.in?.includes(c.estado) && c.fechaHoraInicio < o.fechaHoraInicio.lt && c.fechaHoraFin > o.fechaHoraFin.gt;
+        }));
       }),
+      count: jest.fn(async ({ where }: any) => porCobrar(where).length),
       findUnique: jest.fn(async ({ where }: any) => citas.find((c) => c.id === where.id) ?? null),
       create: jest.fn(async ({ data }: any) => {
         const c = { id: 100 + creadas.length, ...data, servicio: { nombre: 'Nanoplastia' } };
@@ -42,7 +49,9 @@ function montar(opciones: { citas?: CitaMem[]; asignados?: { servicioId: number;
       }),
       update: jest.fn(async ({ where, data }: any) => ({ ...citas.find((c) => c.id === where.id), ...data, servicio: { nombre: 'Nanoplastia' } })),
     },
+    $executeRaw: jest.fn(async () => 1),
   };
+  prisma.$transaction = jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)));
   const eventos = { emit: jest.fn() };
   const servicio = new CitasService(prisma, {} as any, {} as any, eventos as any);
   return { servicio, prisma, creadas, eventos };
@@ -112,6 +121,19 @@ describe('GET /api/citas/especialistas-libres', () => {
     expect(r.data.map((e: any) => e.id)).not.toContain('est-1');
   });
 
+  it('una cita reprogramada que choca con el lapso del servicio también la ocupa', async () => {
+    const { servicio } = montar({ citas: [{ id: 2, clienteId: 'x', especialistaId: 'est-1', estado: 'reprogramada', fechaHoraInicio: minutos(30), fechaHoraFin: minutos(90) }] });
+    const r = await servicio.especialistasLibres(5);
+    expect(r.data.map((e: any) => e.id)).not.toContain('est-1');
+  });
+
+  it('una cita en curso olvidada de ayer ya no la ocupa; una de hoy sí', async () => {
+    const ayer = montar({ citas: [{ id: 1, clienteId: 'x', especialistaId: 'aux-1', estado: 'en_curso', fechaHoraInicio: minutos(-24 * 60 - 60), fechaHoraFin: minutos(-24 * 60) }] });
+    expect((await ayer.servicio.especialistasLibres(5)).data.map((e: any) => e.id)).toContain('aux-1');
+    const hoy = montar({ citas: [{ id: 1, clienteId: 'x', especialistaId: 'aux-1', estado: 'en_curso', fechaHoraInicio: minutos(-60), fechaHoraFin: minutos(-30) }] });
+    expect((await hoy.servicio.especialistasLibres(5)).data.map((e: any) => e.id)).not.toContain('aux-1');
+  });
+
   it('si el servicio tiene especialistas asignadas, solo ellas', async () => {
     const { servicio } = montar({ asignados: [{ servicioId: 5, usuarioId: 'est-1' }] });
     const r = await servicio.especialistasLibres(5);
@@ -143,6 +165,40 @@ describe('Finalizar y cobrar', () => {
     const r = await servicio.porCobrar();
     expect(r.data.map((c: any) => c.id)).toEqual([4]);
     expect(prisma.cita.findMany.mock.calls[0][0].where).toMatchObject({ estado: 'completada', horaCheckOut: { not: null }, ventaItem: null });
+  });
+
+  const cobrables = (n: number): CitaMem[] =>
+    Array.from({ length: n }, (_, i) => ({ id: 10 + i, clienteId: null, especialistaId: 'est-1', estado: 'completada', fechaHoraInicio: AHORA, fechaHoraFin: AHORA, horaCheckOut: AHORA }));
+
+  it('por cobrar pagina de verdad: total, página, límite y páginas', async () => {
+    const { servicio } = montar({ citas: cobrables(3) });
+    const r = await servicio.porCobrar({ page: 2, limit: 2 });
+    expect(r).toMatchObject({ success: true, count: 3, page: 2, limit: 2, totalPages: 2 });
+    expect(r.data.map((c: any) => c.id)).toEqual([12]);
+  });
+
+  it('por cobrar sin parámetros: página 1 de 20', async () => {
+    const { servicio, prisma } = montar({ citas: cobrables(25) });
+    const r = await servicio.porCobrar();
+    expect(r).toMatchObject({ count: 25, page: 1, limit: 20, totalPages: 2 });
+    expect(r.data).toHaveLength(20);
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it('por cobrar con citaId busca solo esa cita', async () => {
+    const { servicio } = montar({ citas: cobrables(3) });
+    const r = await servicio.porCobrar({ citaId: 11 });
+    expect(r.count).toBe(1);
+    expect(r.data.map((c: any) => c.id)).toEqual([11]);
+  });
+
+  it('el DTO de por cobrar convierte y valida page, limit (1 a 100) y citaId', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const valida = (q: Record<string, string>) => pipe.transform(q, { type: 'query', metatype: PorCobrarDto });
+    await expect(valida({ page: '2', limit: '100', citaId: '7' })).resolves.toMatchObject({ page: 2, limit: 100, citaId: 7 });
+    for (const malo of [{ page: '0' }, { limit: '0' }, { limit: '101' }, { citaId: 'x' }, { otro: '1' }]) {
+      await expect(valida(malo)).rejects.toBeInstanceOf(BadRequestException);
+    }
   });
 });
 

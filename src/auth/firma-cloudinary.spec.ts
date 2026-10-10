@@ -2,7 +2,7 @@ import { INestApplication, Logger, ServiceUnavailableException } from '@nestjs/c
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import type { AddressInfo } from 'node:net';
-import { crearFirmaSubidaFoto, firmarParametrosCloudinary } from './firma-cloudinary';
+import { crearFirma, crearFirmaSubidaFoto, firmarParametrosCloudinary } from './firma-cloudinary';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 
@@ -69,7 +69,7 @@ describe('crearFirmaSubidaFoto', () => {
     expect(r.uploadUrl).toBe(`https://api.cloudinary.com/v1_1/${NUBE}/image/upload`);
     expect(r.apiKey).toBe(CLAVE);
     expect(r.params).toEqual({
-      allowed_formats: 'jpg,png,webp',
+      allowed_formats: 'jpg,jpeg,png,webp,gif,avif,heic',
       folder: 'avatares',
       invalidate: 'true',
       overwrite: 'true',
@@ -166,5 +166,56 @@ describe('POST /api/auth/me/foto/firma', () => {
     const estados: number[] = [];
     for (let i = 0; i < 11; i++) estados.push((await pedir()).status);
     expect(estados).toEqual([...Array(10).fill(200), 429]);
+  });
+});
+
+// Calculado aparte con: node -e "crypto.createHash('sha1').update('<cadena>' + secreto).digest('hex')"
+const FIRMA_GALERIA_CONOCIDA = 'a93f2d3e8d2570e7aeb495067eefee0898183129';
+
+describe('crearFirma por uso', () => {
+  const ahora = Date.UTC(2026, 9, 7, 12, 0, 0);
+  const timestamp = String(ahora / 1000);
+
+  it('perfil: lo mismo que la foto de perfil (avatares/usuario_<id>)', () => {
+    ponerVariables(completas);
+    expect(crearFirma('perfil', 'abc-123', ahora)).toEqual(crearFirmaSubidaFoto('abc-123', ahora));
+  });
+
+  it('galeria: carpeta fija galeria, los formatos de imagen de antes (incluidos gif, avif, heic) y sin public_id ni overwrite', () => {
+    ponerVariables(completas);
+    const r = crearFirma('galeria', 'admin-1', ahora);
+    expect(r.uploadUrl).toBe(`https://api.cloudinary.com/v1_1/${NUBE}/image/upload`);
+    expect(r.apiKey).toBe(CLAVE);
+    expect(r.params).toEqual({ allowed_formats: 'jpg,jpeg,png,webp,gif,avif,heic,heif', folder: 'galeria', timestamp });
+    expect(r.signature).toBe(firmarParametrosCloudinary(r.params, SECRETO));
+  });
+
+  it('factura: carpeta fija facturas, solo PDF, por image/upload como hoy', () => {
+    ponerVariables(completas);
+    const r = crearFirma('factura', 'admin-1', ahora);
+    expect(r.uploadUrl).toBe(`https://api.cloudinary.com/v1_1/${NUBE}/image/upload`);
+    expect(r.params).toEqual({ allowed_formats: 'pdf', folder: 'facturas', timestamp });
+    expect(r.signature).toBe(firmarParametrosCloudinary(r.params, SECRETO));
+  });
+
+  it('firma con vector conocido (SHA-1 de la cadena ordenada + secreto)', () => {
+    ponerVariables(completas);
+    const r = crearFirma('galeria', 'admin-1', ahora);
+    // sha1("allowed_formats=jpg,jpeg,png,webp,gif,avif,heic,heif&folder=galeria&timestamp=1791374400secreto-falso-de-prueba")
+    expect(r.signature).toBe(FIRMA_GALERIA_CONOCIDA);
+  });
+
+  it('ningún uso devuelve el secreto', () => {
+    ponerVariables(completas);
+    for (const uso of ['perfil', 'galeria', 'factura'] as const) {
+      expect(JSON.stringify(crearFirma(uso, 'abc-123', ahora))).not.toContain(SECRETO);
+    }
+  });
+
+  it('sin variables de Cloudinary responde 503 también en galería', () => {
+    ponerVariables({});
+    const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    expect(() => crearFirma('galeria', 'admin-1', ahora)).toThrow(ServiceUnavailableException);
+    log.mockRestore();
   });
 });

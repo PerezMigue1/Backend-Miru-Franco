@@ -62,7 +62,7 @@ FRONTEND_URL=http://localhost:3000
 - **Descripción**: URL del frontend (para CORS y enlaces en emails)
 - **Valores comunes**:
   - Desarrollo: `http://localhost:3000`
-  - Producción: `https://miru-franco.vercel.app`
+  - Producción: `https://www.mirufranco.com`
 
 ## 🔧 Variables Opcionales
 

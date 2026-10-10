@@ -1,15 +1,18 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
 import { ConfiguracionService } from '../configuracion/configuracion.service';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
 import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
+import { diaEnMexico, rangoDiaMexico } from '../common/utils/zona-mexico';
 import { CreateCitaDto } from './dto/create-cita.dto';
 import { UpdateCitaDto } from './dto/update-cita.dto';
 import { ListCitasDto } from './dto/list-citas.dto';
@@ -18,14 +21,23 @@ import { CancelarCitaDto } from './dto/cancelar-cita.dto';
 import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
+import { PorCobrarDto } from './dto/por-cobrar.dto';
 import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante } from '../common/utils/permisos-citas.util';
 import { PLAZO_ANTICIPO_MS, anticiposDesde, referenciaCita, requiereAnticipo } from './anticipos/anticipos.util';
 
 const ROLES_ESPECIALISTA = ['estilista', 'empleado', 'becario'] as const;
 const ESTADOS_FINALES = ['cancelada', 'completada', 'no_asistio'] as const;
-/** Mismos estados que bloquean solapamiento en `validarSolapamiento` — un slot es
- *  "libre" exactamente cuando `crear()` lo aceptaría, sin lista propia que diverja. */
-const ESTADOS_BLOQUEAN_SLOT = ['pendiente', 'confirmada', 'en_curso'] as const;
+/**
+ * Estados en los que una cita ocupa su horario. Única lista para validar solapamiento, la
+ * disponibilidad y las especialistas libres: un slot es "libre" exactamente cuando `crear()` lo
+ * aceptaría. Una reprogramada ocupa su horario nuevo igual que una cita nueva.
+ */
+const ESTADOS_OCUPAN_HORARIO = ['pendiente', 'confirmada', 'reprogramada', 'en_curso'] as const;
+/** Estados desde los que se hace check-in: las citas vigentes que todavía no empiezan. */
+const ESTADOS_ESPERAN_LLEGADA = ['pendiente', 'confirmada', 'reprogramada'] as const;
+/** Holgado: la transacción puede esperar el candado de la especialista mientras otra escribe. */
+const OPCIONES_TX_HORARIO = { timeout: 15_000 } as const;
+const MENSAJE_CITA_COBRADA = 'La cita ya se cobró; no se puede editar ni reprogramar. Cancela la venta primero.';
 const INTERVALO_SLOT_MINUTOS = 30;
 const OFFSET_MEXICO = '-06:00';
 
@@ -64,6 +76,7 @@ export class CitasService {
 
   /** Valida que no haya solapamiento de horario para el especialista. */
   private async validarSolapamiento(
+    tx: Prisma.TransactionClient,
     especialistaId: string,
     inicio: Date,
     fin: Date,
@@ -71,18 +84,60 @@ export class CitasService {
   ) {
     const where: Record<string, unknown> = {
       especialistaId,
-      estado: { in: ['pendiente', 'confirmada', 'en_curso'] },
+      estado: { in: [...ESTADOS_OCUPAN_HORARIO] },
       fechaHoraInicio: { lt: fin },
       fechaHoraFin:    { gt: inicio },
     };
     if (excluirId) where.id = { not: excluirId };
 
-    const solapamiento = await this.prisma.cita.findFirst({ where });
+    const solapamiento = await tx.cita.findFirst({ where });
     if (solapamiento) {
       throw new BadRequestException(
         `El especialista ya tiene una cita en ese horario (cita #${solapamiento.id})`,
       );
     }
+  }
+
+  /**
+   * Aparta un horario de la especialista: en una sola transacción toma un candado por especialista
+   * (pg_advisory_xact_lock, se suelta solo al terminar), valida el solapamiento y escribe. Dos
+   * movimientos simultáneos al mismo horario se forman en fila y el segundo ya ve al primero.
+   * Los eventos se emiten afuera, después del commit.
+   */
+  private apartarHorario<T>(
+    especialistaId: string,
+    inicio: Date,
+    fin: Date,
+    excluirId: number | undefined,
+    escribir: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    const clave = `cita-esp:${especialistaId}`;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clave}))`;
+      await this.validarSolapamiento(tx, especialistaId, inicio, fin, excluirId);
+      return escribir(tx);
+    }, OPCIONES_TX_HORARIO);
+  }
+
+  /** Carga la cita para editarla: 404 si no existe, permisos y 409 si ya se cobró en el POS. */
+  private async citaEditable(id: number, solicitante: Solicitante, propios = false) {
+    const cita = await this.prisma.cita.findUnique({ where: { id }, include: { ventaItem: { select: { id: true } } } });
+    if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    assertPuedeEscribirCita(cita, solicitante, propios);
+    if (cita.ventaItem != null) throw new ConflictException(MENSAJE_CITA_COBRADA);
+    return cita;
+  }
+
+  /**
+   * Escribe la cita solo si sigue sin cobrar, en el mismo UPDATE: si el POS la cobró entre la lectura
+   * de `citaEditable` y esta escritura, responde el mismo 409 y no cambia nada.
+   */
+  private async escribirSiNoCobrada(tx: Prisma.TransactionClient, id: number, data: Prisma.CitaUncheckedUpdateManyInput) {
+    const r = await tx.cita.updateMany({ where: { id, ventaItem: { is: null } }, data });
+    if (r.count === 0) throw new ConflictException(MENSAJE_CITA_COBRADA);
+    const cita = await tx.cita.findUnique({ where: { id }, include: this.incluirRelaciones() });
+    if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
+    return cita;
   }
 
   // ─── lecturas ────────────────────────────────────────────────────────────────
@@ -276,7 +331,7 @@ export class CitasService {
     const citasDelDia = await this.prisma.cita.findMany({
       where: {
         especialistaId,
-        estado: { in: [...ESTADOS_BLOQUEAN_SLOT] },
+        estado: { in: [...ESTADOS_OCUPAN_HORARIO] },
         fechaHoraInicio: { gte, lte },
       },
       select: { fechaHoraInicio: true, fechaHoraFin: true },
@@ -315,7 +370,8 @@ export class CitasService {
   /**
    * Personal que puede hacer el servicio y está libre ahora. Si el servicio tiene especialistas asignadas
    * (servicio_especialistas) solo cuentan ellas; si no tiene ninguna, cuenta todo el personal que atiende.
-   * Ocupada = con una cita en curso, o con una cita pendiente/confirmada que choca con [ahora, ahora + duración].
+   * Ocupada = con una cita en curso de hoy (hora de México; una de días pasados que nadie cerró ya no
+   * cuenta), o con una cita que ocupa horario y choca con [ahora, ahora + duración].
    */
   async especialistasLibres(servicioId: number) {
     const servicio = await this.prisma.servicio.findUnique({
@@ -341,12 +397,13 @@ export class CitasService {
 
     const ahora = new Date();
     const fin = new Date(ahora.getTime() + servicio.duracionMinutos * 60_000);
+    const hoy = rangoDiaMexico(diaEnMexico(ahora));
     const ocupadas = await this.prisma.cita.findMany({
       where: {
         especialistaId: { in: candidatas.map((c) => c.id) },
         OR: [
-          { estado: 'en_curso' },
-          { estado: { in: ['pendiente', 'confirmada'] }, fechaHoraInicio: { lt: fin }, fechaHoraFin: { gt: ahora } },
+          { estado: 'en_curso', fechaHoraInicio: { gte: hoy.desde, lte: hoy.hasta } },
+          { estado: { in: [...ESTADOS_OCUPAN_HORARIO] }, fechaHoraInicio: { lt: fin }, fechaHoraFin: { gt: ahora } },
         ],
       },
       select: { especialistaId: true },
@@ -366,15 +423,35 @@ export class CitasService {
     return { success: true, count: data.length, data };
   }
 
-  /** Citas finalizadas en el flujo nuevo (con hora de salida) que todavía no se cobraron. */
-  async porCobrar() {
-    const citas = await this.prisma.cita.findMany({
-      where: { estado: 'completada', horaCheckOut: { not: null }, ventaItem: null },
-      include: this.incluirRelaciones(),
-      orderBy: { horaCheckOut: 'desc' },
-      take: 100,
-    });
-    return { success: true, count: citas.length, data: citas };
+  /**
+   * Citas finalizadas en el flujo nuevo (con hora de salida) que todavía no se cobraron, paginadas.
+   * Con citaId busca solo esa cita (el POS la abre directo desde la agenda).
+   */
+  async porCobrar(query: PorCobrarDto = {}) {
+    const page  = query.page  ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const where: Prisma.CitaWhereInput = { estado: 'completada', horaCheckOut: { not: null }, ventaItem: null };
+    if (query.citaId !== undefined) where.id = query.citaId;
+
+    const [total, citas] = await this.prisma.$transaction([
+      this.prisma.cita.count({ where }),
+      this.prisma.cita.findMany({
+        where,
+        include: this.incluirRelaciones(),
+        orderBy: [{ horaCheckOut: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      success: true,
+      count: total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      data: citas,
+    };
   }
 
   // ─── escrituras ──────────────────────────────────────────────────────────────
@@ -410,12 +487,11 @@ export class CitasService {
 
     const inicio = new Date();
     const fin = new Date(inicio.getTime() + servicio.duracionMinutos * 60_000);
-    await this.validarSolapamiento(dto.especialistaId, inicio, fin);
 
     const notas = dto.notas ? sanitizeInput(dto.notas) : null;
     if (notas && containsSQLInjection(notas)) throw new BadRequestException('Las notas contienen caracteres no permitidos');
 
-    const cita = await this.prisma.cita.create({
+    const cita = await this.apartarHorario(dto.especialistaId, inicio, fin, undefined, (tx) => tx.cita.create({
       data: {
         clienteId: dto.clienteId ?? null,
         nombreInvitado: dto.clienteId ? null : nombre,
@@ -430,7 +506,7 @@ export class CitasService {
         notas,
       },
       include: this.incluirRelaciones(),
-    });
+    }));
 
     // La especialista recibe su aviso; la clienta solo si tiene cuenta (el listener omite la parte sin cliente).
     this.eventEmitter.emit('cita.creada', {
@@ -492,20 +568,19 @@ export class CitasService {
       throw new BadRequestException('La fecha de fin debe ser posterior a la de inicio');
     }
 
-    await this.validarSolapamiento(dto.especialistaId, fechaHoraInicio, fechaHoraFin);
-
     const notas = dto.notas ? sanitizeInput(dto.notas) : null;
     if (notas && containsSQLInjection(notas)) {
       throw new BadRequestException('Las notas contienen caracteres no permitidos');
     }
 
-    const cita = await this.prisma.cita.create({
-      data: { clienteId, especialistaId: dto.especialistaId, servicioId: dto.servicioId, fechaHoraInicio, fechaHoraFin, notas, ...anticipo },
-      include: this.incluirRelaciones(),
-    });
+    const cita = await this.apartarHorario(dto.especialistaId, fechaHoraInicio, fechaHoraFin, undefined, (tx) =>
+      tx.cita.create({
+        data: { clienteId, especialistaId: dto.especialistaId, servicioId: dto.servicioId, fechaHoraInicio, fechaHoraFin, notas, ...anticipo },
+        include: this.incluirRelaciones(),
+      }),
+    );
 
-    // Fuera del create (no hay transacción que envolver aquí, es un create suelto):
-    // notificar es un efecto secundario, nunca debe poder afectar la creación de la cita.
+    // Después del commit: notificar es un efecto secundario, nunca debe poder afectar la creación de la cita.
     this.eventEmitter.emit('cita.creada', {
       citaId: cita.id,
       clienteId: cita.clienteId,
@@ -518,9 +593,7 @@ export class CitasService {
   }
 
   async actualizar(id: number, dto: UpdateCitaDto, solicitante: Solicitante) {
-    const cita = await this.prisma.cita.findUnique({ where: { id } });
-    if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
-    assertPuedeEscribirCita(cita, solicitante);
+    const cita = await this.citaEditable(id, solicitante);
     // Quien solo edita sus citas asignadas (becario) no puede pasárselas a otra persona.
     if (
       dto.especialistaId !== undefined &&
@@ -530,7 +603,7 @@ export class CitasService {
       throw new ForbiddenException('No puedes reasignar la cita a otra especialista');
     }
 
-    const data: Record<string, unknown> = {};
+    const data: Prisma.CitaUncheckedUpdateManyInput = {};
 
     if (dto.especialistaId !== undefined) {
       const esp = await this.prisma.usuario.findUnique({
@@ -544,24 +617,34 @@ export class CitasService {
       data.especialistaId = dto.especialistaId;
     }
     if (dto.servicioId !== undefined) data.servicioId = dto.servicioId;
-    if (dto.estado     !== undefined) data.estado     = dto.estado;
+    if (dto.estado     !== undefined) data.estado     = dto.estado as Prisma.CitaUncheckedUpdateManyInput['estado'];
+    // Completarla a mano (sin check-out) también registra la salida, para que el POS la vea por cobrar.
+    if (dto.estado === 'completada' && !cita.horaCheckOut) data.horaCheckOut = new Date();
     if (dto.notas      !== undefined) {
       const notasLimpias = sanitizeInput(dto.notas);
       if (containsSQLInjection(notasLimpias)) throw new BadRequestException('Notas inválidas');
       data.notas = notasLimpias;
     }
 
-    if (dto.fechaHoraInicio !== undefined || dto.fechaHoraFin !== undefined) {
-      const nuevaInicio     = dto.fechaHoraInicio ? new Date(dto.fechaHoraInicio) : cita.fechaHoraInicio;
-      const nuevaFin        = dto.fechaHoraFin    ? new Date(dto.fechaHoraFin)    : cita.fechaHoraFin;
+    const cambianFechas = dto.fechaHoraInicio !== undefined || dto.fechaHoraFin !== undefined;
+    const nuevaInicio   = dto.fechaHoraInicio ? new Date(dto.fechaHoraInicio) : cita.fechaHoraInicio;
+    const nuevaFin      = dto.fechaHoraFin    ? new Date(dto.fechaHoraFin)    : cita.fechaHoraFin;
+    if (cambianFechas) {
       if (nuevaFin <= nuevaInicio) throw new BadRequestException('La fecha de fin debe ser posterior a la de inicio');
-      const especialistaId = (dto.especialistaId ?? cita.especialistaId) as string;
-      await this.validarSolapamiento(especialistaId, nuevaInicio, nuevaFin, id);
       data.fechaHoraInicio = nuevaInicio;
       data.fechaHoraFin    = nuevaFin;
     }
 
-    const actualizada = await this.prisma.cita.update({ where: { id }, data, include: this.incluirRelaciones() });
+    // Mover el horario, o pasar a otra especialista una cita que ocupa horario, lo aparta igual que
+    // una cita nueva (candado, solapamiento y escritura en la misma transacción).
+    const especialistaId = (dto.especialistaId ?? cita.especialistaId) as string;
+    const estadoFinal = dto.estado ?? cita.estado;
+    const ocupaOtraAgenda = especialistaId !== cita.especialistaId && ESTADOS_OCUPAN_HORARIO.includes(estadoFinal as any);
+    const escribir = (tx: Prisma.TransactionClient) => this.escribirSiNoCobrada(tx, id, data);
+
+    const actualizada = cambianFechas || ocupaOtraAgenda
+      ? await this.apartarHorario(especialistaId, nuevaInicio, nuevaFin, id, escribir)
+      : await escribir(this.prisma);
     return { success: true, data: actualizada };
   }
 
@@ -569,7 +652,7 @@ export class CitasService {
     const cita = await this.prisma.cita.findUnique({ where: { id } });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
     assertPuedeEscribirCita(cita, solicitante);
-    if (!['pendiente', 'confirmada'].includes(cita.estado)) {
+    if (!ESTADOS_ESPERAN_LLEGADA.includes(cita.estado as any)) {
       throw new BadRequestException(`No se puede hacer check-in en estado '${cita.estado}'`);
     }
     const actualizada = await this.prisma.cita.update({
@@ -595,10 +678,13 @@ export class CitasService {
     return { success: true, data: actualizada };
   }
 
+  /**
+   * Mueve la cita a otro horario con la misma validación que una cita nueva (fin después del inicio,
+   * notas limpias, sin encimarse con otra cita de la especialista y con el mismo candado). El
+   * anticipo se conserva tal cual: no se tocan anticipoRequerido, anticipoVenceEn ni anticipoPagadoEn.
+   */
   async reprogramar(id: number, dto: ReprogramarCitaDto, solicitante: Solicitante, propios = false) {
-    const cita = await this.prisma.cita.findUnique({ where: { id } });
-    if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
-    assertPuedeEscribirCita(cita, solicitante, propios);
+    const cita = await this.citaEditable(id, solicitante, propios);
     if (ESTADOS_FINALES.includes(cita.estado as any)) {
       throw new BadRequestException(`No se puede reprogramar una cita en estado '${cita.estado}'`);
     }
@@ -609,21 +695,16 @@ export class CitasService {
       throw new BadRequestException('La fecha de fin debe ser posterior a la de inicio');
     }
 
-    await this.validarSolapamiento(cita.especialistaId, fechaHoraInicio, fechaHoraFin, id);
+    const notas = dto.notas !== undefined ? sanitizeInput(dto.notas) : cita.notas;
+    if (dto.notas !== undefined && notas && containsSQLInjection(notas)) {
+      throw new BadRequestException('Las notas contienen caracteres no permitidos');
+    }
 
-    const actualizada = await this.prisma.cita.update({
-      where: { id },
-      data: {
-        fechaHoraInicio,
-        fechaHoraFin,
-        estado: 'reprogramada',
-        notas: dto.notas !== undefined ? sanitizeInput(dto.notas) : cita.notas,
-      },
-      include: this.incluirRelaciones(),
-    });
+    const actualizada = await this.apartarHorario(cita.especialistaId, fechaHoraInicio, fechaHoraFin, id, (tx) =>
+      this.escribirSiNoCobrada(tx, id, { fechaHoraInicio, fechaHoraFin, estado: 'reprogramada', notas }),
+    );
 
-    // Fuera de cualquier transacción a propósito (no hay una que envolver aquí,
-    // igual que crear()/cancelar()): la cita ya está comprometida en BD.
+    // Después del commit de la transacción: la cita ya está comprometida en BD.
     this.eventEmitter.emit('cita.reprogramada', {
       citaId: actualizada.id,
       clienteId: actualizada.clienteId,

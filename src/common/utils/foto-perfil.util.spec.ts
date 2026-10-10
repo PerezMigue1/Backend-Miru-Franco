@@ -27,6 +27,13 @@ describe('esFotoPerfilPermitida', () => {
       expect(esFotoPerfilPermitida(GOOGLE, { cloudName: undefined, fotoActual: GOOGLE })).toBe(true);
       expect(esFotoPerfilPermitida(PROPIA, { cloudName: undefined, fotoActual: null })).toBe(false);
       expect(esFotoPerfilPermitida(PROPIA, { cloudName: '', fotoActual: null })).toBe(false);
+      expect(esFotoPerfilPermitida(PROPIA, { cloudName: '   ', fotoActual: null })).toBe(false);
+      expect(esFotoPerfilPermitida('https://res.cloudinary.com//image/upload/a.jpg', { cloudName: '', fotoActual: null })).toBe(false);
+    });
+
+    it('nombres de archivo con caracteres codificados comunes (espacios, acentos)', () => {
+      const conEspacio = `https://res.cloudinary.com/${NUBE}/image/upload/v1/avatares/mi%20foto%C3%B1.jpg`;
+      expect(esFotoPerfilPermitida(conEspacio, { cloudName: NUBE, fotoActual: null })).toBe(true);
     });
   });
 
@@ -56,6 +63,16 @@ describe('esFotoPerfilPermitida', () => {
       ['salto de línea dentro del host', `https://res.cloud\ninary.com/${NUBE}/image/upload/a.jpg`],
       ['comillas y etiquetas en la ruta', `https://res.cloudinary.com/${NUBE}/image/upload/a.jpg"><script>`],
       ['puerto 443 explícito', `https://res.cloudinary.com:443/${NUBE}/image/upload/a.jpg`],
+      ['arroba tras el cloud_name', `https://res.cloudinary.com/${NUBE}@evil.com/image/upload/a.jpg`],
+      ['puntos codificados', `https://res.cloudinary.com/${NUBE}/image/upload/%2e%2e/%2e%2e/otra-nube/image/upload/a.jpg`],
+      // `URL` no decodifica %2F ni %5C: el texto pasaría por una ruta propia y saltaría de carpeta en otro lado.
+      ['diagonal codificada', `https://res.cloudinary.com/${NUBE}/image/upload/..%2F..%2Fotra-nube/image/upload/a.jpg`],
+      ['diagonal codificada en minúsculas', `https://res.cloudinary.com/${NUBE}/image/upload/..%2f..%2fotra-nube/a.jpg`],
+      ['diagonal invertida codificada', `https://res.cloudinary.com/${NUBE}/image/upload/..%5C..%5Cotra-nube/a.jpg`],
+      ['punto codificado suelto', `https://res.cloudinary.com/${NUBE}/image/upload/v1/%2E%2E/a.jpg`],
+      // Una imagen subida devuelve su secure_url sin query ni fragmento.
+      ['con query', `https://res.cloudinary.com/${NUBE}/image/upload/a.jpg?rastreo=1`],
+      ['con fragmento', `https://res.cloudinary.com/${NUBE}/image/upload/a.jpg#@evil.com`],
       ['URL mal formada', 'https://'],
       ['texto que no es URL', 'no es una url'],
       ['javascript:', 'javascript:alert(1)'],

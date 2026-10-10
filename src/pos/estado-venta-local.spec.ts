@@ -46,6 +46,7 @@ describe('EstadoVentaLocal: solo pendiente, pagada y cancelada', () => {
         }),
       },
       corteCaja: { count: jest.fn(async () => 0), findMany: jest.fn(async () => []) },
+      movimientoCaja: { findMany: jest.fn(async () => []) },
       $transaction: jest.fn(async (arg: any) => {
         if (Array.isArray(arg)) return Promise.all(arg);
         return arg({

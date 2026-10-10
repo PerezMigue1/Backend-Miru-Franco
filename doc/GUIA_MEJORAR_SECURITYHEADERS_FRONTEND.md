@@ -5,7 +5,7 @@
 Tu frontend está desplegado en **Vercel** con **Next.js**.  
 SecurityHeaders está analizando la URL de tu frontend, por ejemplo:
 
-`https://tu-proyecto.vercel.app/`
+`https://www.mirufranco.com/`
 
 Vercel ya proporciona algunos encabezados de seguridad (como `Strict-Transport-Security` y `X-Frame-Options`), pero **no añade por defecto** todos los que SecurityHeaders espera para darte una nota **A/A+**.
 
@@ -70,7 +70,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'",              // estilos propios + inline (Tailwind, etc.)
               "img-src 'self' data: https:",                   // imágenes locales + data URIs + https externos
               "font-src 'self' data:",                         // fuentes locales + data URIs
-              "connect-src 'self' https://miru-franco.onrender.com https://*.vercel.app", // llamadas API
+              "connect-src 'self' https://api.mirufranco.com", // llamadas API
               "frame-ancestors 'none'",                        // nadie puede incluir tu sitio en un <iframe>
             ].join('; '),
           },
@@ -89,7 +89,7 @@ module.exports = nextConfig;
 ```
 
 > 🔎 **Importante:**
-> - Ajusta `connect-src` según las APIs externas que uses (por ejemplo, otros dominios además de `https://miru-franco.onrender.com`).
+> - Ajusta `connect-src` según las APIs externas que uses (por ejemplo, otros dominios además de `https://api.mirufranco.com`).
 > - Si usas scripts externos (CDNs, Google Analytics, etc.), tendrás que añadir sus dominios en `script-src`.
 > - Si usas fuentes o imágenes de CDNs externos, también debes añadirlos en `font-src` y `img-src`.
 
@@ -120,7 +120,7 @@ Si tienes un CDN, por ejemplo `https://cdn.tusitio.com`:
 
 ```js
 "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com",
-"connect-src 'self' https://miru-franco.onrender.com https://www.google-analytics.com https://*.vercel.app",
+"connect-src 'self' https://api.mirufranco.com https://www.google-analytics.com",
 ```
 
 Solo añade dominios que realmente uses. Mientras más específica sea la CSP, mejor.
@@ -139,7 +139,7 @@ Solo añade dominios que realmente uses. Mientras más específica sea la CSP, m
 ## 4. Verificar los encabezados en el navegador
 
 1. Abre tu frontend en producción, por ejemplo:  
-   `https://tu-proyecto.vercel.app/`
+   `https://www.mirufranco.com/`
 2. Abre las **DevTools** (`F12`) y ve a la pestaña **Network**.
 3. Recarga la página.
 4. Haz clic en la primera petición (el documento HTML principal).
@@ -158,7 +158,7 @@ Si ves esos headers, la configuración está activa.
 
 1. Ve a `https://securityheaders.com/`.
 2. Ingresa la URL de tu frontend, por ejemplo:  
-   `https://tu-proyecto.vercel.app/`
+   `https://www.mirufranco.com/`
 3. Ejecuta el análisis.
 
 Con los encabezados anteriores, deberías obtener una nota **A** o **A+**.
@@ -186,7 +186,7 @@ Si tu proyecto no usa Next.js y en su lugar es un React puro, puedes definir los
         { "key": "Permissions-Policy", "value": "geolocation=(), microphone=(), camera=(), payment=(), usb=()" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://miru-franco.onrender.com https://*.vercel.app; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.mirufranco.com; frame-ancestors 'none'"
         },
         { "key": "X-XSS-Protection", "value": "1; mode=block" }
       ]

@@ -24,6 +24,8 @@ export function esFotoPerfilPermitida(
   }
   // `URL` ya resolvió los segmentos `..` de la ruta y pasó el host a minúsculas. Además se exige
   // que el texto ya venga en su forma canónica, porque se guarda tal como llega.
+  // `URL` no decodifica %2F, %5C ni %2E sueltos: se rechazan para que nadie salte de carpeta después.
+  // Una imagen subida no lleva query ni fragmento.
   const prefijo = `/${opciones.cloudName}/image/upload/`;
   return (
     url.href === foto &&
@@ -32,6 +34,11 @@ export function esFotoPerfilPermitida(
     url.port === '' &&
     url.username === '' &&
     url.password === '' &&
+    url.search === '' &&
+    url.hash === '' &&
+    !foto.includes('?') &&
+    !foto.includes('#') &&
+    !/%(2f|5c|2e)/i.test(url.pathname) &&
     url.pathname.startsWith(prefijo) &&
     url.pathname.length > prefijo.length
   );

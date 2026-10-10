@@ -20,16 +20,15 @@ Todas hacen lo mismo. Usa la que tengas configurada en tu frontend.
 - Frontend: `http://localhost:3000`
 
 **Producción:**
-- Backend: `https://miru-franco.onrender.com` (o tu URL de Render)
-- Frontend (preview): `https://miru-franco-hri9o928g-miru-franco.vercel.app` (tu URL actual de Vercel)
-- Frontend (producción): `https://miru-franco.vercel.app` (URL principal de Vercel)
+- Backend: `https://api.mirufranco.com` (servicio en Render con dominio propio)
+- Frontend: `https://www.mirufranco.com` (proyecto en Vercel con dominio propio)
 
 **Rutas del Frontend (páginas que ve el usuario):**
 - `/login` - Página de inicio de sesión
 - `/register` - Página de registro
 - `/forgot-password` - Página de recuperación de contraseña
 
-**Nota:** Vercel genera URLs diferentes para cada deployment. La URL `miru-franco-hri9o928g-miru-franco.vercel.app` es una URL de preview/deployment específica.
+**Nota:** Vercel también genera una URL `*.vercel.app` por cada deployment (previews). Esas URLs no sirven para probar el inicio de sesión: la cookie `mf_session` es de `api.mirufranco.com` con `SameSite=Strict` y CORS solo admite los orígenes de producción y los listados en `CORS_ALLOWED_ORIGINS`. Las pruebas de esta guía se hacen sobre `https://www.mirufranco.com`.
 
 **⚠️ Importante:**
 - El **frontend** (Vercel) es donde el usuario ve la página web
@@ -42,7 +41,7 @@ Todas hacen lo mismo. Usa la que tengas configurada en tu frontend.
 const API_URL = 'http://localhost:3001';
 
 // En producción
-const API_URL = 'https://miru-franco.onrender.com';
+const API_URL = 'https://api.mirufranco.com';
 
 // Usar en peticiones desde el frontend
 fetch(`${API_URL}/api/usuarios/registro`, { ... });
@@ -50,10 +49,10 @@ fetch(`${API_URL}/api/usuarios/registro`, { ... });
 
 **Flujo de petición:**
 ```
-Usuario visita: https://miru-franco-hri9o928g-miru-franco.vercel.app/register
+Usuario visita: https://www.mirufranco.com/register
     ↓
 Frontend (Vercel) hace petición HTTP a: 
-    https://miru-franco.onrender.com/api/usuarios/registro
+    https://api.mirufranco.com/api/usuarios/registro
     ↓
 Backend (Render) procesa la petición y responde
     ↓
@@ -63,9 +62,9 @@ Frontend recibe respuesta y muestra resultado al usuario
 **Ejemplo real desde tu frontend:**
 ```typescript
 // En tu código del frontend (Vercel)
-const API_URL = 'https://miru-franco.onrender.com';
+const API_URL = 'https://api.mirufranco.com';
 
-// Cuando el usuario está en: https://miru-franco-hri9o928g-miru-franco.vercel.app/register
+// Cuando el usuario está en: https://www.mirufranco.com/register
 // Y hace submit del formulario, el frontend hace:
 fetch(`${API_URL}/api/usuarios/registro`, {
   method: 'POST',
@@ -86,13 +85,13 @@ fetch(`${API_URL}/api/usuarios/registro`, {
 ### URLs Reales de tu Aplicación
 
 **Frontend (Vercel):**
-- Base URL: `https://miru-franco-hri9o928g-miru-franco.vercel.app`
-- Login: `https://miru-franco-hri9o928g-miru-franco.vercel.app/login`
-- Registro: `https://miru-franco-hri9o928g-miru-franco.vercel.app/register`
-- Recuperación: `https://miru-franco-hri9o928g-miru-franco.vercel.app/forgot-password`
+- Base URL: `https://www.mirufranco.com`
+- Login: `https://www.mirufranco.com/login`
+- Registro: `https://www.mirufranco.com/register`
+- Recuperación: `https://www.mirufranco.com/forgot-password`
 
 **Backend (Render):**
-- API Base: `https://miru-franco.onrender.com/api`
+- API Base: `https://api.mirufranco.com/api`
 
 ### Mapeo de Rutas Frontend → Backend
 
@@ -112,15 +111,15 @@ fetch(`${API_URL}/api/usuarios/registro`, {
 
 **2. Visitar la página que quieres probar:**
 ```
-https://miru-franco-hri9o928g-miru-franco.vercel.app/register
-https://miru-franco-hri9o928g-miru-franco.vercel.app/login
-https://miru-franco-hri9o928g-miru-franco.vercel.app/forgot-password
+https://www.mirufranco.com/register
+https://www.mirufranco.com/login
+https://www.mirufranco.com/forgot-password
 ```
 
 **3. Realizar la acción (llenar formulario, hacer submit, etc.)**
 
 **4. En Network Tab, verificar la petición:**
-- Debe aparecer: `POST https://miru-franco.onrender.com/api/usuarios/...`
+- Debe aparecer: `POST https://api.mirufranco.com/api/usuarios/...`
 - Status: 200/201 (éxito) o 400/401/403 (error)
 - Verificar que la petición va al backend correcto
 
@@ -131,12 +130,12 @@ https://miru-franco-hri9o928g-miru-franco.vercel.app/forgot-password
 ### Ejemplo: Verificar Registro desde Frontend
 
 **Pasos:**
-1. Abrir: `https://miru-franco-hri9o928g-miru-franco.vercel.app/register`
+1. Abrir: `https://www.mirufranco.com/register`
 2. Abrir DevTools → Network Tab
 3. Llenar formulario de registro
 4. Hacer submit
 5. En Network Tab, buscar la petición:
-   - **URL:** `https://miru-franco.onrender.com/api/usuarios/registro`
+   - **URL:** `https://api.mirufranco.com/api/usuarios/registro`
    - **Método:** POST
    - **Status:** 201 (éxito) o 400 (error de validación)
 6. Verificar respuesta en la pestaña "Response"
@@ -167,8 +166,8 @@ https://miru-franco-hri9o928g-miru-franco.vercel.app/forgot-password
 
    **Producción:**
    ```bash
-   POST https://miru-franco.onrender.com/api/usuarios/registro
-   # O también: POST https://miru-franco.onrender.com/api/usuarios/registrar
+   POST https://api.mirufranco.com/api/usuarios/registro
+   # O también: POST https://api.mirufranco.com/api/usuarios/registrar
    Content-Type: application/json
    
    {
@@ -182,7 +181,7 @@ https://miru-franco-hri9o928g-miru-franco.vercel.app/forgot-password
 2. **Probar SQL Injection:**
 
    **Opción A: Usando Postman**
-   - Crear petición POST a: `https://miru-franco.onrender.com/api/usuarios/login`
+   - Crear petición POST a: `https://api.mirufranco.com/api/usuarios/login`
    - Body (JSON):
    ```json
    {
@@ -193,14 +192,14 @@ https://miru-franco-hri9o928g-miru-franco.vercel.app/forgot-password
    - Enviar y verificar respuesta
 
    **Opción B: Desde el Frontend**
-   - Visitar: `https://miru-franco-hri9o928g-miru-franco.vercel.app/login`
+   - Visitar: `https://www.mirufranco.com/login`
    - En el campo email escribir: `test@test.com' OR '1'='1`
    - Intentar login
    - Abrir DevTools → Network para ver la respuesta
 
    **Opción C: Usando curl**
    ```bash
-   curl -X POST https://miru-franco.onrender.com/api/usuarios/login \
+   curl -X POST https://api.mirufranco.com/api/usuarios/login \
      -H "Content-Type: application/json" \
      -d '{"email": "test@test.com'\'' OR '\''1'\''='\''1", "password": "Password123"}'
    ```
@@ -231,7 +230,7 @@ grep -r "containsSQLInjection" src/
 
 1. **Visitar página de registro:**
    ```
-   https://miru-franco-hri9o928g-miru-franco.vercel.app/register
+   https://www.mirufranco.com/register
    ```
 
 2. **Registrar un usuario nuevo:**
@@ -240,7 +239,7 @@ grep -r "containsSQLInjection" src/
    - Debe redirigir a página de verificación de correo
 
 3. **Intentar iniciar sesión SIN verificar correo:**
-   - Visitar: `https://miru-franco-hri9o928g-miru-franco.vercel.app/login`
+   - Visitar: `https://www.mirufranco.com/login`
    - Intentar login con el usuario recién registrado
    - **Resultado esperado:** Debe mostrar error o redirigir a verificación
 
@@ -252,7 +251,7 @@ grep -r "containsSQLInjection" src/
 
 1. **Registrar un usuario nuevo:**
    ```bash
-   POST https://miru-franco.onrender.com/api/usuarios/registro
+   POST https://api.mirufranco.com/api/usuarios/registro
    Content-Type: application/json
    
    {
@@ -289,7 +288,7 @@ grep -r "containsSQLInjection" src/
 
 2. **Intentar iniciar sesión SIN verificar correo:**
    ```bash
-   POST https://miru-franco.onrender.com/api/usuarios/login
+   POST https://api.mirufranco.com/api/usuarios/login
    Content-Type: application/json
    
    {
@@ -305,7 +304,7 @@ grep -r "containsSQLInjection" src/
 
 4. **Verificar correo con OTP:**
    ```bash
-   POST https://miru-franco.onrender.com/api/usuarios/verificar-otp
+   POST https://api.mirufranco.com/api/usuarios/verificar-otp
    Content-Type: application/json
    
    {
@@ -317,7 +316,7 @@ grep -r "containsSQLInjection" src/
 
 5. **Intentar login DESPUÉS de verificar:**
    ```bash
-   POST https://miru-franco.onrender.com/api/usuarios/login
+   POST https://api.mirufranco.com/api/usuarios/login
    Content-Type: application/json
    
    {
@@ -413,7 +412,7 @@ cat src/common/validators/password.validator.ts
 
 1. **Visitar página de recuperación:**
    ```
-   https://miru-franco-hri9o928g-miru-franco.vercel.app/forgot-password
+   https://www.mirufranco.com/forgot-password
    ```
 
 2. **Solicitar recuperación:**
@@ -433,7 +432,7 @@ cat src/common/validators/password.validator.ts
 
 1. **Solicitar recuperación:**
    ```bash
-   POST https://miru-franco.onrender.com/api/usuarios/pregunta-seguridad
+   POST https://api.mirufranco.com/api/usuarios/pregunta-seguridad
    {
      "email": "test@test.com"
    }
@@ -540,7 +539,7 @@ grep -r "RateLimitGuard" src/
 
 1. **Visitar página de login:**
    ```
-   https://miru-franco-hri9o928g-miru-franco.vercel.app/login
+   https://www.mirufranco.com/login
    ```
 
 2. **Intentar login 6 veces con contraseña incorrecta:**
@@ -557,7 +556,7 @@ grep -r "RateLimitGuard" src/
 1. **Intentar login 6 veces con contraseña incorrecta:**
    ```bash
    # Ejecutar 6 veces
-   POST https://miru-franco.onrender.com/api/usuarios/login
+   POST https://api.mirufranco.com/api/usuarios/login
    {
      "email": "test@test.com",
      "password": "PasswordIncorrecta"

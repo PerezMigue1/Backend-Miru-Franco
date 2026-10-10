@@ -8,11 +8,13 @@ import {
   Param,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { esPropios } from '../../common/utils/alcance-propio.util';
 import { EnviosService } from './envios.service';
 import { CreateEnvioDto } from './dto/create-envio.dto';
 import { UpdateEnvioDto } from './dto/update-envio.dto';
@@ -28,13 +30,18 @@ export class EnviosController {
   listarPorPedido(
     @Param('pedidoId') pedidoId: string,
     @CurrentUser() user: { id: string },
+    @Query('propios') propios?: string,
   ) {
-    return this.service.listarPorPedido(Number(pedidoId), user.id);
+    return this.service.listarPorPedido(Number(pedidoId), user.id, esPropios(propios));
   }
 
   @Get(':id')
-  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.obtenerPorId(Number(id), user.id);
+  obtener(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+    @Query('propios') propios?: string,
+  ) {
+    return this.service.obtenerPorId(Number(id), user.id, esPropios(propios));
   }
 
   @Post()

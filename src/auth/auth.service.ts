@@ -279,8 +279,8 @@ export class AuthService {
     };
   }
 
-  async verificarCorreoExistente(correo: string) {
-    return this.usuariosService.verificarCorreoExistente(correo);
+  async verificarCorreoExistente(correo: string, opciones: { consultaReal?: boolean } = {}) {
+    return this.usuariosService.verificarCorreoExistente(correo, opciones);
   }
 
   /**

@@ -1,7 +1,10 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EstadoPago, Pago, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
+import { bloquearReembolsosDelPedido } from '../devoluciones/devoluciones.service';
 import { CreatePagoDto } from './dto/create-pago.dto';
 import { UpdatePagoDto } from './dto/update-pago.dto';
 
@@ -114,6 +117,8 @@ export class PagosService {
     if (!pago || pago.pedidoId === null) throw new NotFoundException('Pago no encontrado');
     await this.assertPuedeGestionarPago(pago.pedidoId, solicitanteId, rolUsuario, permisosUsuario);
 
+    if (dto.estado === EstadoPago.reembolsado) return this.reembolsar(pago, solicitanteId, dto);
+
     const data = await this.prisma.pago.update({
       where: { id },
       data: {
@@ -135,5 +140,59 @@ export class PagosService {
       },
     });
     return { success: true, data };
+  }
+
+  /**
+   * Reembolso de un cobro: solo desde aprobado o en revisión, una sola vez. En la misma transacción se guarda
+   * cuándo y, si el cobro entró en efectivo a la caja del salón, la salida de caja de quien reembolsa (se
+   * descuenta en su siguiente corte, aunque el cobro sea de un día ya cortado).
+   */
+  private async reembolsar(pago: Pago, solicitanteId: string, dto: UpdatePagoDto) {
+    try {
+      const data = await this.prisma.$transaction(async (tx) => {
+        if (pago.pedidoId !== null) {
+          // Mismo candado que aprobar devoluciones: el dinero del pedido no sale por las dos vías.
+          await bloquearReembolsosDelPedido(tx, pago.pedidoId);
+          const porDevolucion = await tx.devolucion.count({
+            where: { pedidoId: pago.pedidoId, estado: 'aprobada', tipo: 'reembolso' },
+          });
+          if (porDevolucion > 0) {
+            throw new ConflictException('El pedido ya tiene reembolsos por devolución; gestiona desde devoluciones');
+          }
+        }
+        const r = await tx.pago.updateMany({
+          where: { id: pago.id, estado: { in: [EstadoPago.aprobado, EstadoPago.en_revision] } },
+          data: {
+            estado: EstadoPago.reembolsado,
+            reembolsadoEn: new Date(),
+            ...(dto.referenciaExterna !== undefined && { referenciaExterna: dto.referenciaExterna }),
+            ...(dto.errorMensaje !== undefined && { errorMensaje: dto.errorMensaje }),
+            ...(dto.payload !== undefined && { payload: dto.payload as object }),
+          },
+        });
+        if (r.count !== 1) {
+          throw new ConflictException(
+            pago.estado === EstadoPago.reembolsado ? 'Este pago ya se reembolsó' : 'Solo se reembolsa un pago aprobado o en revisión',
+          );
+        }
+        if (esCobroEnEfectivoDelSalon(pago)) {
+          await registrarSalidaEfectivo(tx, {
+            concepto: 'reembolso_pedido',
+            monto: pago.monto,
+            registradoPorId: solicitanteId,
+            pagoId: pago.id,
+            motivo: `Reembolso del pedido ${pago.pedidoId}`,
+          });
+        }
+        return tx.pago.findUnique({ where: { id: pago.id } });
+      }, TX_HOLGADA);
+      return { success: true, data };
+    } catch (e) {
+      // Dos reembolsos simultáneos: la llave única de la salida (pago_id) rechaza el segundo.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('Este pago ya se reembolsó');
+      }
+      throw e;
+    }
   }
 }

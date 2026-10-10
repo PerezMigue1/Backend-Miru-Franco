@@ -6,6 +6,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { MercadoPagoClient, PagoMercadoPago } from '../../ecommerce/mercadopago/mercadopago.client';
 import { METODO_PAGO_MERCADOPAGO } from '../../ecommerce/pedidos/flujo-pedido';
 import { puedeEscribirCualquierCita, type Solicitante } from '../../common/utils/permisos-citas.util';
+import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
 import {
   ESTADOS_CITA_VIGENTE,
   METODO_PAGO_DE_ANTICIPO,
@@ -201,8 +202,8 @@ export class AnticiposCitasService {
 
   /**
    * Reembolso del anticipo: si cancela el salón (cita cancelada con el pago aprobado) o tras revisar un
-   * pago en revisión. Mercado Pago: API de refunds (con clave de idempotencia por pago); en el salón solo
-   * se registra. El pago queda 'reembolsado' una sola vez.
+   * pago en revisión. Mercado Pago: API de refunds (con clave de idempotencia por pago); en el salón se
+   * registra y, si se cobró en efectivo, queda una salida de caja. El pago queda 'reembolsado' una sola vez.
    */
   async reembolsar(citaId: number, solicitanteId: string) {
     const cita = await this.prisma.cita.findUnique({ where: { id: citaId } });
@@ -227,11 +228,32 @@ export class AnticiposCitasService {
         if (enMp?.status !== 'refunded') throw e;
       }
     }
-    const r = await this.prisma.pago.updateMany({
-      where: { id: pago.id, estado: { in: [EstadoPago.aprobado, EstadoPago.en_revision] } },
-      data: { estado: EstadoPago.reembolsado, errorMensaje: `Reembolsado por ${solicitanteId}` },
-    });
-    if (r.count !== 1) throw new ConflictException('Este anticipo ya se reembolsó');
+    // En la misma transacción: el pago queda reembolsado y, si el anticipo entró en efectivo a la caja del
+    // salón, sale de la caja de quien reembolsa (se descuenta en su siguiente corte).
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const r = await tx.pago.updateMany({
+          where: { id: pago.id, estado: { in: [EstadoPago.aprobado, EstadoPago.en_revision] } },
+          data: { estado: EstadoPago.reembolsado, errorMensaje: `Reembolsado por ${solicitanteId}`, reembolsadoEn: new Date() },
+        });
+        if (r.count !== 1) throw new ConflictException('Este anticipo ya se reembolsó');
+        if (esCobroEnEfectivoDelSalon(pago)) {
+          await registrarSalidaEfectivo(tx, {
+            concepto: 'reembolso_anticipo',
+            monto: pago.monto,
+            registradoPorId: solicitanteId,
+            pagoId: pago.id,
+            motivo: `Reembolso del anticipo de la cita ${citaId}`,
+          });
+        }
+      }, TX_HOLGADA);
+    } catch (e) {
+      // Dos reembolsos simultáneos: la llave única de la salida (pago_id) rechaza el segundo.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('Este anticipo ya se reembolsó');
+      }
+      throw e;
+    }
     return { success: true, data: { pagoId: pago.id, estado: EstadoPago.reembolsado } };
   }
 

@@ -63,7 +63,7 @@ export class QuejasService {
       where: { id: solicitanteId },
       select: { rol: true },
     });
-    if (!(await puedeVerDatosDeClientes(this.prisma, solicitante?.rol ?? null))) {
+    if (!(await puedeVerDatosDeClientes(this.prisma, solicitante?.rol ?? null, clienteId, solicitanteId))) {
       throw new ForbiddenException(
         'No tienes permiso para ver las quejas de este cliente',
       );

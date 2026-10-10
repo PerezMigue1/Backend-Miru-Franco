@@ -1,11 +1,11 @@
 import { diaEnMexico } from '../../common/utils/zona-mexico';
 
 /**
- * Política de cambios y reembolsos de los Términos y Condiciones (sección 5):
- * - cambio: producto sellado y sin abrir, o con defecto de fábrica, dentro de 7 días naturales tras recogerlo;
- * - reembolso: defecto de fábrica, producto distinto al pedido, falta de existencias (o cancelación del salón),
+ * Política de cambios y reembolsos (Términos y Condiciones, sección 5), decidida por el dueño:
+ * - cambio: producto sellado y sin abrir (o con defecto de fábrica) dentro de 7 días naturales tras recogerlo;
+ * - reembolso: defecto de fábrica, error del salón (producto distinto al pedido), falta de existencias
  *   o cancelación de un pedido pagado en línea antes de que estuviera listo para recoger.
- * La tabla devoluciones no tiene columnas de tipo ni causa: quedan registrados al inicio del motivo.
+ * El backend la valida siempre; tipo y causa se guardan en sus columnas y, legibles, al inicio del motivo.
  */
 export const DIAS_CAMBIO_PRODUCTO = 7;
 
@@ -24,7 +24,7 @@ const ETIQUETA_TIPO: Record<TipoDevolucion, string> = { cambio: 'Cambio', reembo
 const ETIQUETA_CAUSA: Record<CausaDevolucion, string> = {
   sellado_sin_abrir: 'Producto sellado y sin abrir',
   defecto_fabrica: 'Defecto de fábrica',
-  producto_distinto: 'Producto distinto al pedido',
+  producto_distinto: 'Error del salón: producto distinto al pedido',
   sin_existencias: 'Falta de existencias',
   cancelacion_antes_listo: 'Cancelado antes de estar listo',
 };
@@ -32,11 +32,12 @@ const ETIQUETA_CAUSA: Record<CausaDevolucion, string> = {
 export interface PedidoParaPolitica {
   estado: string;
   pagadoEn: Date | null;
-  metodoPago: string | null;
+  /** Método de pago del pedido ('mercado_pago' es el pago en línea). */
+  metodoPago?: string | null;
   /** Cuándo se entregó (historial a 'entregado'). */
   entregadoEn: Date | null;
   /** Si en algún momento llegó a 'listo_recoger'. */
-  llegoAListo: boolean;
+  llegoAListo?: boolean;
 }
 
 /** Días naturales (en México) entre la entrega y hoy. */

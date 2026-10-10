@@ -63,14 +63,19 @@ describe('POST /devoluciones con tipo y causa', () => {
   function montar(pedido: any) {
     const create = jest.fn(async ({ data }: any) => ({ id: 1, ...data }));
     const prisma: any = {
+      // 'adm-…' es admin (gestiona solicitudes ajenas); el resto, clienta.
+      usuario: { findUnique: jest.fn(async ({ where }: any) => ({ rol: String(where.id).startsWith('adm') ? 'admin' : 'cliente' })) },
+      permisoRol: { findUnique: jest.fn(async () => ({ claves: ['tienda:propia'] })) },
       pedido: { findUnique: jest.fn(async () => pedido) },
-      pedidoItem: { findUnique: jest.fn(async () => ({ id: 3, pedidoId: 9 })) },
-      devolucion: { create },
+      pedidoItem: { findUnique: jest.fn(async () => ({ id: 3, pedidoId: 9, subtotal: '100.00' })) },
+      devolucion: { create, findFirst: jest.fn(async () => null) },
+      $executeRaw: jest.fn(async () => 1),
     };
-    const servicio = new DevolucionesService(prisma, { assertPedido: jest.fn(async () => undefined) } as any);
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+    const servicio = new DevolucionesService(prisma);
     return { servicio, create };
   }
-  const pedido = { id: 9, estado: 'entregado', pagadoEn: new Date(), metodoPago: 'pago_en_salon', historialEstado: [{ estadoNuevo: 'listo_recoger', creadoEn: new Date() }, { estadoNuevo: 'entregado', creadoEn: new Date() }] };
+  const pedido = { id: 9, usuarioId: 'cli-1', estado: 'entregado', pagadoEn: new Date(), metodoPago: 'pago_en_salon', total: '100.00', historialEstado: [{ estadoNuevo: 'listo_recoger', creadoEn: new Date() }, { estadoNuevo: 'entregado', creadoEn: new Date() }] };
 
   it('aplica la política y guarda el motivo con tipo y causa', async () => {
     const { servicio, create } = montar(pedido);
@@ -78,15 +83,28 @@ describe('POST /devoluciones con tipo y causa', () => {
     expect(create.mock.calls[0][0].data).toMatchObject({ estado: 'pendiente', motivo: '[Cambio · Producto sellado y sin abrir] Otro tono' });
   });
 
+  it('aplica la política y guarda tipo, causa y el detalle', async () => {
+    const { servicio, create } = montar(pedido);
+    await servicio.crear('cli-1', { pedidoId: 9, pedidoItemId: 3, tipo: 'cambio', causa: 'sellado_sin_abrir', sellado: true, motivo: 'Otro tono' });
+    expect(create.mock.calls[0][0].data).toMatchObject({ estado: 'pendiente', tipo: 'cambio', causa: 'sellado_sin_abrir', motivo: '[Cambio · Producto sellado y sin abrir] Otro tono' });
+  });
+
   it('si la política no se cumple responde 400 y no guarda', async () => {
     const { servicio, create } = montar({ ...pedido, estado: 'preparando', historialEstado: [] });
-    await expect(servicio.crear('adm-1', { pedidoId: 9, pedidoItemId: 3, estado: 'pendiente', tipo: 'cambio', causa: 'sellado_sin_abrir', sellado: true } as any)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(servicio.crear('cli-1', { pedidoId: 9, pedidoItemId: 3, tipo: 'cambio', causa: 'sellado_sin_abrir', sellado: true })).rejects.toBeInstanceOf(BadRequestException);
     expect(create).not.toHaveBeenCalled();
   });
 
+  // Comportamiento cambiado a pedido (B1): el tipo es obligatorio.
   it('sin tipo (solicitud de la clienta desde su portal) funciona como antes', async () => {
     const { servicio, create } = montar(pedido);
-    await servicio.crear('cli-1', { pedidoId: 9, estado: 'pendiente', motivo: 'No me gustó' } as any);
-    expect(create.mock.calls[0][0].data.motivo).toBe('No me gustó');
+    await expect(servicio.crear('cli-1', { pedidoId: 9, estado: 'pendiente', motivo: 'No me gustó' } as any)).rejects.toBeInstanceOf(BadRequestException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('sin tipo (como mandaba antes el portal) responde 400 y no guarda', async () => {
+    const { servicio, create } = montar(pedido);
+    await expect(servicio.crear('cli-1', { pedidoId: 9, motivo: 'No me gustó' } as any)).rejects.toBeInstanceOf(BadRequestException);
+    expect(create).not.toHaveBeenCalled();
   });
 });

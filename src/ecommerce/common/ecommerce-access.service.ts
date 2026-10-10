@@ -47,9 +47,14 @@ export class EcommerceAccessService {
     this.assertOwnerOrAdmin(usuarioId, dir.usuarioId, rol);
   }
 
+  /**
+   * Dueña del pedido o admin. Con `propios` (portal de clienta, `?propios=true`) el pedido ajeno
+   * responde 404 para cualquier rol, igual que GET /pedidos/:id?propios=true.
+   */
   async assertPedido(
     usuarioId: string,
     pedidoId: number,
+    propios = false,
   ): Promise<{ usuarioIdPedido: string }> {
     const rol = await this.getRol(usuarioId);
     const pedido = await this.prisma.pedido.findUnique({
@@ -57,8 +62,24 @@ export class EcommerceAccessService {
       select: { usuarioId: true },
     });
     if (!pedido) throw new NotFoundException('Pedido no encontrado');
+    if (propios && pedido.usuarioId !== usuarioId) {
+      throw new NotFoundException('Pedido no encontrado');
+    }
     this.assertOwnerOrAdmin(usuarioId, pedido.usuarioId, rol);
     return { usuarioIdPedido: pedido.usuarioId };
+  }
+
+  /** ¿El rol del usuario tiene alguna de estas claves en `permisos_rol`? El admin ('*') siempre. */
+  async tienePermiso(usuarioId: string, ...claves: string[]): Promise<boolean> {
+    const rol = await this.getRol(usuarioId);
+    if (this.isAdmin(rol)) return true;
+    if (!rol) return false;
+    const permisoRol = await this.prisma.permisoRol.findUnique({
+      where: { rol },
+      select: { claves: true },
+    });
+    const delRol = permisoRol?.claves ?? [];
+    return delRol.includes('*') || claves.some((c) => delRol.includes(c));
   }
 
   async getPedidoUsuarioId(pedidoId: number): Promise<string> {

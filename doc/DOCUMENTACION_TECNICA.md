@@ -33,8 +33,8 @@ Backend API REST desarrollado con **NestJS**, **TypeScript** y **Prisma** para M
 ### URLs del Sistema
 
 **Producción:**
-- Backend: `https://miru-franco.onrender.com`
-- Frontend: `https://miru-franco.vercel.app`
+- Backend: `https://api.mirufranco.com`
+- Frontend: `https://www.mirufranco.com`
 
 **Desarrollo:**
 - Backend: `http://localhost:3001`
@@ -151,7 +151,7 @@ Todas las rutas de la API tienen el prefijo `/api`, excepto:
 **Ejemplo de uso:**
 ```javascript
 // En el frontend, redirigir al usuario a esta URL
-window.location.href = 'https://miru-franco.onrender.com/api/auth/google';
+window.location.href = 'https://api.mirufranco.com/api/auth/google';
 ```
 
 ---
@@ -168,7 +168,7 @@ window.location.href = 'https://miru-franco.onrender.com/api/auth/google';
 
 **Ejemplo de redirección:**
 ```
-https://miru-franco.vercel.app/auth/callback?code=TEMPORAL_CODE_123&success=true
+https://www.mirufranco.com/auth/callback?code=TEMPORAL_CODE_123&success=true
 ```
 
 ---
@@ -207,7 +207,7 @@ https://miru-franco.vercel.app/auth/callback?code=TEMPORAL_CODE_123&success=true
 
 **Ejemplo de código:**
 ```javascript
-const response = await fetch('https://miru-franco.onrender.com/api/auth/exchange-code', {
+const response = await fetch('https://api.mirufranco.com/api/auth/exchange-code', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -249,7 +249,7 @@ localStorage.setItem('token', data.data.token);
 
 **Ejemplo de código:**
 ```javascript
-const response = await fetch('https://miru-franco.onrender.com/api/auth/verificar-correo', {
+const response = await fetch('https://api.mirufranco.com/api/auth/verificar-correo', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -307,7 +307,7 @@ Authorization: Bearer <token>
 ```javascript
 const token = localStorage.getItem('token');
 
-const response = await fetch('https://miru-franco.onrender.com/api/auth/me', {
+const response = await fetch('https://api.mirufranco.com/api/auth/me', {
   method: 'GET',
   headers: {
     'Authorization': `Bearer ${token}`,
@@ -349,7 +349,7 @@ console.log('Usuario:', data.data);
 ```javascript
 const token = localStorage.getItem('token');
 
-const response = await fetch('https://miru-franco.onrender.com/api/auth/logout', {
+const response = await fetch('https://api.mirufranco.com/api/auth/logout', {
   method: 'POST',
   headers: {
     'Authorization': `Bearer ${token}`,
@@ -459,7 +459,7 @@ localStorage.removeItem('token');
 
 **Ejemplo de código:**
 ```javascript
-const response = await fetch('https://miru-franco.onrender.com/api/usuarios/registrar', {
+const response = await fetch('https://api.mirufranco.com/api/usuarios/registrar', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -531,7 +531,7 @@ if (data.success) {
 
 **Ejemplo de código:**
 ```javascript
-const response = await fetch('https://miru-franco.onrender.com/api/usuarios/login', {
+const response = await fetch('https://api.mirufranco.com/api/usuarios/login', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -596,7 +596,7 @@ if (data.success && data.data.requiereOTP) {
 
 **Ejemplo de código:**
 ```javascript
-const response = await fetch('https://miru-franco.onrender.com/api/usuarios/verificar-otp', {
+const response = await fetch('https://api.mirufranco.com/api/usuarios/verificar-otp', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -1147,8 +1147,8 @@ GOOGLE_CLIENT_SECRET=tu_google_client_secret
 # ============================================
 # CONFIGURACIÓN DE URLs
 # ============================================
-FRONTEND_URL=https://miru-franco.vercel.app
-BACKEND_URL=https://miru-franco.onrender.com
+FRONTEND_URL=https://www.mirufranco.com
+BACKEND_URL=https://api.mirufranco.com
 
 # Para desarrollo local:
 # FRONTEND_URL=http://localhost:3000
@@ -1591,7 +1591,7 @@ Esto actualiza el campo `tokensRevocadosDesde` del usuario, invalidando todos lo
 
 ```javascript
 // config/api.js
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://miru-franco.onrender.com';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://api.mirufranco.com';
 
 const apiRequest = async (endpoint, options = {}) => {
   const token = localStorage.getItem('token');
@@ -1809,7 +1809,7 @@ export const useAuth = () => {
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'https://miru-franco.onrender.com/api',
+  baseURL: process.env.REACT_APP_API_URL || 'https://api.mirufranco.com/api',
   withCredentials: true, // IMPORTANTE para CORS
   headers: {
     'Content-Type': 'application/json',
@@ -1987,10 +1987,10 @@ npm run start:dev
    - Name: Miru Franco Backend
    - Authorized JavaScript origins:
      - `http://localhost:3001` (desarrollo)
-     - `https://miru-franco.onrender.com` (producción)
+     - `https://api.mirufranco.com` (producción)
    - Authorized redirect URIs:
      - `http://localhost:3001/api/auth/google/callback` (desarrollo)
-     - `https://miru-franco.onrender.com/api/auth/google/callback` (producción)
+     - `https://api.mirufranco.com/api/auth/google/callback` (producción)
 5. Copiar **Client ID** y **Client Secret**
 
 #### 4. Configurar Variables de Entorno

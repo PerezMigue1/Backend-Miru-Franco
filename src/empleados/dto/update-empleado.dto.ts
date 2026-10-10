@@ -2,6 +2,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -13,6 +14,7 @@ import { Type } from 'class-transformer';
 export class UpdateEmpleadoDto {
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   puesto?: string;
 
   @IsOptional()

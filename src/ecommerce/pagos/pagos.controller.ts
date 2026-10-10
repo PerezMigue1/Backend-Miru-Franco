@@ -5,12 +5,15 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Request,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../../common/guards/permisos.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { esPropios } from '../../common/utils/alcance-propio.util';
+import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { PagosService } from './pagos.service';
 import { CreatePagoDto } from './dto/create-pago.dto';
 import { UpdatePagoDto } from './dto/update-pago.dto';
@@ -18,14 +21,22 @@ import { UpdatePagoDto } from './dto/update-pago.dto';
 @Controller('pagos')
 @UseGuards(JwtAuthGuard)
 export class PagosController {
-  constructor(private readonly service: PagosService) {}
+  constructor(
+    private readonly service: PagosService,
+    private readonly access: EcommerceAccessService,
+  ) {}
 
   /** GET — el dueño del pedido (o admin) puede seguir viendo el estado de su pago. Sin @Permisos. */
+  /** Con `?propios=true` (portal de clienta) el pedido ajeno responde 404 para cualquier rol. */
   @Get('pedido/:pedidoId')
-  listarPorPedido(
+  async listarPorPedido(
     @Param('pedidoId') pedidoId: string,
     @CurrentUser() user: { id: string },
+    @Query('propios') propios?: string,
   ) {
+    if (esPropios(propios)) {
+      await this.access.assertPedido(user.id, Number(pedidoId), true);
+    }
     return this.service.listarPorPedido(Number(pedidoId), user.id);
   }
 

@@ -39,6 +39,7 @@ function prismaConVentas(ventas: { id: number; creadoEn: string; metodoPago: str
       count: jest.fn(async () => 0),
       findMany: jest.fn(async () => []),
     },
+    movimientoCaja: { findMany: jest.fn(async () => []) },
     $transaction: jest.fn(async (arg: unknown) => {
       if (Array.isArray(arg)) return Promise.all(arg);
       const tx = {

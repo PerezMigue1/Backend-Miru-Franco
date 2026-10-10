@@ -15,6 +15,7 @@ describe('Corte de caja con pagos mixtos', () => {
       pago: { findMany: jest.fn(async () => []) },
       ventaLocal: { findMany: jest.fn(async () => ventas) },
       corteCaja: { count: jest.fn(async () => 0), findMany: jest.fn(async () => []) },
+      movimientoCaja: { findMany: jest.fn(async () => []) },
       $transaction: jest.fn(async (fn: any) =>
         fn({
           corteCaja: { create: jest.fn(async ({ data }: any) => (creados.push(data), { id: 1, ...data })) },
@@ -43,6 +44,7 @@ describe('Corte de caja con anticipos de citas', () => {
       pago: { findMany: jest.fn(async () => pagos) },
       ventaLocal: { findMany: jest.fn(async () => ventas) },
       corteCaja: { count: jest.fn(async () => 0), findMany: jest.fn(async () => []) },
+      movimientoCaja: { findMany: jest.fn(async () => []) },
       $transaction: jest.fn(async (fn: any) =>
         fn({
           corteCaja: { create: jest.fn(async ({ data }: any) => (creados.push(data), { id: 1, ...data })) },
@@ -56,6 +58,11 @@ describe('Corte de caja con anticipos de citas', () => {
     const c = creados[0];
     expect([c.totalVentas, c.totalEfectivo, c.diferencia].map(Number)).toEqual([900, 900, 0]);
     // Un anticipo cobrado en el salón que pasa a revisión (la clienta canceló) sigue en caja: el corte lo cuenta.
-    expect(prisma.pago.findMany.mock.calls[0][0].where.OR).toEqual([{ estado: 'aprobado' }, { estado: 'en_revision', citaId: { not: null } }]);
+    // Un reembolsado con salida de caja también: el ingreso y la salida se ven ambos y el neto es 0.
+    expect(prisma.pago.findMany.mock.calls[0][0].where.OR).toEqual([
+      { estado: 'aprobado' },
+      { estado: 'en_revision', citaId: { not: null } },
+      { estado: 'reembolsado', salidaCaja: { isNot: null } },
+    ]);
   });
 });

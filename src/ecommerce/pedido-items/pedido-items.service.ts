@@ -52,8 +52,8 @@ export class PedidoItemsService {
     });
   }
 
-  async listarPorPedido(pedidoId: number, solicitanteId: string) {
-    await this.access.assertPedido(solicitanteId, pedidoId);
+  async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
+    await this.access.assertPedido(solicitanteId, pedidoId, propios);
     const data = await this.prisma.pedidoItem.findMany({
       where: { pedidoId },
       include: { producto: true, presentacion: true },

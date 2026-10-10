@@ -22,6 +22,7 @@ import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { PredecirRiesgoCitasDto } from './dto/predecir-riesgo-citas.dto';
 import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
+import { PorCobrarDto } from './dto/por-cobrar.dto';
 import { RiesgoCancelacionService } from './riesgo-cancelacion.service';
 import { solicitanteDe } from '../common/utils/permisos-citas.util';
 
@@ -102,11 +103,14 @@ export class CitasController {
     return this.citasService.personal();
   }
 
-  /** GET /api/citas/por-cobrar — citas finalizadas sin venta, para el punto de venta. Antes de `:id`. */
+  /**
+   * GET /api/citas/por-cobrar?page=&limit=&citaId= — citas finalizadas sin venta, paginadas, para el
+   * punto de venta (con citaId, solo esa cita). Antes de `:id`.
+   */
   @Get('por-cobrar')
   @Permisos('ventas:escritura')
-  porCobrar() {
-    return this.citasService.porCobrar();
+  porCobrar(@Query() query: PorCobrarDto) {
+    return this.citasService.porCobrar(query);
   }
 
   /** POST /api/citas/sin-cita — turno inmediato de alguien que llega sin cita (recepción). */

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
+import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../prisma/prisma.service';
-import { PosService } from '../pos/pos.service';
+import { CAJA_POR_METODO_COBRO, PosService } from '../pos/pos.service';
 import { InventarioService } from '../inventario/inventario.service';
 import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
 
@@ -33,13 +34,60 @@ export class ReportesService {
       select: { cantidad: true },
     });
     const totalUnidadesVendidas = itemsProducto.reduce((acc, i) => acc + i.cantidad, 0);
+    const ingresos = await this.ingresos(ventas, where.creadoEn as { gte?: Date; lte?: Date } | undefined);
 
     return {
       success: true,
       data: {
         resumen: { ...resumenRes.data, totalUnidadesVendidas },
+        ingresos,
         ventas,
       },
+    };
+  }
+
+  /**
+   * Ingresos del periodo por fuente. El anticipo de una cita entra una vez, por la tabla pagos y el día en
+   * que se pagó (en línea o en el salón, retenidos incluidos); la venta del POS que lo descuenta solo trae el
+   * saldo (VentaLocal.total). Los anticipos en revisión y los reembolsados se informan aparte, sin sumar.
+   */
+  private async ingresos(ventas: { total: Decimal }[], rango?: { gte?: Date; lte?: Date }) {
+    const enRango = rango ? { pagadoEn: rango } : {};
+    const pagos = await this.prisma.pago.findMany({
+      where: {
+        OR: [
+          // Cobros de pedidos en el salón (los de Mercado Pago llegan a la cuenta en línea, no se suman aquí).
+          { pedidoId: { not: null }, estado: 'aprobado', cobradoPorId: { not: null }, metodo: { in: Object.keys(CAJA_POR_METODO_COBRO) }, ...enRango },
+          { citaId: { not: null }, estado: { in: ['aprobado', 'en_revision'] }, ...enRango },
+          // Reembolsados en el periodo; los anteriores a reembolsado_en, por el día en que se pagaron.
+          {
+            citaId: { not: null },
+            estado: 'reembolsado',
+            ...(rango && { OR: [{ reembolsadoEn: rango }, { reembolsadoEn: null, pagadoEn: rango }] }),
+          },
+        ],
+      },
+      select: { monto: true, estado: true, citaId: true, pedidoId: true, cobradoPorId: true },
+    });
+
+    const suma = (filas: { monto: Decimal }[]) => filas.reduce((acc, f) => acc.add(f.monto), new Decimal(0));
+    const anticipos = pagos.filter((p) => p.citaId !== null);
+    const aprobados = anticipos.filter((p) => p.estado === 'aprobado');
+    const ventasPos = ventas.reduce((acc, v) => acc.add(v.total), new Decimal(0));
+    const cobrosPedidosSalon = suma(pagos.filter((p) => p.pedidoId !== null));
+    const anticiposEnLinea = suma(aprobados.filter((p) => p.cobradoPorId === null));
+    const anticiposEnSalon = suma(aprobados.filter((p) => p.cobradoPorId !== null));
+    const totalAnticipos = anticiposEnLinea.add(anticiposEnSalon);
+
+    return {
+      total: ventasPos.add(cobrosPedidosSalon).add(totalAnticipos),
+      ventasPos,
+      cobrosPedidosSalon,
+      anticipos: totalAnticipos,
+      anticiposEnLinea,
+      anticiposEnSalon,
+      anticiposEnRevision: suma(anticipos.filter((p) => p.estado === 'en_revision')),
+      anticiposReembolsados: suma(anticipos.filter((p) => p.estado === 'reembolsado')),
     };
   }
 

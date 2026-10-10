@@ -90,13 +90,13 @@ model Usuario {
   rol                   String    @default("cliente") // admin | estilista | empleado | becario | cliente
 
   // Campos de perfil capilar (embebidos)
-  tipoCabello     TipoCabello?
-  colorNatural    String?      @map("color_natural")
-  colorActual     String?      @map("color_actual")
-  productosUsados String?      @map("productos_usados")
-  alergias        String?
+  tipoCabello          TipoCabello?
+  colorNatural         String?      @map("color_natural")
+  colorActual          String?      @map("color_actual")
+  productosUsados      String?      @map("productos_usados")
+  alergias             String?
   /// Si tratamientosQuimicos es false, tratamientos queda en null.
-  tratamientosQuimicos Boolean @default(false) @map("tratamientos_quimicos")
+  tratamientosQuimicos Boolean      @default(false) @map("tratamientos_quimicos")
   tratamientos         String?
 
   // Campos de pregunta de seguridad (embebidos)
@@ -135,6 +135,8 @@ model Usuario {
   preferenciasNotificacion     PreferenciaNotificacion[]
   dispositivosPush             DispositivoPush[]
   sesionesMoviles              SesionMovil[]
+  movimientosCajaRegistrados   MovimientoCaja[]          @relation("MovimientosCajaRegistrados")
+  devolucionesResueltas        Devolucion[]              @relation("DevolucionesResueltas")
 
   @@index([activo])
   @@index([email])
@@ -290,15 +292,19 @@ model Pago {
   pagadoEn          DateTime?  @map("pagado_en")
   /// Anticipo de cita que el salón decidió retener (decisión firme: ya no se reembolsa).
   retenidoEn        DateTime?  @map("retenido_en")
+  /// Cuándo se marcó como reembolsado (reportes y caja; nulo en reembolsos anteriores a esta columna).
+  reembolsadoEn     DateTime?  @map("reembolsado_en")
   creadoEn          DateTime   @default(now()) @map("creado_en")
   actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
 
   /// Un pago es de un pedido o del anticipo de una cita (CHECK en la base: exactamente uno de los dos).
-  pedido       Pedido?      @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
-  pedidoId     Int?         @map("pedido_id")
-  cita         Cita?        @relation(fields: [citaId], references: [id], onDelete: Restrict)
-  citaId       Int?         @map("cita_id")
+  pedido       Pedido?         @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId     Int?            @map("pedido_id")
+  cita         Cita?           @relation(fields: [citaId], references: [id], onDelete: Restrict)
+  citaId       Int?            @map("cita_id")
   devoluciones Devolucion[]
+  /// Salida de efectivo que registró su reembolso en caja (solo cobros en efectivo del salón).
+  salidaCaja   MovimientoCaja?
 
   // Quién cobró en el salón y en qué corte de caja entró (cobros de pedidos para recoger).
   cobradoPor   Usuario?   @relation("PagosCobrados", fields: [cobradoPorId], references: [id], onDelete: SetNull)
@@ -408,12 +414,24 @@ model Valoracion {
 }
 
 model Devolucion {
-  id            Int      @id @default(autoincrement())
-  motivo        String?  @db.Text
-  estado        String
-  monto         Decimal? @db.Decimal(10, 2)
-  creadoEn      DateTime @default(now()) @map("creado_en")
-  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+  id              Int             @id @default(autoincrement())
+  motivo          String?         @db.Text
+  /// pendiente | aprobada | rechazada | cancelada (filas antiguas pueden tener otros valores).
+  estado          String
+  /// Lo calcula el backend; nulo en los cambios de producto.
+  monto           Decimal?        @db.Decimal(10, 2)
+  /// cambio | reembolso (nulo en filas anteriores a esta columna).
+  tipo            String?
+  causa           String?
+  /// efectivo | metodo_original (solo reembolsos aprobados).
+  metodoReembolso String?         @map("metodo_reembolso")
+  notaResolucion  String?         @map("nota_resolucion") @db.Text
+  resueltoEn      DateTime?       @map("resuelto_en")
+  resueltoPor     Usuario?        @relation("DevolucionesResueltas", fields: [resueltoPorId], references: [id], onDelete: SetNull)
+  resueltoPorId   String?         @map("resuelto_por_id")
+  creadoEn        DateTime        @default(now()) @map("creado_en")
+  actualizadoEn   DateTime        @updatedAt @map("actualizado_en")
+  salidaCaja      MovimientoCaja?
 
   pedido       Pedido      @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
   pedidoId     Int         @map("pedido_id")
@@ -1008,6 +1026,8 @@ model CorteCaja {
   totalTarjeta       Decimal  @map("total_tarjeta") @db.Decimal(10, 2)
   totalTransferencia Decimal  @map("total_transferencia") @db.Decimal(10, 2)
   diferencia         Decimal  @db.Decimal(10, 2)
+  /// Salidas de efectivo (reembolsos) descontadas en este corte.
+  totalSalidas       Decimal  @default(0) @map("total_salidas") @db.Decimal(10, 2)
   notas              String?  @db.Text
   creadoEn           DateTime @default(now()) @map("creado_en")
   actualizadoEn      DateTime @updatedAt @map("actualizado_en")
@@ -1015,12 +1035,50 @@ model CorteCaja {
   cajero   Usuario @relation("CortesComoCajero", fields: [cajeroId], references: [id], onDelete: Restrict)
   cajeroId String  @map("cajero_id")
 
-  ventas VentaLocal[]
-  pagos  Pago[]
+  ventas      VentaLocal[]
+  pagos       Pago[]
+  movimientos MovimientoCaja[]
 
   @@index([cajeroId])
   @@index([fecha])
   @@map("cortes_caja")
+}
+
+enum TipoMovimientoCaja {
+  salida
+}
+
+enum ConceptoMovimientoCaja {
+  reembolso_anticipo
+  reembolso_pedido
+  reembolso_devolucion
+}
+
+/// Salida de efectivo de la caja (reembolsos en efectivo). Entra al primer corte de quien la registra
+/// que se haga después; así un reembolso de un día ya cortado se descuenta en el corte abierto actual.
+model MovimientoCaja {
+  id       Int                    @id @default(autoincrement())
+  tipo     TipoMovimientoCaja     @default(salida)
+  concepto ConceptoMovimientoCaja
+  monto    Decimal                @db.Decimal(10, 2)
+  motivo   String?                @db.Text
+  creadoEn DateTime               @default(now()) @map("creado_en")
+
+  registradoPor   Usuario @relation("MovimientosCajaRegistrados", fields: [registradoPorId], references: [id], onDelete: Restrict)
+  registradoPorId String  @map("registrado_por_id")
+
+  corte   CorteCaja? @relation(fields: [corteId], references: [id], onDelete: SetNull)
+  corteId Int?       @map("corte_id")
+
+  /// Un movimiento viene de un pago (anticipo o pedido) o de una devolución; la llave única evita dos salidas por el mismo reembolso.
+  pago         Pago?       @relation(fields: [pagoId], references: [id], onDelete: SetNull)
+  pagoId       Int?        @unique @map("pago_id")
+  devolucion   Devolucion? @relation(fields: [devolucionId], references: [id], onDelete: SetNull)
+  devolucionId Int?        @unique @map("devolucion_id")
+
+  @@index([registradoPorId, creadoEn])
+  @@index([corteId])
+  @@map("movimientos_caja")
 }
 
 // ─── Módulo: Proveedores ──────────────────────────────────────────────────────

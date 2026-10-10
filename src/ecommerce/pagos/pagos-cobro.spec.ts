@@ -47,3 +47,36 @@ describe('Cobro registrado para el corte de caja', () => {
     expect(actualizados[0].cobradoPorId).toBeUndefined();
   });
 });
+
+describe('Reembolsar un pago de pedido que ya tiene reembolsos por devolución', () => {
+  function montarReembolso(devolucionesAprobadas: number) {
+    const pago = { id: 5, pedidoId: 7, estado: 'aprobado', monto: 350, metodo: 'tarjeta_terminal', cobradoPorId: 'cajera-1' };
+    const prisma: any = {
+      pedido: { findUnique: jest.fn(async () => ({ usuarioId: 'clienta-1' })) },
+      pago: {
+        findUnique: jest.fn(async () => pago),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+      },
+      devolucion: { count: jest.fn(async () => devolucionesAprobadas) },
+      movimientoCaja: { create: jest.fn() },
+      $executeRaw: jest.fn(async () => 1),
+    };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+    return { servicio: new PagosService(prisma, { getRol: jest.fn() } as any), prisma };
+  }
+
+  it('responde 409 y no marca el pago como reembolsado, para que el dinero no salga dos veces', async () => {
+    const { servicio, prisma } = montarReembolso(1);
+    await expect(servicio.actualizar(5, 'cajera-2', { estado: 'reembolsado' } as any, 'estilista', ['caja:escritura'])).rejects.toThrow(
+      'El pedido ya tiene reembolsos por devolución; gestiona desde devoluciones',
+    );
+    expect(prisma.pago.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('sin devoluciones aprobadas de reembolso, se reembolsa como antes', async () => {
+    const { servicio, prisma } = montarReembolso(0);
+    await servicio.actualizar(5, 'cajera-2', { estado: 'reembolsado' } as any, 'estilista', ['caja:escritura']);
+    expect(prisma.pago.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.devolucion.count.mock.calls[0][0].where).toEqual({ pedidoId: 7, estado: 'aprobada', tipo: 'reembolso' });
+  });
+});

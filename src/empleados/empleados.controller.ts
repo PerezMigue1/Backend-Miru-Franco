@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   UseGuards,
@@ -39,10 +40,19 @@ export class EmpleadosController {
     return this.empleadosService.crear(dto);
   }
 
-  @Put(':usuarioId')
+  /** Actualización parcial: solo se escriben los campos que vienen en el cuerpo. La web usa PATCH. */
+  @Patch(':usuarioId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   actualizar(@Param('usuarioId') usuarioId: string, @Body() dto: UpdateEmpleadoDto) {
+    return this.empleadosService.actualizar(usuarioId, dto);
+  }
+
+  /** Alias de PATCH para clientes anteriores: mismo DTO, mismos guards y misma actualización parcial. */
+  @Put(':usuarioId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  actualizarPut(@Param('usuarioId') usuarioId: string, @Body() dto: UpdateEmpleadoDto) {
     return this.empleadosService.actualizar(usuarioId, dto);
   }
 

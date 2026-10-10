@@ -56,6 +56,7 @@ function coincide(fila: any, where: any): boolean {
 function base(opciones: { citas?: any[]; pagos?: any[]; fallaCita?: number } = {}) {
   const citas: any[] = (opciones.citas ?? []).map((c) => ({ estado: 'pendiente', anticipoPagadoEn: null, creadoEn: minutos(-150), clienteId: 'cliente-yo', especialistaId: 'est-1', servicioId: 5, ...c }));
   const pagos: any[] = opciones.pagos ?? [];
+  const movimientos: any[] = [];
   let sigPago = 900;
   const conRelaciones = (c: any) => c && { ...c, servicio: { id: c.servicioId, nombre: 'Nanoplastia', precio: new Prisma.Decimal(900) }, pagos: pagos.filter((p) => p.citaId === c.id) };
   const prisma: any = {
@@ -90,6 +91,7 @@ function base(opciones: { citas?: any[]; pagos?: any[]; fallaCita?: number } = {
       updateMany: jest.fn(async ({ where, data }: any) => { const r = pagos.filter((p) => coincide(p, where)); r.forEach((p) => Object.assign(p, data)); return { count: r.length }; }),
       aggregate: jest.fn(async ({ where }: any) => ({ _sum: { monto: pagos.filter((p) => coincide(p, where)).reduce((s, p) => s + Number(p.monto), 0) } })),
     },
+    movimientoCaja: { create: jest.fn(async ({ data }: any) => { const m = { id: movimientos.length + 1, corteId: null, ...data }; movimientos.push(m); return m; }) },
   };
   prisma.$transaction = jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)));
   const eventos = { emit: jest.fn() };
@@ -100,7 +102,7 @@ function base(opciones: { citas?: any[]; pagos?: any[]; fallaCita?: number } = {
     reembolsarPago: jest.fn(async () => ({ id: 77, status: 'approved' })),
   };
   const anticipos = new AnticiposCitasService(prisma, mp as any, eventos as any);
-  return { prisma, citas, pagos, eventos, mp, anticipos };
+  return { prisma, citas, pagos, movimientos, eventos, mp, anticipos };
 }
 
 const citaConAnticipo = (extra: Record<string, unknown> = {}) => ({ id: 7, anticipoRequerido: new Prisma.Decimal(150), anticipoVenceEn: minutos(60), ...extra });
@@ -116,7 +118,9 @@ describe('Agendar: el anticipo sale del servicio y aparta el horario 2 horas', (
       usuario: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, rol: where.id === 'est-1' ? 'estilista' : 'cliente', activo: true })) },
       servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, anticipoMonto: anticipoMonto === null ? null : new Prisma.Decimal(anticipoMonto) })) },
       cita: { findFirst: jest.fn(async () => null), create: jest.fn(async ({ data }: any) => { creadas.push(data); return { id: 1, ...data, servicio: { nombre: 'Nanoplastia' } }; }) },
+      $executeRaw: jest.fn(async () => 1),
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     return { servicio: new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any), creadas };
   }
   const dto = { clienteId: 'otra', especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: '2026-10-21T16:00:00.000Z', fechaHoraFin: '2026-10-21T17:00:00.000Z' };
@@ -375,6 +379,7 @@ describe('Cancelar, reembolsar, retener y no asistió', () => {
   function citasCon(cita: any, pagos: any[]) {
     const b = base({ citas: [cita], pagos });
     b.prisma.cita.findFirst = jest.fn(async () => null);
+    b.prisma.$executeRaw = jest.fn(async () => 1);
     const citasSrv = new CitasService(b.prisma, {} as any, {} as any, b.eventos as any);
     return { ...b, citasSrv };
   }
@@ -408,6 +413,14 @@ describe('Cancelar, reembolsar, retener y no asistió', () => {
     await anticipos.reembolsar(7, 'estilista-yo');
     expect(mp.reembolsarPago).not.toHaveBeenCalled();
     expect(pagos[0].estado).toBe('reembolsado');
+  });
+
+  it('reembolsar un pago del salón lo registra sin Mercado Pago (en efectivo, con su salida de caja)', async () => {
+    const { anticipos, mp, pagos, movimientos } = base({ citas: [citaConAnticipo({ estado: 'cancelada', anticipoPagadoEn: minutos(-30) })], pagos: [pagoSalon()] });
+    await anticipos.reembolsar(7, 'estilista-yo');
+    expect(mp.reembolsarPago).not.toHaveBeenCalled();
+    expect(pagos[0].estado).toBe('reembolsado');
+    expect(movimientos).toEqual([expect.objectContaining({ concepto: 'reembolso_anticipo', pagoId: 2, registradoPorId: 'estilista-yo' })]);
   });
 
   it('no se reembolsa el anticipo de una cita vigente que no está en revisión', async () => {
@@ -526,6 +539,7 @@ describe('Casos límite de retener, reembolsar y estado', () => {
   it('la clienta cancela justo cuando llega el webhook: el pago aprobado pasa a revisión igual', async () => {
     const b = base({ citas: [citaConAnticipo({ estado: 'pendiente', anticipoPagadoEn: null })], pagos: [{ ...revisionMp(), estado: 'aprobado' }] });
     b.prisma.cita.findFirst = jest.fn(async () => null);
+    b.prisma.$executeRaw = jest.fn(async () => 1);
     const citasSrv = new CitasService(b.prisma, {} as any, {} as any, b.eventos as any);
     await citasSrv.cancelar(7, { motivoCancelacion: 'Ya no puedo' } as any, yo('cliente'), true);
     expect(b.pagos[0].estado).toBe('en_revision');
@@ -542,7 +556,9 @@ describe('ANTICIPOS_DESDE también decide si se pide anticipo', () => {
       usuario: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, rol: where.id === 'est-1' ? 'estilista' : 'cliente', activo: true })) },
       servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, anticipoMonto: new Prisma.Decimal(150) })) },
       cita: { findFirst: jest.fn(async () => null), create: jest.fn(async ({ data }: any) => { creadas.push(data); return { id: 1, ...data, servicio: { nombre: 'x' } }; }) },
+      $executeRaw: jest.fn(async () => 1),
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     await new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any).crear({ clienteId: 'x', especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: '2026-10-21T16:00:00.000Z', fechaHoraFin: '2026-10-21T17:00:00.000Z' } as any, yo('cliente'), true);
     expect(creadas[0].anticipoRequerido ?? null).toBeNull();
   });

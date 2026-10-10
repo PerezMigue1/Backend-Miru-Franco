@@ -70,6 +70,22 @@ export const SIN_PREGUNTA_RECUPERACION =
   'No pudimos continuar con la recuperación por pregunta de seguridad. Intenta recuperar tu cuenta por correo.';
 export const DATOS_NO_COINCIDEN = 'Los datos no coinciden.';
 
+/** Respuesta del envío del código por SMS: la misma con 0, 1 o varias cuentas con ese número. */
+export const MENSAJE_ENVIO_CODIGO_SMS =
+  'Si el número está registrado te enviamos un código por SMS. Si no te llega, recupera tu cuenta con tu correo.';
+
+/** Código del 403 de login con una cuenta sin activar: la web y la app ofrecen reenviar el código. */
+export const CODIGO_CUENTA_NO_ACTIVADA = 'CUENTA_NO_ACTIVADA';
+
+/**
+ * Respuesta de POST /auth/verificar-correo sin sesión de admin: idéntica exista o no el correo.
+ * Conserva `existe` porque la app móvil reintenta si falta el campo.
+ */
+export const RESPUESTA_CORREO_ANONIMA = Object.freeze({
+  existe: false,
+  message: 'Comprobaremos el correo al crear la cuenta',
+});
+
 @Injectable()
 export class UsuariosService {
   // Logs sin datos personales (Render los guarda): solo ids, nunca correo, teléfono ni nombre.
@@ -283,7 +299,10 @@ export class UsuariosService {
 
     // Verificar que la cuenta esté confirmada (excepto para usuarios de Google)
     if (!usuario.confirmado && !usuario.googleId) {
-      throw new ForbiddenException('Tu cuenta no está activada. Revisa tu correo para activar tu cuenta.');
+      throw new ForbiddenException({
+        message: 'Tu cuenta no está activada. Revisa tu correo para activar tu cuenta.',
+        code: CODIGO_CUENTA_NO_ACTIVADA,
+      });
     }
 
     // Resetear intentos fallidos después de login exitoso
@@ -412,7 +431,16 @@ export class UsuariosService {
     }
   }
 
-  async verificarCorreoExistente(correo: string) {
+  /**
+   * POST /auth/verificar-correo. Anónimo: siempre la misma respuesta y sin consultar la base, para
+   * no revelar (ni por contenido ni por tiempo) si el correo tiene cuenta; el registro lo comprueba
+   * al crear la cuenta. Solo con sesión de admin (`consultaReal`) se consulta de verdad.
+   */
+  async verificarCorreoExistente(correo: string, opciones: { consultaReal?: boolean } = {}) {
+    if (!opciones.consultaReal) {
+      return { ...RESPUESTA_CORREO_ANONIMA };
+    }
+
     // Sanitizar email antes de buscar
     const correoSanitizado = sanitizeEmail(correo);
 
@@ -422,6 +450,7 @@ export class UsuariosService {
 
     const usuario = await this.prisma.usuario.findUnique({
       where: { email: correoSanitizado },
+      select: { id: true },
     });
 
     if (usuario) {
@@ -617,35 +646,44 @@ export class UsuariosService {
     };
   }
 
-  async enviarCodigoRecuperacionSMS(phone: string) {
-    // Normalizar teléfono para buscar con el mismo formato almacenado en BD.
+  /**
+   * Cuenta activa dueña del teléfono, en cualquiera de sus formatos guardados (+52, 52, 10 dígitos).
+   * Los teléfonos repetidos no se bloquean: si el número es de más de una cuenta no se elige ninguna
+   * (null), para no enviar ni aceptar un código que cambie la contraseña de una cuenta al azar.
+   */
+  private async buscarCuentaUnicaPorTelefono(phone: string) {
     const phoneLookupCandidates = buildPhoneLookupCandidates(phone);
-
-    // No revelar si existe o no el usuario.
     if (phoneLookupCandidates.length === 0) {
-      return {
-        success: true,
-        message: 'Se envió el código',
-      };
+      return { usuario: null, ambiguo: false };
     }
-
-    const usuario = await this.prisma.usuario.findFirst({
+    const cuentas = await this.prisma.usuario.findMany({
       where: {
         OR: phoneLookupCandidates.map((telefono) => ({ telefono })),
-      },
-      select: {
-        id: true,
-        telefono: true,
         activo: true,
       },
+      take: 2,
+      select: {
+        id: true,
+        email: true,
+        telefono: true,
+      },
     });
+    return { usuario: cuentas.length === 1 ? cuentas[0] : null, ambiguo: cuentas.length > 1 };
+  }
 
-    // No revelar si el teléfono existe o no en el sistema.
-    if (!usuario?.id || !usuario.activo) {
-      return {
-        success: true,
-        message: 'Se envió el código',
-      };
+  async enviarCodigoRecuperacionSMS(phone: string) {
+    // Misma respuesta con 0, 1 o varias cuentas: no revela si el número está registrado.
+    const respuesta = { success: true, message: MENSAJE_ENVIO_CODIGO_SMS };
+
+    const { usuario, ambiguo } = await this.buscarCuentaUnicaPorTelefono(phone);
+
+    if (ambiguo) {
+      this.logger.warn('Recuperación por SMS: el teléfono pertenece a varias cuentas activas; no se envió el código');
+      return respuesta;
+    }
+
+    if (!usuario) {
+      return respuesta;
     }
 
     if (!this.twilioClient || !this.twilioVerifyServiceSid) {
@@ -664,10 +702,7 @@ export class UsuariosService {
       throw new BadRequestException('No se pudo enviar el código de verificación por SMS');
     }
 
-    return {
-      success: true,
-      message: 'Se envió el código',
-    };
+    return respuesta;
   }
 
   async verificarCodigoRecuperacionSMS(phone: string, codigo: string) {
@@ -682,19 +717,9 @@ export class UsuariosService {
       throw new InternalServerErrorException('Twilio Verify no está configurado en el servidor');
     }
 
-    const usuario = await this.prisma.usuario.findFirst({
-      where: {
-        OR: phoneLookupCandidates.map((telefono) => ({ telefono })),
-        activo: true,
-      },
-      select: {
-        id: true,
-        email: true,
-        telefono: true,
-      },
-    });
+    const { usuario } = await this.buscarCuentaUnicaPorTelefono(phone);
 
-    // Respuesta genérica para no revelar existencia de cuenta.
+    // Respuesta genérica para no revelar existencia de cuenta (ni que el número es de varias).
     if (!usuario) {
       throw new BadRequestException('Código inválido o expirado');
     }

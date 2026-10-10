@@ -50,16 +50,31 @@ export class ValoracionesService {
     return { success: true, count: data.length, data };
   }
 
+  /**
+   * Lista pública (sin sesión): sin ids de la clienta ni del pedido, y de la autora solo el nombre de
+   * pila. El `id` es el de la reseña (la web lo usa como clave de la lista).
+   */
   async listarPorProducto(productoId: number) {
-    const data = await this.prisma.valoracion.findMany({
+    const filas = await this.prisma.valoracion.findMany({
       where: { productoId },
       orderBy: { creadoEn: 'desc' },
+      select: {
+        id: true,
+        puntuacion: true,
+        comentario: true,
+        creadoEn: true,
+        usuario: { select: { nombre: true } },
+      },
     });
+    const data = filas.map(({ usuario, ...resto }) => ({
+      ...resto,
+      autor: usuario?.nombre?.trim().split(/\s+/)[0] ?? null,
+    }));
     return { success: true, count: data.length, data };
   }
 
-  async listarPorPedido(pedidoId: number, solicitanteId: string) {
-    await this.access.assertPedido(solicitanteId, pedidoId);
+  async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
+    await this.access.assertPedido(solicitanteId, pedidoId, propios);
     const data = await this.prisma.valoracion.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'desc' },
@@ -75,7 +90,11 @@ export class ValoracionesService {
   }
 
   async crear(solicitanteId: string, dto: CreateValoracionDto) {
-    await this.access.assertPedido(solicitanteId, dto.pedidoId);
+    // Solo se valora lo que una misma compró: ni el admin publica reseñas sobre el pedido de otra persona.
+    const { usuarioIdPedido } = await this.access.assertPedido(solicitanteId, dto.pedidoId);
+    if (usuarioIdPedido !== solicitanteId) {
+      throw new ForbiddenException('Solo puedes valorar productos de tus propios pedidos');
+    }
 
     const enPedido = await this.prisma.pedidoItem.findFirst({
       where: { pedidoId: dto.pedidoId, productoId: dto.productoId },
@@ -117,8 +136,10 @@ export class ValoracionesService {
   ) {
     const row = await this.prisma.valoracion.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Valoración no encontrada');
-    const rol = await this.access.getRol(solicitanteId);
-    this.access.assertOwnerOrAdmin(solicitanteId, row.usuarioId, rol);
+    // Editar es solo de la autora; el admin modera borrando, no cambia lo que otra persona escribió.
+    if (row.usuarioId !== solicitanteId) {
+      throw new ForbiddenException('Solo la autora puede editar su valoración');
+    }
 
     const data = await this.prisma.valoracion.update({
       where: { id },

@@ -23,7 +23,7 @@ export class NotificacionesService {
     const rol = await this.access.getRol(solicitanteId);
     let targetUserId = solicitanteId;
     if (opts?.usuarioId) {
-      if (!(await puedeVerDatosDeClientes(this.prisma, rol))) {
+      if (!(await puedeVerDatosDeClientes(this.prisma, rol, opts.usuarioId, solicitanteId))) {
         throw new ForbiddenException(
           'No tienes permiso para filtrar notificaciones de otro usuario',
         );

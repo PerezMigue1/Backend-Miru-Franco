@@ -25,7 +25,7 @@ export class DireccionesUsuarioService {
     const rol = await this.access.getRol(solicitanteId);
     let targetUserId = solicitanteId;
     if (filtroUsuarioId) {
-      if (!(await puedeVerDatosDeClientes(this.prisma, rol))) {
+      if (!(await puedeVerDatosDeClientes(this.prisma, rol, filtroUsuarioId, solicitanteId))) {
         throw new ForbiddenException(
           'No tienes permiso para listar direcciones de otro usuario',
         );

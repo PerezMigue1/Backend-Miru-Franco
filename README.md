@@ -112,8 +112,8 @@ npm run start:prod
    SENDGRID_FROM_NAME=Miru Franco Salón Beauty
    GOOGLE_CLIENT_ID=tu_client_id
    GOOGLE_CLIENT_SECRET=tu_client_secret
-   BACKEND_URL=https://tu-app.onrender.com
-   FRONTEND_URL=https://tu-frontend.com
+   BACKEND_URL=https://api.mirufranco.com
+   FRONTEND_URL=https://www.mirufranco.com
    ```
 
 4. **Opción con render.yaml:**

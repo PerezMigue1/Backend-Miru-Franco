@@ -18,8 +18,8 @@ services:
       # - SENDGRID_FROM_NAME
       # - GOOGLE_CLIENT_ID
       # - GOOGLE_CLIENT_SECRET
-      # - BACKEND_URL
-      # - FRONTEND_URL
+      # - BACKEND_URL (https://api.mirufranco.com)
+      # - FRONTEND_URL (https://www.mirufranco.com)
       # Datadog (APM + AppSec + IAST): definir en el dashboard de Render, NO commitear secretos:
       # - DD_API_KEY
       # - DD_SITE (ej. datadoghq.com o el site de tu org)

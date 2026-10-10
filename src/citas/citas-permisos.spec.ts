@@ -43,18 +43,25 @@ function montar() {
   const coincide = (c: any, where: any) => Object.entries(where ?? {}).every(([k, v]) => typeof v !== 'string' || c[k] === v);
   const prisma: any = {
     cita: {
-      findUnique: jest.fn(async ({ where }: any) => citas.find((c) => c.id === where.id) ?? null),
+      findUnique: jest.fn(async ({ where }: any) => { const c = citas.find((x) => x.id === where.id); return c ? conRelaciones(c) : null; }),
       findFirst: jest.fn(async () => null),
       update: jest.fn(async ({ where, data }: any) => {
         const c = citas.find((x) => x.id === where.id)!;
         Object.assign(c, data);
         return conRelaciones(c);
       }),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const c = citas.find((x) => x.id === where.id);
+        if (!c) return { count: 0 };
+        Object.assign(c, data);
+        return { count: 1 };
+      }),
       count: jest.fn(async ({ where }: any) => citas.filter((c) => coincide(c, where)).length),
       findMany: jest.fn(async ({ where }: any) => citas.filter((c) => coincide(c, where)).map(conRelaciones)),
     },
     usuario: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, rol: 'estilista', activo: true })) },
     $transaction: jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg))),
+    $executeRaw: jest.fn(async () => 1),
   };
   const inventario = { registrarSalida: jest.fn(async () => ({ data: { ok: true } })) };
   const eventos = { emit: jest.fn() };

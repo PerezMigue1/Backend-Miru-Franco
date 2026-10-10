@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { esPropios } from '../../common/utils/alcance-propio.util';
 import { ValoracionesService } from './valoraciones.service';
 import { CreateValoracionDto } from './dto/create-valoracion.dto';
 import { UpdateValoracionDto } from './dto/update-valoracion.dto';
@@ -41,8 +42,9 @@ export class ValoracionesController {
   listarPorPedido(
     @Param('pedidoId') pedidoId: string,
     @CurrentUser() user: { id: string },
+    @Query('propios') propios?: string,
   ) {
-    return this.service.listarPorPedido(Number(pedidoId), user.id);
+    return this.service.listarPorPedido(Number(pedidoId), user.id, esPropios(propios));
   }
 
   @Get(':id')

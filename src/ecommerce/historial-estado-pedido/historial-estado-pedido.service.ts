@@ -11,8 +11,8 @@ export class HistorialEstadoPedidoService {
     private readonly access: EcommerceAccessService,
   ) {}
 
-  async listarPorPedido(pedidoId: number, solicitanteId: string) {
-    await this.access.assertPedido(solicitanteId, pedidoId);
+  async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
+    await this.access.assertPedido(solicitanteId, pedidoId, propios);
     const data = await this.prisma.historialEstadoPedido.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'asc' },
@@ -20,12 +20,12 @@ export class HistorialEstadoPedidoService {
     return { success: true, count: data.length, data };
   }
 
-  async obtenerPorId(id: number, solicitanteId: string) {
+  async obtenerPorId(id: number, solicitanteId: string, propios = false) {
     const row = await this.prisma.historialEstadoPedido.findUnique({
       where: { id },
     });
     if (!row) throw new NotFoundException('Registro de historial no encontrado');
-    await this.access.assertPedido(solicitanteId, row.pedidoId);
+    await this.access.assertPedido(solicitanteId, row.pedidoId, propios);
     return { success: true, data: row };
   }
 
