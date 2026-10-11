@@ -12,6 +12,14 @@ export const PLAZO_ANTICIPO_MS = HORAS_ANTICIPO_CITA * 60 * 60 * 1000;
 
 /** external_reference de Mercado Pago: los pedidos usan su id; las citas, "cita-<id>". */
 export const referenciaCita = (citaId: number) => `cita-${citaId}`;
+/**
+ * Anticipo pagado desde la app móvil: Mercado Pago regresa a RUTA_RETORNO_APP (pública, bajo /api) y
+ * esta redirige al deep link fijo con solo el id de la cita, igual que DEEP_LINK_APP en el login con Google.
+ */
+export const RUTA_RETORNO_APP = 'pagos-en-linea/citas/retorno-app';
+export const DEEP_LINK_ANTICIPO_APP = 'appmirufranco://anticipo';
+export const deepLinkAnticipoApp = (citaId: number) => `${DEEP_LINK_ANTICIPO_APP}/${citaId}?retorno=mp`;
+
 export function citaDeReferencia(referencia: string | null | undefined): number | null {
   const m = /^cita-(\d+)$/.exec(String(referencia ?? ''));
   const id = m ? Number(m[1]) : NaN;

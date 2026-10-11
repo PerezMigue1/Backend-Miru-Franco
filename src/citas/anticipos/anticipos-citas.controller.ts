@@ -1,10 +1,25 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Post, Request, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Post,
+  Query,
+  Request,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { IsIn } from 'class-validator';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Permisos, PermisosGuard } from '../../common/guards/permisos.guard';
 import { solicitanteDe } from '../../common/utils/permisos-citas.util';
 import { AnticiposCitasService } from './anticipos-citas.service';
-import { METODOS_ANTICIPO_SALON, type MetodoAnticipoSalon } from './anticipos.util';
+import { METODOS_ANTICIPO_SALON, RUTA_RETORNO_APP, deepLinkAnticipoApp, type MetodoAnticipoSalon } from './anticipos.util';
 
 export class RegistrarAnticipoDto {
   @IsIn(METODOS_ANTICIPO_SALON)
@@ -20,10 +35,13 @@ export class RegistrarAnticipoDto {
 export class AnticiposCitasController {
   constructor(private readonly anticipos: AnticiposCitasService) {}
 
-  /** POST /api/pagos-en-linea/citas/:id/preferencia: URL de Mercado Pago para pagar el anticipo. */
+  /**
+   * POST /api/pagos-en-linea/citas/:id/preferencia: URL de Mercado Pago para pagar el anticipo.
+   * Con ?origen=app, Mercado Pago regresa a /api/pagos-en-linea/citas/retorno-app en lugar de la web.
+   */
   @Post('pagos-en-linea/citas/:id/preferencia')
-  crearPreferencia(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
-    return this.anticipos.crearPreferencia(id, req.user.id);
+  crearPreferencia(@Param('id', ParseIntPipe) id: number, @Query('origen') origen: string | undefined, @Request() req: any) {
+    return this.anticipos.crearPreferencia(id, req.user.id, new Date(), origen === 'app');
   }
 
   /** GET /api/pagos-en-linea/citas/:id/estado: estado real del anticipo (consulta a Mercado Pago). */
@@ -56,5 +74,20 @@ export class AnticiposCitasController {
   @Permisos('caja:escritura')
   retener(@Param('id', ParseIntPipe) id: number) {
     return this.anticipos.retener(id);
+  }
+}
+
+/**
+ * GET /api/pagos-en-linea/citas/retorno-app?citaId=<id>: Mercado Pago regresa aquí cuando el anticipo se
+ * pagó desde la app. Pública (el navegador llega sin sesión) y siempre al deep link fijo con solo el id de
+ * la cita: los parámetros que agrega Mercado Pago no se reenvían; la app consulta el estado real con /estado.
+ */
+@Controller()
+export class RetornoAppAnticipoController {
+  @Get(RUTA_RETORNO_APP)
+  retornoApp(@Query('citaId') citaId: string | undefined, @Res() res: Response) {
+    const id = typeof citaId === 'string' && /^[1-9]\d*$/.test(citaId) ? Number(citaId) : NaN;
+    if (!Number.isSafeInteger(id)) throw new BadRequestException('citaId inválido');
+    res.redirect(302, deepLinkAnticipoApp(id));
   }
 }

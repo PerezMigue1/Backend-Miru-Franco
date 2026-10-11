@@ -10,6 +10,7 @@ import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '
 import {
   ESTADOS_CITA_VIGENTE,
   METODO_PAGO_DE_ANTICIPO,
+  RUTA_RETORNO_APP,
   type MetodoAnticipoSalon,
   centavos,
   referenciaCita,
@@ -43,7 +44,7 @@ export class AnticiposCitasService {
     return cita;
   }
 
-  async crearPreferencia(citaId: number, usuarioId: string, ahora: Date = new Date()) {
+  async crearPreferencia(citaId: number, usuarioId: string, ahora: Date = new Date(), desdeApp = false) {
     const cita = await this.citaConServicio(citaId);
     // Solo la dueña (cualquier rol en el portal); la ajena responde 404 para no revelar que existe.
     if (cita.clienteId !== usuarioId) throw new NotFoundException('Cita no encontrada');
@@ -55,6 +56,9 @@ export class AnticiposCitasService {
     }
 
     const confirmacion = `${(process.env.FRONTEND_URL ?? '').replace(/\/+$/, '')}/cliente/servicios-citas/confirmacion?citaId=${cita.id}`;
+    // Desde la app, Mercado Pago regresa al backend, que redirige al deep link (así no se abre la web).
+    const backend = (process.env.BACKEND_URL ?? '').replace(/\/+$/, '');
+    const regreso = desdeApp && backend ? `${backend}/api/${RUTA_RETORNO_APP}?citaId=${cita.id}` : confirmacion;
     const cuerpo = {
       items: [{
         id: referenciaCita(cita.id),
@@ -64,8 +68,8 @@ export class AnticiposCitasService {
         currency_id: 'MXN',
       }],
       external_reference: referenciaCita(cita.id),
-      back_urls: { success: confirmacion, failure: confirmacion, pending: confirmacion },
-      ...(confirmacion.startsWith('https://') && { auto_return: 'approved' }),
+      back_urls: { success: regreso, failure: regreso, pending: regreso },
+      ...(regreso.startsWith('https://') && { auto_return: 'approved' }),
       // La preferencia vence a la misma hora que el anticipo: después ya no se puede pagar.
       expires: true,
       expiration_date_from: ahora.toISOString(),
