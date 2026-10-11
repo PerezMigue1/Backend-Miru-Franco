@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ESTADOS_CITA_LIBERABLE, MOTIVO_ANTICIPO_NO_PAGADO, anticiposDesde } from './anticipos.util';
+import { ESTADOS_CITA_LIBERABLE, MINUTOS_ANTES_PAGO_SALON, MOTIVO_ANTICIPO_NO_PAGADO, anticiposDesde } from './anticipos.util';
 
 /** Citas por consulta: se recorren de 50 en 50 por id hasta terminar. */
 const LOTE = 50;
@@ -51,7 +51,7 @@ export class AnticiposBarridaService {
         where: { ...vencidas, ...(ultimo === undefined ? {} : { id: { gt: ultimo } }) },
         orderBy: { id: 'asc' },
         take: LOTE,
-        select: { id: true, clienteId: true, especialistaId: true },
+        select: { id: true, clienteId: true, especialistaId: true, anticipoEnSalon: true },
       });
       for (const cita of lote) {
         try {
@@ -67,7 +67,10 @@ export class AnticiposBarridaService {
             citaId: cita.id,
             clienteId: cita.clienteId,
             especialistaId: cita.especialistaId,
-            motivo: 'No recibimos el anticipo a tiempo y el horario quedó libre',
+            // Anticipo en el salón: el plazo vence minutos antes de la cita, no al pasar el plazo en línea.
+            motivo: cita.anticipoEnSalon
+              ? `No recibimos tu anticipo ${MINUTOS_ANTES_PAGO_SALON} minutos antes de tu cita y el horario quedó libre`
+              : 'No recibimos el anticipo a tiempo y el horario quedó libre',
           });
         } catch (e) {
           // Una cita que falla no detiene la barrida; se reintenta en la siguiente.

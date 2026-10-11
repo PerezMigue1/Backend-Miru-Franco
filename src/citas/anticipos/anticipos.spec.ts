@@ -107,22 +107,37 @@ function base(opciones: { citas?: any[]; pagos?: any[]; fallaCita?: number } = {
 
 const citaConAnticipo = (extra: Record<string, unknown> = {}) => ({ id: 7, anticipoRequerido: new Prisma.Decimal(150), anticipoVenceEn: minutos(60), ...extra });
 
+/** CitasService.crear con Prisma simulado: `creadas` guarda el `data` de cada cita creada. */
+function montarCitas(anticipoMonto: number | null) {
+  const creadas: any[] = [];
+  const prisma: any = {
+    usuario: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, rol: where.id === 'est-1' ? 'estilista' : 'cliente', activo: true })) },
+    servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, anticipoMonto: anticipoMonto === null ? null : new Prisma.Decimal(anticipoMonto) })) },
+    cita: {
+      findFirst: jest.fn(async () => null),
+      count: jest.fn(async () => 0),
+      create: jest.fn(async ({ data }: any) => { creadas.push(data); return { id: 1, ...data, servicio: { nombre: 'Nanoplastia' } }; }),
+    },
+    $executeRaw: jest.fn(async () => 1),
+  };
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+  return { servicio: new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any), creadas, prisma };
+}
+
+/** CitasService sobre el Prisma en memoria de `base` (cancelar, reprogramar, no asistió). */
+function citasCon(cita: any, pagos: any[]) {
+  const b = base({ citas: [cita], pagos });
+  b.prisma.cita.findFirst = jest.fn(async () => null);
+  b.prisma.$executeRaw = jest.fn(async () => 1);
+  const citasSrv = new CitasService(b.prisma, {} as any, {} as any, b.eventos as any);
+  return { ...b, citasSrv };
+}
+
 // ---------- 1. Agendar ----------
 describe('Agendar: el anticipo sale del servicio y aparta el horario 2 horas', () => {
   beforeAll(() => { jest.useFakeTimers({ now: AHORA }); process.env.ANTICIPOS_DESDE = '2026-10-01'; });
   afterAll(() => { jest.useRealTimers(); delete process.env.ANTICIPOS_DESDE; });
 
-  function montarCitas(anticipoMonto: number | null) {
-    const creadas: any[] = [];
-    const prisma: any = {
-      usuario: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, rol: where.id === 'est-1' ? 'estilista' : 'cliente', activo: true })) },
-      servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, anticipoMonto: anticipoMonto === null ? null : new Prisma.Decimal(anticipoMonto) })) },
-      cita: { findFirst: jest.fn(async () => null), create: jest.fn(async ({ data }: any) => { creadas.push(data); return { id: 1, ...data, servicio: { nombre: 'Nanoplastia' } }; }) },
-      $executeRaw: jest.fn(async () => 1),
-    };
-    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
-    return { servicio: new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any), creadas };
-  }
   const dto = { clienteId: 'otra', especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: '2026-10-21T16:00:00.000Z', fechaHoraFin: '2026-10-21T17:00:00.000Z' };
 
   it.each(['cliente', 'estilista', 'empleado', 'becario', 'admin'])('desde el portal (%s) la cita guarda el anticipo y vence en 2 horas', async (rol) => {
@@ -376,27 +391,24 @@ describe('POS: el anticipo pagado se descuenta y no se cobra dos veces', () => {
 
 // ---------- 7. Cancelaciones y reembolsos ----------
 describe('Cancelar, reembolsar, retener y no asistió', () => {
-  function citasCon(cita: any, pagos: any[]) {
-    const b = base({ citas: [cita], pagos });
-    b.prisma.cita.findFirst = jest.fn(async () => null);
-    b.prisma.$executeRaw = jest.fn(async () => 1);
-    const citasSrv = new CitasService(b.prisma, {} as any, {} as any, b.eventos as any);
-    return { ...b, citasSrv };
-  }
   const pagoMpAprobado = () => ({ id: 1, citaId: 7, estado: 'aprobado', proveedor: 'mercadopago', referenciaExterna: '555', monto: new Prisma.Decimal(150), metodo: 'mercado_pago' });
   const pagoSalon = () => ({ id: 2, citaId: 7, estado: 'aprobado', proveedor: null, referenciaExterna: null, monto: new Prisma.Decimal(150), metodo: 'efectivo', cobradoPorId: 'estilista-yo' });
 
-  it('si la clienta cancela con anticipo pagado, el pago queda en revisión y se avisa al personal', async () => {
+  it('si la clienta cancela con anticipo pagado, el anticipo se retiene: sigue aprobado, sin revisión ni aviso', async () => {
     const { citasSrv, pagos, eventos } = citasCon(citaConAnticipo({ estado: 'confirmada', anticipoPagadoEn: minutos(-30) }), [pagoMpAprobado()]);
     await citasSrv.cancelar(7, { motivoCancelacion: 'No puedo ir' } as any, yo('cliente'), true);
-    expect(pagos[0].estado).toBe('en_revision');
-    expect(eventos.emit).toHaveBeenCalledWith('pago.requiere_revision', expect.objectContaining({ citaId: 7, motivo: 'cita_cancelada_por_clienta' }));
+    expect(pagos[0].estado).toBe('aprobado');
+    expect(pagos[0].retenidoEn).toBeInstanceOf(Date);
+    expect(eventos.emit).not.toHaveBeenCalledWith('pago.requiere_revision', expect.anything());
   });
 
-  it('si cancela el salón, el pago sigue aprobado hasta que el personal reembolse', async () => {
-    const { citasSrv, pagos } = citasCon(citaConAnticipo({ clienteId: 'otra', estado: 'confirmada', anticipoPagadoEn: minutos(-30) }), [pagoMpAprobado()]);
+  it('si cancela el salón, el pago sigue aprobado, sin retener, hasta que el personal reembolse', async () => {
+    const { citasSrv, pagos, prisma, eventos } = citasCon(citaConAnticipo({ clienteId: 'otra', estado: 'confirmada', anticipoPagadoEn: minutos(-30) }), [pagoMpAprobado()]);
     await citasSrv.cancelar(7, { motivoCancelacion: 'La estilista se enfermó' } as any, yo('estilista'));
     expect(pagos[0].estado).toBe('aprobado');
+    expect(pagos[0].retenidoEn ?? null).toBeNull();
+    expect(prisma.pago.updateMany).not.toHaveBeenCalled();
+    expect(eventos.emit).not.toHaveBeenCalledWith('pago.requiere_revision', expect.anything());
   });
 
   it('reembolsar Mercado Pago usa la API de refunds y deja el pago reembolsado; dos veces responde 409', async () => {
@@ -536,13 +548,12 @@ describe('Casos límite de retener, reembolsar y estado', () => {
     expect(r.estado).toBe('aprobado');
   });
 
-  it('la clienta cancela justo cuando llega el webhook: el pago aprobado pasa a revisión igual', async () => {
-    const b = base({ citas: [citaConAnticipo({ estado: 'pendiente', anticipoPagadoEn: null })], pagos: [{ ...revisionMp(), estado: 'aprobado' }] });
-    b.prisma.cita.findFirst = jest.fn(async () => null);
-    b.prisma.$executeRaw = jest.fn(async () => 1);
-    const citasSrv = new CitasService(b.prisma, {} as any, {} as any, b.eventos as any);
-    await citasSrv.cancelar(7, { motivoCancelacion: 'Ya no puedo' } as any, yo('cliente'), true);
-    expect(b.pagos[0].estado).toBe('en_revision');
+  it('la clienta cancela justo cuando llega el webhook: el pago aprobado se retiene igual', async () => {
+    const b = citasCon(citaConAnticipo({ estado: 'pendiente', anticipoPagadoEn: null }), [{ ...revisionMp(), estado: 'aprobado' }]);
+    await b.citasSrv.cancelar(7, { motivoCancelacion: 'Ya no puedo' } as any, yo('cliente'), true);
+    expect(b.pagos[0].estado).toBe('aprobado');
+    expect(b.pagos[0].retenidoEn).toBeInstanceOf(Date);
+    expect(b.eventos.emit).not.toHaveBeenCalledWith('pago.requiere_revision', expect.anything());
   });
 });
 
@@ -581,5 +592,353 @@ describe('Estado del anticipo para el personal', () => {
       await expect(new PermisosGuard(new Reflector(), prisma).canActivate(ctx)).resolves.toBe(true);
       expect(req.permisosUsuario).toEqual(CLAVES[rol]);
     }
+  });
+});
+
+// ---------- 9. Pago del anticipo en línea o en el salón: plazos ----------
+describe('Anticipo en línea o en el salón: plazos', () => {
+  beforeEach(() => { jest.useFakeTimers({ now: AHORA }); process.env.ANTICIPOS_DESDE = '2026-10-01'; });
+  afterEach(() => { jest.useRealTimers(); delete process.env.ANTICIPOS_DESDE; });
+
+  const MENSAJE_SIN_TIEMPO_SALON = 'Ya no da tiempo de pagar en el salón. Paga el anticipo en línea.';
+  /** Cita de una hora que empieza `m` minutos después de AHORA. */
+  const dtoEn = (m: number, extra: Record<string, unknown> = {}) => ({
+    clienteId: 'otra', especialistaId: 'est-1', servicioId: 5,
+    fechaHoraInicio: minutos(m).toISOString(), fechaHoraFin: minutos(m + 60).toISOString(), ...extra,
+  });
+
+  describe('Crear', () => {
+    it("'linea' con la cita lejana: vence en 2 horas y no queda en el salón", async () => {
+      const { servicio, creadas } = montarCitas(150);
+      await servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+      expect(Number(creadas[0].anticipoRequerido)).toBe(150);
+      expect(creadas[0].anticipoVenceEn).toEqual(minutos(120));
+      expect(creadas[0].anticipoEnSalon ?? false).toBe(false);
+    });
+
+    it("'linea' con la cita a menos de 2 h 15 min: el plazo topa en 15 min antes del inicio", async () => {
+      for (const inicio of [134, 120, 60]) {
+        const { servicio, creadas } = montarCitas(150);
+        await servicio.crear(dtoEn(inicio, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+        expect(creadas[0].anticipoVenceEn).toEqual(minutos(inicio - 15));
+        expect(creadas[0].anticipoEnSalon ?? false).toBe(false);
+      }
+      // Justo en 2 h 15 min los dos plazos coinciden.
+      const { servicio, creadas } = montarCitas(150);
+      await servicio.crear(dtoEn(135, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+      expect(creadas[0].anticipoVenceEn).toEqual(minutos(120));
+    });
+
+    it.each([24 * 60, 60])('sin pagoAnticipo se comporta como en línea (cita en %i min)', async (inicio) => {
+      const sinElegir = montarCitas(150);
+      await sinElegir.servicio.crear(dtoEn(inicio) as any, yo('cliente'), true);
+      const enLinea = montarCitas(150);
+      await enLinea.servicio.crear(dtoEn(inicio, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+      expect(sinElegir.creadas[0].anticipoVenceEn).toEqual(enLinea.creadas[0].anticipoVenceEn);
+      expect(sinElegir.creadas[0].anticipoVenceEn).toEqual(minutos(Math.min(120, inicio - 15)));
+      expect(sinElegir.creadas[0].anticipoEnSalon ?? false).toBe(false);
+    });
+
+    it("'salon': vence 15 min antes del inicio y queda marcada en el salón", async () => {
+      const { servicio, creadas } = montarCitas(150);
+      await servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+      expect(Number(creadas[0].anticipoRequerido)).toBe(150);
+      expect(creadas[0].anticipoVenceEn).toEqual(minutos(24 * 60 - 15));
+      expect(creadas[0].anticipoEnSalon).toBe(true);
+    });
+
+    it("'salon' con exactamente 5 min de margen antes del plazo todavía se acepta", async () => {
+      const { servicio, creadas } = montarCitas(150);
+      await servicio.crear(dtoEn(20, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+      expect(creadas[0]).toMatchObject({ anticipoVenceEn: minutos(5), anticipoEnSalon: true });
+    });
+
+    it.each([
+      ['faltan menos de 5 min para el plazo', 19],
+      ['el plazo es justo ahora', 15],
+      ['el plazo ya pasó', 10],
+      ['la cita ya empezó', -30],
+    ])("'salon' cuando %s: 400 con el mensaje y no se crea la cita", async (_caso, inicio) => {
+      const { servicio, creadas, prisma } = montarCitas(150);
+      const r = servicio.crear(dtoEn(inicio, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+      await expect(r).rejects.toBeInstanceOf(BadRequestException);
+      await expect(r).rejects.toThrow(MENSAJE_SIN_TIEMPO_SALON);
+      expect(prisma.cita.create).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(creadas).toHaveLength(0);
+    });
+
+    it("'salon' se ignora si la cita no pide anticipo (sin margen tampoco falla)", async () => {
+      const { servicio, creadas } = montarCitas(null);
+      await servicio.crear(dtoEn(10, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+      expect(creadas[0].anticipoRequerido ?? null).toBeNull();
+      expect(creadas[0].anticipoVenceEn ?? null).toBeNull();
+      expect(creadas[0].anticipoEnSalon ?? false).toBe(false);
+    });
+  });
+
+  describe('Reprogramar', () => {
+    const INICIO = new Date('2026-10-22T16:00:00.000Z');
+    const NUEVO = { fechaHoraInicio: '2026-10-25T18:00:00.000Z', fechaHoraFin: '2026-10-25T19:00:00.000Z' };
+    const PLAZO_NUEVO = new Date('2026-10-25T17:45:00.000Z');
+    const PLAZO_VIEJO = new Date(INICIO.getTime() - 15 * 60_000);
+    const citaSalon = (extra: Record<string, unknown> = {}) => citaConAnticipo({
+      fechaHoraInicio: INICIO, fechaHoraFin: new Date(INICIO.getTime() + 3_600_000),
+      anticipoEnSalon: true, anticipoVenceEn: PLAZO_VIEJO, ...extra,
+    });
+    /** Llamadas a cita.updateMany que mueven el plazo del anticipo. */
+    const cambiosDePlazo = (prisma: any) => prisma.cita.updateMany.mock.calls.filter((c: any) => 'anticipoVenceEn' in c[0].data);
+
+    it('en el salón sin pagar: el plazo pasa a 15 min antes del nuevo inicio, dentro de la transacción', async () => {
+      const { citasSrv, citas, prisma } = citasCon(citaSalon(), []);
+      await citasSrv.reprogramar(7, NUEVO as any, yo('cliente'), true);
+      expect(citas[0].anticipoVenceEn).toEqual(PLAZO_NUEVO);
+      expect(citas[0]).toMatchObject({ anticipoEnSalon: true, anticipoPagadoEn: null, estado: 'reprogramada' });
+      expect(Number(citas[0].anticipoRequerido)).toBe(150);
+      expect(cambiosDePlazo(prisma)).toEqual([[{
+        where: { id: 7, anticipoEnSalon: true, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 } },
+        data: { anticipoVenceEn: PLAZO_NUEVO },
+      }]]);
+      // En la transacción: después del candado de la especialista y antes de escribir el nuevo horario.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      const orden = prisma.cita.updateMany.mock.invocationCallOrder;
+      expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(orden[0]);
+      expect(prisma.cita.updateMany.mock.calls[0][0].data).toHaveProperty('anticipoVenceEn');
+      expect(prisma.cita.updateMany.mock.calls[1][0].data).toMatchObject({ estado: 'reprogramada' });
+    });
+
+    it('en el salón, si se pagó entre la lectura y la escritura, el plazo no se toca (update condicional)', async () => {
+      const { citasSrv, citas, prisma } = citasCon(citaSalon(), []);
+      prisma.cita.findUnique.mockImplementationOnce(async () => {
+        const fila = { ...citas[0] };
+        citas[0].anticipoPagadoEn = AHORA; // el pago llegó justo después de leer la cita
+        return fila;
+      });
+      await citasSrv.reprogramar(7, NUEVO as any, yo('cliente'), true);
+      expect(citas[0].anticipoVenceEn).toEqual(PLAZO_VIEJO);
+    });
+
+    it('en línea sin pagar: no cambia el plazo', async () => {
+      const { citasSrv, citas, prisma } = citasCon(citaSalon({ anticipoEnSalon: false, anticipoVenceEn: minutos(120) }), []);
+      await citasSrv.reprogramar(7, NUEVO as any, yo('cliente'), true);
+      expect(citas[0].anticipoVenceEn).toEqual(minutos(120));
+      expect(citas[0].estado).toBe('reprogramada');
+      expect(cambiosDePlazo(prisma)).toHaveLength(0);
+    });
+
+    it('en el salón ya pagada: no cambia el plazo', async () => {
+      const { citasSrv, citas, prisma } = citasCon(citaSalon({ estado: 'confirmada', anticipoPagadoEn: minutos(-30) }), []);
+      await citasSrv.reprogramar(7, NUEVO as any, yo('cliente'), true);
+      expect(citas[0].anticipoVenceEn).toEqual(PLAZO_VIEJO);
+      expect(citas[0].anticipoPagadoEn).toEqual(minutos(-30));
+      expect(citas[0].estado).toBe('reprogramada');
+      expect(cambiosDePlazo(prisma)).toHaveLength(0);
+    });
+  });
+
+  describe('Cancelar', () => {
+    const aprobado = (extra: Record<string, unknown> = {}) => ({ id: 1, citaId: 7, estado: 'aprobado', proveedor: null, referenciaExterna: null, monto: new Prisma.Decimal(150), metodo: 'efectivo', retenidoEn: null, ...extra });
+
+    it('como clienta con anticipo aprobado: el pago se retiene (sigue aprobado), sin revisión ni aviso', async () => {
+      const yaRetenido = minutos(-600);
+      const { citasSrv, pagos, prisma, eventos } = citasCon(
+        citaConAnticipo({ estado: 'confirmada', anticipoEnSalon: true, anticipoPagadoEn: minutos(-30) }),
+        [aprobado(), aprobado({ id: 2, retenidoEn: yaRetenido }), aprobado({ id: 3, estado: 'en_revision' })],
+      );
+      await citasSrv.cancelar(7, { motivoCancelacion: 'No puedo ir' } as any, yo('cliente'), true);
+      expect(prisma.pago.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.pago.updateMany).toHaveBeenCalledWith({ where: { citaId: 7, estado: 'aprobado', retenidoEn: null }, data: { retenidoEn: AHORA } });
+      expect(pagos[0]).toMatchObject({ estado: 'aprobado', retenidoEn: AHORA });
+      expect(pagos[1]).toMatchObject({ estado: 'aprobado', retenidoEn: yaRetenido }); // ya retenido: no se pisa
+      expect(pagos[2]).toMatchObject({ estado: 'en_revision', retenidoEn: null }); // un duplicado en revisión no se toca
+      expect(eventos.emit).not.toHaveBeenCalledWith('pago.requiere_revision', expect.anything());
+      expect(eventos.emit).toHaveBeenCalledWith('cita.cancelada', expect.objectContaining({ citaId: 7 }));
+    });
+
+    it.each([
+      ['estilista', 'otra'],
+      ['admin', 'otra'],
+      ['estilista', 'estilista-yo'], // su propia cita, pero desde /operacion
+    ])('como personal (%s, cita de %s): no toca los pagos', async (rol, clienteId) => {
+      const { citasSrv, pagos, prisma, eventos, citas } = citasCon(
+        citaConAnticipo({ clienteId, estado: 'confirmada', anticipoPagadoEn: minutos(-30) }),
+        [aprobado()],
+      );
+      await citasSrv.cancelar(7, { motivoCancelacion: 'La estilista se enfermó' } as any, yo(rol));
+      expect(citas[0].estado).toBe('cancelada');
+      expect(prisma.pago.updateMany).not.toHaveBeenCalled();
+      expect(pagos[0]).toMatchObject({ estado: 'aprobado', retenidoEn: null });
+      expect(eventos.emit).not.toHaveBeenCalledWith('pago.requiere_revision', expect.anything());
+    });
+  });
+
+  describe('Barrida', () => {
+    const MOTIVO_SALON = 'No recibimos tu anticipo 15 minutos antes de tu cita y el horario quedó libre';
+    const MOTIVO_LINEA = 'No recibimos el anticipo a tiempo y el horario quedó libre';
+
+    it('cancela la cita en el salón vencida con el motivo nuevo, respeta la que sigue en plazo y la de línea conserva su mensaje', async () => {
+      const b = base({
+        citas: [
+          citaConAnticipo({ id: 1, anticipoEnSalon: true, anticipoVenceEn: minutos(-1) }), // salón vencida
+          citaConAnticipo({ id: 2, anticipoEnSalon: true, anticipoVenceEn: minutos(30) }), // salón aún en plazo
+          citaConAnticipo({ id: 3, anticipoEnSalon: false, anticipoVenceEn: minutos(-1) }), // línea vencida
+          citaConAnticipo({ id: 4, anticipoVenceEn: minutos(-1) }), // fila sin el campo: como en línea
+          citaConAnticipo({ id: 5, anticipoEnSalon: true, anticipoVenceEn: AHORA }), // salón: vence justo ahora
+        ],
+      });
+      const r: any = await new AnticiposBarridaService(b.prisma, b.eventos as any).barrer(AHORA);
+
+      const consulta = b.prisma.cita.findMany.mock.calls[0][0];
+      expect(consulta.where).toMatchObject({ anticipoVenceEn: { lte: AHORA }, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 } });
+      expect(consulta.select).toMatchObject({ anticipoEnSalon: true });
+
+      expect(r.canceladas).toEqual([1, 3, 4, 5]);
+      const cita = (id: number) => b.citas.find((c) => c.id === id);
+      expect(cita(1)).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado' });
+      expect(cita(2)).toMatchObject({ estado: 'pendiente', anticipoVenceEn: minutos(30) });
+      expect(cita(2).motivoCancelacion).toBeUndefined();
+
+      const motivo = (id: number) => b.eventos.emit.mock.calls.find(([nombre, p]: any) => nombre === 'cita.cancelada' && p.citaId === id)?.[1].motivo;
+      expect(motivo(1)).toBe(MOTIVO_SALON);
+      expect(motivo(5)).toBe(MOTIVO_SALON);
+      expect(motivo(3)).toBe(MOTIVO_LINEA);
+      expect(motivo(4)).toBe(MOTIVO_LINEA);
+      expect(motivo(2)).toBeUndefined();
+      expect(b.eventos.emit).toHaveBeenCalledWith('cita.cancelada', { citaId: 1, clienteId: 'cliente-yo', especialistaId: 'est-1', motivo: MOTIVO_SALON });
+    });
+  });
+});
+
+describe('Límites del portal para el anticipo', () => {
+  beforeEach(() => { jest.useFakeTimers({ now: AHORA }); process.env.ANTICIPOS_DESDE = '2026-10-01'; });
+  afterEach(() => { jest.useRealTimers(); delete process.env.ANTICIPOS_DESDE; });
+
+  const SIN_TIEMPO = 'Ya no da tiempo de pagar el anticipo antes de tu cita.';
+  const YA_TIENE_SALON = 'Ya tienes una cita por pagar en el salón. Paga su anticipo o elige pagar en línea.';
+  const SOLO_EN_LINEA = 'Para esta cita, el anticipo se paga en línea.';
+  const dtoEn = (m: number, extra: Record<string, unknown> = {}) => ({
+    clienteId: 'otra', especialistaId: 'est-1', servicioId: 5,
+    fechaHoraInicio: minutos(m).toISOString(), fechaHoraFin: minutos(m + 60).toISOString(), ...extra,
+  });
+  /** Simula las dos consultas: citas por pagar en el salón y faltas ("no asistió") recientes. */
+  const contar = (prisma: any, { enSalon = 0, faltas = 0 }: { enSalon?: number; faltas?: number }) =>
+    prisma.cita.count.mockImplementation(async ({ where }: any) => (where.estado === 'no_asistio' ? faltas : enSalon));
+
+  describe('1. Una sola cita por pagar en el salón', () => {
+    it('si ya tiene una, 400 y no se crea; la consulta va en la transacción con candado por clienta', async () => {
+      const { servicio, prisma, creadas } = montarCitas(150);
+      contar(prisma, { enSalon: 1 });
+      const r = servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+      await expect(r).rejects.toBeInstanceOf(BadRequestException);
+      await expect(r).rejects.toThrow(YA_TIENE_SALON);
+      expect(creadas).toHaveLength(0);
+      const consulta = prisma.cita.count.mock.calls.find((c: any) => c[0].where.anticipoEnSalon)[0];
+      expect(consulta.where).toEqual({
+        clienteId: 'cliente-yo', anticipoEnSalon: true, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 },
+        estado: { in: ['pendiente', 'confirmada', 'reprogramada'] },
+      });
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2); // candado de la especialista y de la clienta
+      expect(prisma.$executeRaw.mock.calls[1].slice(1)).toEqual(['cita-cli:cliente-yo']);
+    });
+
+    it('sin otra por pagar en el salón, se crea', async () => {
+      const { servicio, prisma, creadas } = montarCitas(150);
+      contar(prisma, { enSalon: 0 });
+      await servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+      expect(creadas[0]).toMatchObject({ anticipoEnSalon: true });
+    });
+
+    it('con una por pagar en el salón, todavía puede agendar otra pagando en línea', async () => {
+      const { servicio, prisma, creadas } = montarCitas(150);
+      contar(prisma, { enSalon: 1 });
+      await servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+      expect(creadas[0].anticipoEnSalon ?? false).toBe(false);
+    });
+  });
+
+  describe('2. Con un "no asistió" en los últimos 6 meses, solo en línea', () => {
+    it('400 al elegir el salón; busca faltas desde hace 6 meses', async () => {
+      const { servicio, prisma, creadas } = montarCitas(150);
+      contar(prisma, { faltas: 1 });
+      const r = servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+      await expect(r).rejects.toBeInstanceOf(BadRequestException);
+      await expect(r).rejects.toThrow(SOLO_EN_LINEA);
+      expect(creadas).toHaveLength(0);
+      const consulta = prisma.cita.count.mock.calls.find((c: any) => c[0].where.estado === 'no_asistio')[0];
+      expect(consulta.where).toEqual({ clienteId: 'cliente-yo', estado: 'no_asistio', fechaHoraInicio: { gte: new Date('2026-04-20T16:00:00.000Z') } });
+    });
+
+    it('en línea sí puede agendar', async () => {
+      const { servicio, prisma, creadas } = montarCitas(150);
+      contar(prisma, { faltas: 3 });
+      await servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+      expect(creadas).toHaveLength(1);
+    });
+  });
+
+  describe('3. Sin tiempo para pagar el anticipo antes de la cita', () => {
+    it.each([
+      ['en línea, faltan menos de 5 min para el plazo', 19, 'linea'],
+      ['en línea, el plazo ya pasó', 10, 'linea'],
+      ['sin elegir (en línea por omisión)', 19, undefined],
+    ])('crear %s: 400 y no se crea', async (_caso, inicio, pago) => {
+      const { servicio, creadas } = montarCitas(150);
+      const r = servicio.crear(dtoEn(inicio as number, pago ? { pagoAnticipo: pago } : {}) as any, yo('cliente'), true);
+      await expect(r).rejects.toBeInstanceOf(BadRequestException);
+      await expect(r).rejects.toThrow(SIN_TIEMPO);
+      expect(creadas).toHaveLength(0);
+    });
+
+    it('crear en línea con exactamente 5 min de margen se acepta', async () => {
+      const { servicio, creadas } = montarCitas(150);
+      await servicio.crear(dtoEn(20, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+      expect(creadas[0].anticipoVenceEn).toEqual(minutos(5));
+    });
+
+    it('un servicio sin anticipo se agenda aunque falte poco', async () => {
+      const { servicio, creadas } = montarCitas(null);
+      await servicio.crear(dtoEn(10) as any, yo('cliente'), true);
+      expect(creadas).toHaveLength(1);
+    });
+
+    const citaEn = (extra: Record<string, unknown> = {}) => citaConAnticipo({
+      fechaHoraInicio: minutos(24 * 60), fechaHoraFin: minutos(25 * 60), anticipoVenceEn: minutos(120), ...extra,
+    });
+    const aMinutos = (m: number) => ({ fechaHoraInicio: minutos(m).toISOString(), fechaHoraFin: minutos(m + 60).toISOString() });
+
+    it.each([
+      ['en línea', { anticipoEnSalon: false }],
+      ['en el salón', { anticipoEnSalon: true, anticipoVenceEn: minutos(24 * 60 - 15) }],
+    ])('reprogramar una cita %s sin pagar a menos del margen: 400 y no se mueve', async (_caso, extra) => {
+      const { citasSrv, citas } = citasCon(citaEn(extra), []);
+      const r = citasSrv.reprogramar(7, aMinutos(19) as any, yo('cliente'), true);
+      await expect(r).rejects.toBeInstanceOf(BadRequestException);
+      await expect(r).rejects.toThrow(SIN_TIEMPO);
+      expect(citas[0].fechaHoraInicio).toEqual(minutos(24 * 60));
+      expect(citas[0].estado).toBe('pendiente');
+    });
+
+    it('reprogramar con exactamente 5 min de margen se acepta', async () => {
+      const { citasSrv, citas } = citasCon(citaEn({ anticipoEnSalon: true }), []);
+      await citasSrv.reprogramar(7, aMinutos(20) as any, yo('cliente'), true);
+      expect(citas[0]).toMatchObject({ estado: 'reprogramada', anticipoVenceEn: minutos(5) });
+    });
+
+    it('reprogramar una cita con el anticipo pagado no tiene este límite', async () => {
+      const { citasSrv, citas } = citasCon(citaEn({ estado: 'confirmada', anticipoPagadoEn: minutos(-30) }), []);
+      await citasSrv.reprogramar(7, aMinutos(10) as any, yo('cliente'), true);
+      expect(citas[0].estado).toBe('reprogramada');
+    });
+  });
+
+  describe('El panel (sin propios) no tiene los límites 1 y 2', () => {
+    it('el personal agenda en el salón aunque la clienta tenga una por pagar y faltas', async () => {
+      const { servicio, prisma, creadas } = montarCitas(150);
+      contar(prisma, { enSalon: 1, faltas: 2 });
+      await servicio.crear(dtoEn(24 * 60, { clienteId: 'clienta-1', pedirAnticipo: true, pagoAnticipo: 'salon' }) as any, yo('estilista'));
+      expect(creadas[0]).toMatchObject({ clienteId: 'clienta-1', anticipoEnSalon: true, anticipoVenceEn: minutos(24 * 60 - 15) });
+      expect(prisma.cita.count).not.toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1); // solo el candado de la especialista
+    });
   });
 });

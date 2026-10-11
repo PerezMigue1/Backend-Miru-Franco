@@ -2,13 +2,21 @@ import { esDiaValido, inicioDiaMexico } from '../../common/utils/zona-mexico';
 
 /**
  * Anticipo de citas: al agendar en línea un servicio con anticipo_monto > 0, la cita guarda la foto del
- * monto y un plazo de HORAS_ANTICIPO_CITA para pagarlo (Mercado Pago o en el salón). Mientras tanto la
- * cita sigue 'pendiente' y aparta el horario; sin pago, la barrida la cancela y lo libera. No hay un
- * estado nuevo en el enum: "pendiente de anticipo" = anticipo_requerido > 0 y anticipo_pagado_en nulo.
- * El plazo coincide con PLAZOS_TERMINOS.horasAnticipoCita del frontend (Términos, sección 6).
+ * monto y un plazo para pagarlo. Mientras tanto la cita sigue 'pendiente' y aparta el horario; sin pago,
+ * la barrida la cancela y lo libera. No hay un estado nuevo en el enum: "pendiente de anticipo" =
+ * anticipo_requerido > 0 y anticipo_pagado_en nulo. Dos plazos según cómo elige pagar la clienta:
+ * - En línea (Mercado Pago): HORAS_ANTICIPO_CITA, pero nunca después de MINUTOS_ANTES_PAGO_SALON antes del inicio.
+ * - En el salón (anticipo_en_salon): hasta MINUTOS_ANTES_PAGO_SALON antes del inicio.
+ * Las horas coinciden con PLAZOS_TERMINOS.horasAnticipoCita del frontend (Términos, sección 6).
  */
 export const HORAS_ANTICIPO_CITA = 2;
 export const PLAZO_ANTICIPO_MS = HORAS_ANTICIPO_CITA * 60 * 60 * 1000;
+export const MINUTOS_ANTES_PAGO_SALON = 15;
+export const ANTES_PAGO_SALON_MS = MINUTOS_ANTES_PAGO_SALON * 60 * 1000;
+
+/** Cómo elige pagar el anticipo la clienta al agendar. */
+export const PAGOS_ANTICIPO = ['linea', 'salon'] as const;
+export type PagoAnticipo = (typeof PAGOS_ANTICIPO)[number];
 
 /** external_reference de Mercado Pago: los pedidos usan su id; las citas, "cita-<id>". */
 export const referenciaCita = (citaId: number) => `cita-${citaId}`;

@@ -914,6 +914,8 @@ model Cita {
   anticipoRequerido Decimal?   @map("anticipo_requerido") @db.Decimal(10, 2)
   anticipoVenceEn   DateTime?  @map("anticipo_vence_en")
   anticipoPagadoEn  DateTime?  @map("anticipo_pagado_en")
+  /// La clienta eligió pagar el anticipo en el salón: el plazo es 15 min antes del inicio.
+  anticipoEnSalon   Boolean    @default(false) @map("anticipo_en_salon")
   creadoEn          DateTime   @default(now()) @map("creado_en")
   actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
 

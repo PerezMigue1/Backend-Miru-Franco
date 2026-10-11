@@ -1,5 +1,6 @@
-import { IsBoolean, IsDateString, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { Type } from 'class-transformer';
+import { PAGOS_ANTICIPO, type PagoAnticipo } from '../anticipos/anticipos.util';
 
 export class CreateCitaDto {
   @IsUUID()
@@ -29,4 +30,9 @@ export class CreateCitaDto {
   @IsOptional()
   @IsBoolean()
   pedirAnticipo?: boolean;
+
+  /** Cómo se pagará el anticipo (por omisión 'linea'). Se ignora si la cita no pide anticipo. */
+  @IsOptional()
+  @IsIn(PAGOS_ANTICIPO)
+  pagoAnticipo?: PagoAnticipo;
 }

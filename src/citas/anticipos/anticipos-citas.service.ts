@@ -149,6 +149,7 @@ export class AnticiposCitasService {
       anticipoRequerido: c.anticipoRequerido === null ? null : Number(c.anticipoRequerido),
       anticipoVenceEn: c.anticipoVenceEn,
       anticipoPagadoEn: c.anticipoPagadoEn,
+      anticipoEnSalon: c.anticipoEnSalon,
     });
     if (!requiereAnticipo(cita)) return respuesta('no_requiere', cita);
 
