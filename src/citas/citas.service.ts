@@ -23,7 +23,14 @@ import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
 import { PorCobrarDto } from './dto/por-cobrar.dto';
 import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante } from '../common/utils/permisos-citas.util';
-import { ANTES_PAGO_SALON_MS, ESTADOS_CITA_VIGENTE, PLAZO_ANTICIPO_MS, anticiposDesde, requiereAnticipo } from './anticipos/anticipos.util';
+import {
+  ANTES_PAGO_SALON_MS,
+  ESTADOS_CITA_VIGENTE,
+  MOTIVO_ANTICIPO_NO_PAGADO,
+  PLAZO_ANTICIPO_MS,
+  anticiposDesde,
+  requiereAnticipo,
+} from './anticipos/anticipos.util';
 
 const ROLES_ESPECIALISTA = ['estilista', 'empleado', 'becario'] as const;
 const ESTADOS_FINALES = ['cancelada', 'completada', 'no_asistio'] as const;
@@ -39,8 +46,8 @@ const ESTADOS_ESPERAN_LLEGADA = ['pendiente', 'confirmada', 'reprogramada'] as c
 const OPCIONES_TX_HORARIO = { timeout: 15_000 } as const;
 /** Agendar o mover una cita con anticipo sin pagar pide al menos este margen antes del plazo (15 min antes del inicio). */
 const MARGEN_MINIMO_ANTICIPO_MS = 5 * 60 * 1000;
-/** Una clienta con un "no asistió" en estos meses paga el anticipo en línea. */
-const MESES_NO_ASISTIO_SIN_SALON = 6;
+/** Una clienta con un "no asistió" o un anticipo en salón sin pagar en estos meses paga el anticipo en línea. */
+const MESES_FALTAS_SIN_SALON = 6;
 const MENSAJE_SIN_TIEMPO_ANTICIPO = 'Ya no da tiempo de pagar el anticipo antes de tu cita.';
 const MENSAJE_CITA_COBRADA = 'La cita ya se cobró; no se puede editar ni reprogramar. Cancela la venta primero.';
 const INTERVALO_SLOT_MINUTOS = 30;
@@ -580,8 +587,15 @@ export class CitasService {
         if (sinMargen) throw new BadRequestException('Ya no da tiempo de pagar en el salón. Paga el anticipo en línea.');
         if (propios) {
           const desde = new Date(ahora);
-          desde.setMonth(desde.getMonth() - MESES_NO_ASISTIO_SIN_SALON);
-          const faltas = await this.prisma.cita.count({ where: { clienteId, estado: 'no_asistio', fechaHoraInicio: { gte: desde } } });
+          desde.setMonth(desde.getMonth() - MESES_FALTAS_SIN_SALON);
+          // Faltas: no asistió, o la barrida liberó una cita con anticipo en salón sin pagar (otras cancelaciones no cuentan).
+          const faltas = await this.prisma.cita.count({
+            where: {
+              clienteId,
+              fechaHoraInicio: { gte: desde },
+              OR: [{ estado: 'no_asistio' }, { estado: 'cancelada', motivoCancelacion: MOTIVO_ANTICIPO_NO_PAGADO, anticipoEnSalon: true }],
+            },
+          });
           if (faltas > 0) throw new BadRequestException('Para esta cita, el anticipo se paga en línea.');
         }
         anticipo = { anticipoRequerido: servicio.anticipoMonto, anticipoVenceEn: new Date(limiteSalon), anticipoEnSalon: true };

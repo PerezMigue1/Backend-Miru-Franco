@@ -773,7 +773,7 @@ describe('Anticipo en línea o en el salón: plazos', () => {
   });
 
   describe('Barrida', () => {
-    const MOTIVO_SALON = 'No recibimos tu anticipo 15 minutos antes de tu cita y el horario quedó libre';
+    const MOTIVO_SALON = 'No recibimos tu anticipo 15 minutos antes de tu cita y el horario quedó libre. Tus próximas citas se apartan pagando el anticipo en línea.';
     const MOTIVO_LINEA = 'No recibimos el anticipo a tiempo y el horario quedó libre';
 
     it('cancela la cita en el salón vencida con el motivo nuevo, respeta la que sigue en plazo y la de línea conserva su mensaje', async () => {
@@ -790,9 +790,9 @@ describe('Anticipo en línea o en el salón: plazos', () => {
 
       const consulta = b.prisma.cita.findMany.mock.calls[0][0];
       expect(consulta.where).toMatchObject({ anticipoVenceEn: { lte: AHORA }, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 } });
-      expect(consulta.select).toMatchObject({ anticipoEnSalon: true });
+      expect(consulta.select).toMatchObject({ anticipoEnSalon: true, anticipoVenceEn: true });
 
-      expect(r.canceladas).toEqual([1, 3, 4, 5]);
+      expect(r).toEqual({ canceladas: [1, 3, 4, 5], pagadas: [] });
       const cita = (id: number) => b.citas.find((c) => c.id === id);
       expect(cita(1)).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado' });
       expect(cita(2)).toMatchObject({ estado: 'pendiente', anticipoVenceEn: minutos(30) });
@@ -820,9 +820,14 @@ describe('Límites del portal para el anticipo', () => {
     clienteId: 'otra', especialistaId: 'est-1', servicioId: 5,
     fechaHoraInicio: minutos(m).toISOString(), fechaHoraFin: minutos(m + 60).toISOString(), ...extra,
   });
-  /** Simula las dos consultas: citas por pagar en el salón y faltas ("no asistió") recientes. */
+  /** La consulta de faltas recientes es la única con OR (no asistió o anticipo en salón sin pagar). */
+  const esConsultaDeFaltas = (where: any) => Array.isArray(where?.OR);
+  /** Simula las dos consultas: citas por pagar en el salón y faltas recientes. */
   const contar = (prisma: any, { enSalon = 0, faltas = 0 }: { enSalon?: number; faltas?: number }) =>
-    prisma.cita.count.mockImplementation(async ({ where }: any) => (where.estado === 'no_asistio' ? faltas : enSalon));
+    prisma.cita.count.mockImplementation(async ({ where }: any) => (esConsultaDeFaltas(where) ? faltas : enSalon));
+  /** cita.count de verdad: filtra `citas` con el `where` que manda el servicio (incluido el OR). */
+  const contarEn = (prisma: any, citas: any[]) =>
+    prisma.cita.count.mockImplementation(async ({ where }: any) => citas.filter((c) => coincide(c, where)).length);
 
   describe('1. Una sola cita por pagar en el salón', () => {
     it('si ya tiene una, 400 y no se crea; la consulta va en la transacción con candado por clienta', async () => {
@@ -856,16 +861,100 @@ describe('Límites del portal para el anticipo', () => {
     });
   });
 
-  describe('2. Con un "no asistió" en los últimos 6 meses, solo en línea', () => {
-    it('400 al elegir el salón; busca faltas desde hace 6 meses', async () => {
+  describe('2. Con una falta en los últimos 6 meses (no asistió o anticipo en salón sin pagar), solo en línea', () => {
+    const HACE_6_MESES = new Date('2026-04-20T16:00:00.000Z');
+
+    it('400 al elegir el salón; una sola consulta de faltas desde hace 6 meses', async () => {
       const { servicio, prisma, creadas } = montarCitas(150);
       contar(prisma, { faltas: 1 });
       const r = servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
       await expect(r).rejects.toBeInstanceOf(BadRequestException);
       await expect(r).rejects.toThrow(SOLO_EN_LINEA);
       expect(creadas).toHaveLength(0);
-      const consulta = prisma.cita.count.mock.calls.find((c: any) => c[0].where.estado === 'no_asistio')[0];
-      expect(consulta.where).toEqual({ clienteId: 'cliente-yo', estado: 'no_asistio', fechaHoraInicio: { gte: new Date('2026-04-20T16:00:00.000Z') } });
+      const consultas = prisma.cita.count.mock.calls.filter((c: any) => esConsultaDeFaltas(c[0].where));
+      expect(consultas).toHaveLength(1);
+      expect(consultas[0][0].where).toEqual({
+        clienteId: 'cliente-yo',
+        fechaHoraInicio: { gte: HACE_6_MESES },
+        OR: [{ estado: 'no_asistio' }, { estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado', anticipoEnSalon: true }],
+      });
+      // Se rechaza antes de apartar el horario.
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    describe('con citas en memoria (cita.count filtra con el where real)', () => {
+      /** Cita previa de la clienta; `dias` negativos = hace tantos días. */
+      const previa = (id: number, dias: number, extra: Record<string, unknown>) => ({
+        id, clienteId: 'cliente-yo', anticipoEnSalon: false, anticipoPagadoEn: null, anticipoRequerido: new Prisma.Decimal(150),
+        motivoCancelacion: null, fechaHoraInicio: minutos(dias * 24 * 60), ...extra,
+      });
+      const NO_ASISTIO = { estado: 'no_asistio' };
+      const SALON_SIN_PAGAR = { estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado', anticipoEnSalon: true };
+
+      it.each([
+        ['un "no asistió" reciente', previa(1, -30, NO_ASISTIO)],
+        ['un "no asistió" en salón ya pagado', previa(1, -30, { ...NO_ASISTIO, anticipoEnSalon: true, anticipoPagadoEn: minutos(-30 * 24 * 60) })],
+        ['una cita en salón liberada por no pagar el anticipo', previa(1, -10, SALON_SIN_PAGAR)],
+        ['la liberada hoy (15 min antes de su inicio)', previa(1, 0, { ...SALON_SIN_PAGAR, fechaHoraInicio: minutos(10) })],
+        ['un "no asistió" justo en el límite de 6 meses', previa(1, 0, { ...NO_ASISTIO, fechaHoraInicio: HACE_6_MESES })],
+      ])('cuenta %s: 400 y no se crea', async (_caso, cita) => {
+        const { servicio, prisma, creadas } = montarCitas(150);
+        contarEn(prisma, [cita]);
+        const r = servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+        await expect(r).rejects.toBeInstanceOf(BadRequestException);
+        await expect(r).rejects.toThrow(SOLO_EN_LINEA);
+        expect(creadas).toHaveLength(0);
+        const conteo = prisma.cita.count.mock.results[0].value;
+        await expect(conteo).resolves.toBe(1);
+      });
+
+      const QUE_NO_CUENTAN: [string, any][] = [
+        ['cancelada por la clienta (en salón)', previa(11, -10, { estado: 'cancelada', motivoCancelacion: 'No puedo ir', anticipoEnSalon: true })],
+        ['cancelada por el personal (en salón)', previa(12, -10, { estado: 'cancelada', motivoCancelacion: 'La estilista se enfermó', anticipoEnSalon: true })],
+        ['cancelada sin motivo (en salón)', previa(13, -10, { estado: 'cancelada', anticipoEnSalon: true })],
+        ['liberada por no pagar, pero en línea', previa(14, -10, { ...SALON_SIN_PAGAR, anticipoEnSalon: false })],
+        ['liberada por no pagar, en línea (fila sin el campo)', previa(15, -10, { estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado', anticipoEnSalon: undefined })],
+        ['"no asistió" de hace más de 6 meses', previa(16, 0, { ...NO_ASISTIO, fechaHoraInicio: new Date(HACE_6_MESES.getTime() - 1) })],
+        ['liberada en salón de hace más de 6 meses', previa(17, -200, SALON_SIN_PAGAR)],
+        ['"no asistió" de otra clienta', previa(18, -5, { ...NO_ASISTIO, clienteId: 'otra-clienta' })],
+        ['liberada en salón de otra clienta', previa(19, -5, { ...SALON_SIN_PAGAR, clienteId: 'otra-clienta' })],
+        ['completada en salón', previa(20, -5, { estado: 'completada', anticipoEnSalon: true, anticipoPagadoEn: minutos(-5 * 24 * 60) })],
+      ];
+
+      it.each(QUE_NO_CUENTAN)('no cuenta %s: se agenda en el salón', async (_caso, cita) => {
+        const { servicio, prisma, creadas } = montarCitas(150);
+        contarEn(prisma, [cita]);
+        await servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+        expect(creadas).toEqual([expect.objectContaining({ clienteId: 'cliente-yo', anticipoEnSalon: true })]);
+      });
+
+      it('todas las que no cuentan juntas siguen sin contar; basta una falta reciente para el 400', async () => {
+        const todas = QUE_NO_CUENTAN.map(([, c]) => c);
+        const a = montarCitas(150);
+        contarEn(a.prisma, todas);
+        await a.servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true);
+        expect(a.creadas).toHaveLength(1);
+
+        const b = montarCitas(150);
+        contarEn(b.prisma, [...todas, previa(30, -2, SALON_SIN_PAGAR)]);
+        await expect(b.servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true)).rejects.toThrow(SOLO_EN_LINEA);
+        expect(b.creadas).toHaveLength(0);
+      });
+
+      it('con faltas recientes todavía puede agendar pagando en línea (sin consultar faltas)', async () => {
+        const { servicio, prisma, creadas } = montarCitas(150);
+        contarEn(prisma, [previa(1, -30, NO_ASISTIO), previa(2, -10, SALON_SIN_PAGAR)]);
+        await servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'linea' }) as any, yo('cliente'), true);
+        expect(creadas[0].anticipoEnSalon ?? false).toBe(false);
+        expect(prisma.cita.count).not.toHaveBeenCalled();
+      });
+
+      it('una cita en salón vigente por pagar no es falta: responde el límite 1, no el 2', async () => {
+        const { servicio, prisma, creadas } = montarCitas(150);
+        contarEn(prisma, [previa(1, 5, { estado: 'pendiente', anticipoEnSalon: true, anticipoVenceEn: minutos(5 * 24 * 60 - 15) })]);
+        await expect(servicio.crear(dtoEn(24 * 60, { pagoAnticipo: 'salon' }) as any, yo('cliente'), true)).rejects.toThrow(YA_TIENE_SALON);
+        expect(creadas).toHaveLength(0);
+      });
     });
 
     it('en línea sí puede agendar', async () => {
@@ -940,5 +1029,205 @@ describe('Límites del portal para el anticipo', () => {
       expect(prisma.cita.count).not.toHaveBeenCalled();
       expect(prisma.$executeRaw).toHaveBeenCalledTimes(1); // solo el candado de la especialista
     });
+  });
+});
+
+// ---------- Barrida: antes de liberar una cita consulta su pago en Mercado Pago ----------
+describe('Barrida: antes de liberar una cita consulta su pago en Mercado Pago', () => {
+  beforeEach(() => { jest.useFakeTimers({ now: AHORA }); process.env.ANTICIPOS_DESDE = '2026-10-01'; });
+  afterEach(() => { jest.useRealTimers(); delete process.env.ANTICIPOS_DESDE; });
+
+  const MOTIVO_SALON = 'No recibimos tu anticipo 15 minutos antes de tu cita y el horario quedó libre. Tus próximas citas se apartan pagando el anticipo en línea.';
+  const MARGEN_MS = 30 * 60_000;
+
+  /** Barrida de punta a punta: AnticiposCitasService real de `base`, con Mercado Pago simulado. */
+  function conMp(citas: any[], pagos: any[] = []) {
+    const b = base({ citas, pagos });
+    return { ...b, barrida: new AnticiposBarridaService(b.prisma, b.eventos as any, b.anticipos) };
+  }
+  /** Mercado Pago conoce estos pagos (por id de cita); buscarUltimoPago devuelve el resumen y obtenerPago el detalle. */
+  function pagosEnMp(mp: any, porCita: Record<number, any>) {
+    mp.buscarUltimoPago.mockImplementation(async (ref: string) => {
+      const p = porCita[citaDeReferencia(ref) ?? -1];
+      return p ? { id: p.id, status: p.status } : null;
+    });
+    mp.obtenerPago.mockImplementation(async (id: string) => Object.values(porCita).find((p) => String(p.id) === id));
+  }
+  const pagoDe = (citaId: number, extra: Record<string, unknown> = {}) => pagoMp({ id: 5000 + citaId, external_reference: `cita-${citaId}`, ...extra });
+  const avisoDeCancelacion = (eventos: any, id: number) => eventos.emit.mock.calls.find(([n, p]: any) => n === 'cita.cancelada' && p.citaId === id);
+  const cita = (citas: any[], id: number) => citas.find((c) => c.id === id);
+
+  it.each([
+    ['en el salón', true],
+    ['en línea', false],
+  ])('cita %s vencida con pago aprobado en Mercado Pago: se aplica el pago y no se cancela', async (_caso, anticipoEnSalon) => {
+    const { barrida, mp, citas, pagos, eventos } = conMp([citaConAnticipo({ anticipoEnSalon, anticipoVenceEn: minutos(-1) })]);
+    pagosEnMp(mp, { 7: pagoMp() }); // aprobado, 150 MXN, external_reference cita-7
+
+    await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [], pagadas: [7] });
+
+    expect(mp.buscarUltimoPago).toHaveBeenCalledWith('cita-7');
+    expect(mp.obtenerPago).toHaveBeenCalledWith('555');
+    expect(citas[0]).toMatchObject({ estado: 'confirmada', anticipoPagadoEn: new Date(pagoMp().date_approved) });
+    expect(citas[0].motivoCancelacion).toBeUndefined();
+    expect(pagos).toEqual([expect.objectContaining({ citaId: 7, estado: 'aprobado', proveedor: 'mercadopago', referenciaExterna: '555' })]);
+    expect(eventos.emit).not.toHaveBeenCalledWith('cita.cancelada', expect.anything());
+    expect(eventos.emit).not.toHaveBeenCalledWith('pago.requiere_revision', expect.anything());
+    expect(eventos.emit).toHaveBeenCalledWith('cita.anticipo_pagado', { citaId: 7, clienteId: 'cliente-yo' });
+
+    // La siguiente pasada ya no la ve (salió del filtro) ni vuelve a consultar.
+    await expect(barrida.barrer(minutos(1))).resolves.toEqual({ canceladas: [], pagadas: [] });
+    expect(mp.buscarUltimoPago).toHaveBeenCalledTimes(1);
+    expect(pagos).toHaveLength(1);
+  });
+
+  it('sin pago aprobado sí cancela (sin pago, pendiente o rechazado); en la misma pasada la pagada se respeta', async () => {
+    const { barrida, mp, citas, pagos, eventos } = conMp([
+      citaConAnticipo({ id: 7, anticipoEnSalon: true, anticipoVenceEn: minutos(-1) }), // aprobado en MP
+      citaConAnticipo({ id: 8, anticipoEnSalon: true, anticipoVenceEn: minutos(-1) }), // sin pago en MP
+      citaConAnticipo({ id: 9, anticipoVenceEn: minutos(-1) }), // pendiente en MP
+      citaConAnticipo({ id: 10, anticipoEnSalon: true, anticipoVenceEn: minutos(-1) }), // rechazado en MP
+    ]);
+    pagosEnMp(mp, { 7: pagoDe(7), 9: pagoDe(9, { status: 'pending' }), 10: pagoDe(10, { status: 'rejected' }) });
+
+    await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [8, 9, 10], pagadas: [7] });
+
+    expect(mp.buscarUltimoPago.mock.calls.map((c: any) => c[0])).toEqual(['cita-7', 'cita-8', 'cita-9', 'cita-10']);
+    expect(mp.obtenerPago.mock.calls).toEqual([['5007']]); // solo se pide el detalle del aprobado
+    expect(cita(citas, 7).estado).toBe('confirmada');
+    for (const id of [8, 9, 10]) expect(cita(citas, id)).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado', anticipoPagadoEn: null });
+    expect(pagos).toEqual([expect.objectContaining({ citaId: 7, estado: 'aprobado' })]);
+    expect(avisoDeCancelacion(eventos, 7)).toBeUndefined();
+    expect(avisoDeCancelacion(eventos, 8)?.[1]).toEqual({ citaId: 8, clienteId: 'cliente-yo', especialistaId: 'est-1', motivo: MOTIVO_SALON });
+    expect(avisoDeCancelacion(eventos, 9)?.[1].motivo).toBe('No recibimos el anticipo a tiempo y el horario quedó libre');
+    expect(avisoDeCancelacion(eventos, 10)?.[1].motivo).toBe(MOTIVO_SALON);
+  });
+
+  it.each([
+    ['monto distinto', { transaction_amount: 100 }],
+    ['otra moneda', { currency_id: 'USD' }],
+  ])('aprobado con %s: el pago queda en revisión y la cita se cancela', async (_caso, extra) => {
+    const { barrida, mp, citas, pagos, eventos } = conMp([citaConAnticipo({ anticipoEnSalon: true, anticipoVenceEn: minutos(-1) })]);
+    pagosEnMp(mp, { 7: pagoMp(extra) });
+
+    await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [7], pagadas: [] });
+
+    expect(citas[0]).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado', anticipoPagadoEn: null });
+    expect(pagos).toEqual([expect.objectContaining({ citaId: 7, estado: 'en_revision', referenciaExterna: '555' })]);
+    expect(eventos.emit).toHaveBeenCalledWith('pago.requiere_revision', expect.objectContaining({ citaId: 7, referencia: '555', motivo: 'monto_distinto' }));
+    expect(avisoDeCancelacion(eventos, 7)?.[1].motivo).toBe(MOTIVO_SALON);
+  });
+
+  it('aprobado que ya estaba registrado en revisión (ya_procesado): se cancela sin duplicar el pago', async () => {
+    const enRevision = { id: 1, citaId: 7, estado: 'en_revision', proveedor: 'mercadopago', referenciaExterna: '555', monto: new Prisma.Decimal(100) };
+    const { barrida, mp, citas, pagos } = conMp([citaConAnticipo({ anticipoEnSalon: true, anticipoVenceEn: minutos(-1) })], [enRevision]);
+    pagosEnMp(mp, { 7: pagoMp({ transaction_amount: 100 }) });
+
+    await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [7], pagadas: [] });
+    expect(citas[0].estado).toBe('cancelada');
+    expect(pagos).toEqual([enRevision]);
+  });
+
+  it.each([null, 'revision', 'ya_procesado'] as const)('con el servicio simulado, si aplicarPagoAprobadoDeMp devuelve %p, cancela', async (resultado) => {
+    const b = base({ citas: [citaConAnticipo({ anticipoEnSalon: true, anticipoVenceEn: minutos(-1) })] });
+    const anticipos = { aplicarPagoAprobadoDeMp: jest.fn(async () => resultado) };
+    const r = await new AnticiposBarridaService(b.prisma, b.eventos as any, anticipos as any).barrer(AHORA);
+    expect(anticipos.aplicarPagoAprobadoDeMp).toHaveBeenCalledWith(7);
+    expect(r).toEqual({ canceladas: [7], pagadas: [] });
+    expect(b.citas[0]).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado' });
+    expect(avisoDeCancelacion(b.eventos, 7)?.[1].motivo).toBe(MOTIVO_SALON);
+  });
+
+  it("con el servicio simulado, si devuelve 'pagado' no cancela ni avisa", async () => {
+    const b = base({ citas: [citaConAnticipo({ anticipoEnSalon: true, anticipoVenceEn: minutos(-1) })] });
+    const anticipos = { aplicarPagoAprobadoDeMp: jest.fn(async () => 'pagado' as const) };
+    const r = await new AnticiposBarridaService(b.prisma, b.eventos as any, anticipos as any).barrer(AHORA);
+    expect(r).toEqual({ canceladas: [], pagadas: [7] });
+    expect(b.prisma.cita.updateMany).not.toHaveBeenCalled();
+    expect(b.eventos.emit).not.toHaveBeenCalledWith('cita.cancelada', expect.anything());
+  });
+
+  it.each([
+    ['buscar el último pago', 'buscarUltimoPago'],
+    ['obtener el detalle del pago', 'obtenerPago'],
+  ])('si Mercado Pago falla al %s dentro del margen, no cancela; la siguiente pasada aplica el pago', async (_caso, falla) => {
+    const { barrida, mp, citas, eventos } = conMp([
+      citaConAnticipo({ id: 7, anticipoEnSalon: true, anticipoVenceEn: minutos(-1) }),
+      citaConAnticipo({ id: 8, anticipoEnSalon: true, anticipoVenceEn: minutos(-1) }), // sin pago: la falla de la 7 no la detiene
+    ]);
+    pagosEnMp(mp, { 7: pagoMp() });
+    (mp as any)[falla].mockRejectedValueOnce(new Error('Mercado Pago 503'));
+
+    await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [8], pagadas: [] });
+    expect(cita(citas, 7)).toMatchObject({ estado: 'pendiente', anticipoPagadoEn: null });
+    expect(cita(citas, 7).motivoCancelacion).toBeUndefined();
+    expect(avisoDeCancelacion(eventos, 7)).toBeUndefined();
+
+    // 28 min después (29 min tras el vencimiento, aún en el margen) Mercado Pago responde.
+    await expect(barrida.barrer(minutos(28))).resolves.toEqual({ canceladas: [], pagadas: [7] });
+    expect(cita(citas, 7).estado).toBe('confirmada');
+    expect(avisoDeCancelacion(eventos, 7)).toBeUndefined();
+  });
+
+  it('si Mercado Pago sigue fallando, se reintenta solo dentro del margen; pasado, cancela sin consultar', async () => {
+    const { barrida, mp, citas, eventos } = conMp([citaConAnticipo({ anticipoEnSalon: true, anticipoVenceEn: minutos(-1) })]);
+    mp.buscarUltimoPago.mockRejectedValue(new Error('Mercado Pago 503'));
+
+    for (const m of [0, 10, 28]) {
+      await expect(barrida.barrer(minutos(m))).resolves.toEqual({ canceladas: [], pagadas: [] });
+    }
+    expect(mp.buscarUltimoPago).toHaveBeenCalledTimes(3);
+    expect(citas[0].estado).toBe('pendiente');
+
+    // Justo al cumplirse 30 min del vencimiento: cancela sin volver a consultar.
+    await expect(barrida.barrer(minutos(29))).resolves.toEqual({ canceladas: [7], pagadas: [] });
+    expect(mp.buscarUltimoPago).toHaveBeenCalledTimes(3);
+    expect(citas[0]).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado' });
+    expect(avisoDeCancelacion(eventos, 7)?.[1].motivo).toBe(MOTIVO_SALON);
+  });
+
+  it('pasado el margen de 30 min cancela sin consultar Mercado Pago aunque haya pago aprobado; ese pago llega después en revisión', async () => {
+    const { barrida, mp, citas, pagos, anticipos } = conMp([
+      citaConAnticipo({ id: 7, anticipoEnSalon: true, anticipoVenceEn: new Date(AHORA.getTime() - MARGEN_MS) }), // margen cumplido justo ahora
+      citaConAnticipo({ id: 8, anticipoEnSalon: true, anticipoVenceEn: new Date(AHORA.getTime() - MARGEN_MS + 1) }), // le queda 1 ms
+      citaConAnticipo({ id: 9, anticipoVenceEn: minutos(-120) }), // muy vencida
+    ]);
+    pagosEnMp(mp, { 7: pagoDe(7), 8: pagoDe(8), 9: pagoDe(9) });
+
+    await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [7, 9], pagadas: [8] });
+    expect(mp.buscarUltimoPago.mock.calls).toEqual([['cita-8']]);
+    expect([cita(citas, 7).estado, cita(citas, 8).estado, cita(citas, 9).estado]).toEqual(['cancelada', 'confirmada', 'cancelada']);
+
+    // El pago tardío de la 7 llega por webhook: queda en revisión, la cita sigue cancelada.
+    await expect(anticipos.procesarPagoCita(pagoDe(7) as any, 7)).resolves.toBe('revision');
+    expect(cita(citas, 7)).toMatchObject({ estado: 'cancelada', anticipoPagadoEn: null });
+    expect(pagos.find((p) => p.citaId === 7)).toMatchObject({ estado: 'en_revision', referenciaExterna: '5007' });
+  });
+
+  it('sin AnticiposCitasService (constructor de dos parámetros) cancela sin consultar Mercado Pago', async () => {
+    const b = base({ citas: [citaConAnticipo({ anticipoEnSalon: true, anticipoVenceEn: minutos(-1) })] });
+    pagosEnMp(b.mp, { 7: pagoMp() });
+    await expect(new AnticiposBarridaService(b.prisma, b.eventos as any).barrer(AHORA)).resolves.toEqual({ canceladas: [7], pagadas: [] });
+    expect(b.mp.buscarUltimoPago).not.toHaveBeenCalled();
+    expect(b.citas[0].estado).toBe('cancelada');
+  });
+
+  it('si el webhook pagó la cita entre la lectura y la consulta, no se cancela ni se duplica el pago', async () => {
+    const { barrida, mp, citas, pagos, prisma, eventos } = conMp([citaConAnticipo({ anticipoEnSalon: true, anticipoVenceEn: minutos(-1) })]);
+    pagosEnMp(mp, { 7: pagoMp() });
+    prisma.cita.findMany.mockImplementationOnce(async () => {
+      const filas = [{ ...citas[0] }];
+      // El webhook llega justo después de leer el lote.
+      Object.assign(citas[0], { anticipoPagadoEn: minutos(-10), estado: 'confirmada' });
+      pagos.push({ id: 1, citaId: 7, estado: 'aprobado', proveedor: 'mercadopago', referenciaExterna: '555', monto: new Prisma.Decimal(150) });
+      return filas;
+    });
+
+    const r: any = await barrida.barrer(AHORA);
+    expect(r.canceladas).toEqual([]);
+    expect(citas[0]).toMatchObject({ estado: 'confirmada', anticipoPagadoEn: minutos(-10) });
+    expect(citas[0].motivoCancelacion).toBeUndefined();
+    expect(pagos).toHaveLength(1);
+    expect(eventos.emit).not.toHaveBeenCalledWith('cita.cancelada', expect.anything());
   });
 });

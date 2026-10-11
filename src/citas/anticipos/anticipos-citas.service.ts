@@ -138,6 +138,17 @@ export class AnticiposCitasService {
     return resultado;
   }
 
+  /**
+   * Busca en Mercado Pago el último pago de la cita y, si está aprobado, lo aplica con procesarPagoCita
+   * (misma lógica idempotente que el webhook). null si no hay pago aprobado. `ultimo` evita repetir la
+   * búsqueda cuando quien llama ya la hizo. Los errores de Mercado Pago se propagan.
+   */
+  async aplicarPagoAprobadoDeMp(citaId: number, ultimo?: PagoMercadoPago | null): Promise<ResultadoPagoCita | null> {
+    const pago = ultimo === undefined ? await this.mercadoPago.buscarUltimoPago(referenciaCita(citaId)) : ultimo;
+    if (pago?.status !== 'approved') return null;
+    return this.procesarPagoCita(await this.mercadoPago.obtenerPago(String(pago.id)), citaId);
+  }
+
   /** Estado real del anticipo para la confirmación: consulta Mercado Pago, nunca la URL de regreso. */
   async consultarEstado(citaId: number, s: Solicitante, ahora: Date = new Date()) {
     let cita = await this.citaConServicio(citaId);
@@ -165,7 +176,7 @@ export class AnticiposCitasService {
     const ultimo = await this.mercadoPago.buscarUltimoPago(referenciaCita(citaId));
     if (ultimo?.status === 'approved') {
       // El webhook pudo no haber llegado aún: se aplica aquí con la misma lógica idempotente.
-      await this.procesarPagoCita(await this.mercadoPago.obtenerPago(String(ultimo.id)), citaId);
+      await this.aplicarPagoAprobadoDeMp(citaId, ultimo);
       cita = await this.citaConServicio(citaId);
       return respuesta(cita.anticipoPagadoEn ? 'aprobado' : 'revision', cita);
     }
