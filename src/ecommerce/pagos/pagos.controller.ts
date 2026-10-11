@@ -35,7 +35,7 @@ export class PagosController {
     @Query('propios') propios?: string,
   ) {
     if (esPropios(propios)) {
-      await this.access.assertPedido(user.id, Number(pedidoId), true);
+      await this.access.assertPedidoLectura(user.id, Number(pedidoId), true);
     }
     return this.service.listarPorPedido(Number(pedidoId), user.id);
   }

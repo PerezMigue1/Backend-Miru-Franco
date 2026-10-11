@@ -12,7 +12,7 @@ export class EnviosService {
   ) {}
 
   async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
-    await this.access.assertPedido(solicitanteId, pedidoId, propios);
+    await this.access.assertPedidoLectura(solicitanteId, pedidoId, propios);
     const data = await this.prisma.envio.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'desc' },
@@ -23,7 +23,7 @@ export class EnviosService {
   async obtenerPorId(id: number, solicitanteId: string, propios = false) {
     const row = await this.prisma.envio.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Envío no encontrado');
-    await this.access.assertPedido(solicitanteId, row.pedidoId, propios);
+    await this.access.assertPedidoLectura(solicitanteId, row.pedidoId, propios);
     return { success: true, data: row };
   }
 

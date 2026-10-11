@@ -3,7 +3,7 @@ import { EcommerceAccessService } from '../common/ecommerce-access.service';
 
 /**
  * Valoraciones: la lista pública por producto no expone ids de clienta ni de pedido (solo el nombre de
- * pila); editar es solo de la autora (el admin modera borrando); y solo se valora un pedido propio.
+ * pila); editar es de la autora o del admin; y la clienta solo valora un pedido propio (el admin, cualquiera).
  */
 const ROL_DE: Record<string, string> = { 'cli-1': 'cliente', 'cli-2': 'cliente', 'adm-1': 'admin' };
 
@@ -53,11 +53,15 @@ describe('Valoraciones: privacidad y dueña', () => {
     ]);
   });
 
-  it('PUT /valoraciones/:id: el admin no edita la reseña de otra persona (403 sin escribir); la autora sí', async () => {
+  it('PUT /valoraciones/:id: la autora y el admin editan; otra clienta no (403 sin escribir)', async () => {
     const { service, prisma } = montar();
-    await expect(service.actualizar(5, 'adm-1', { comentario: 'Editado' } as any)).rejects.toMatchObject({ status: 403 });
+    await expect(service.actualizar(5, 'cli-2', { comentario: 'Ajeno' } as any)).rejects.toMatchObject({
+      status: 403,
+      message: 'Solo la autora puede editar su valoración',
+    });
     expect(prisma.valoracion.update).not.toHaveBeenCalled();
     await expect(service.actualizar(5, 'cli-1', { comentario: 'Mejor' } as any)).resolves.toMatchObject({ success: true });
+    await expect(service.actualizar(5, 'adm-1', { comentario: 'Editado' } as any)).resolves.toMatchObject({ success: true });
   });
 
   it('DELETE /valoraciones/:id: el admin sí puede borrar (moderación)', async () => {
@@ -66,12 +70,12 @@ describe('Valoraciones: privacidad y dueña', () => {
     expect(prisma.valoracion.delete).toHaveBeenCalledWith({ where: { id: 5 } });
   });
 
-  it('POST /valoraciones: nadie (ni el admin) valora sobre el pedido de otra persona', async () => {
+  it('POST /valoraciones: la clienta solo valora su pedido; el admin también uno ajeno (como en e26619d)', async () => {
     const { service, prisma } = montar();
-    await expect(service.crear('adm-1', { pedidoId: 10, productoId: 3, puntuacion: 5 } as any)).rejects.toMatchObject({ status: 403 });
     await expect(service.crear('cli-1', { pedidoId: 10, productoId: 3, puntuacion: 5 } as any)).rejects.toMatchObject({ status: 403 });
     expect(prisma.valoracion.create).not.toHaveBeenCalled();
     await expect(service.crear('cli-2', { pedidoId: 10, productoId: 3, puntuacion: 5 } as any)).resolves.toMatchObject({ success: true });
+    await expect(service.crear('adm-1', { pedidoId: 10, productoId: 3, puntuacion: 5 } as any)).resolves.toMatchObject({ success: true });
   });
 
   it('GET /valoraciones/pedido/:id?propios=true: pedido ajeno 404 incluso para el admin', async () => {

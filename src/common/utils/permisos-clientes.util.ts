@@ -10,9 +10,9 @@ import { PrismaService } from '../../prisma/prisma.service';
  * `puedeVerPedidosDeOtros`, en `common/` en vez de `ecommerce/common/`
  * porque QuejasService no es parte del módulo ecommerce.
  *
- * El permiso es sobre CLIENTAS: la persona consultada debe tener rol 'cliente'
- * (con `clientes:lectura` no se leen los datos de otros empleados ni del admin).
- * Uno mismo y el admin, siempre.
+ * Con `clientes:lectura` se lee a cualquier persona (también a otro miembro del
+ * personal), como en e26619d. Uno mismo y el admin, siempre; sin la clave (la
+ * clienta), nada ajeno.
  */
 export async function puedeVerDatosDeClientes(
   prisma: PrismaService,
@@ -27,10 +27,5 @@ export async function puedeVerDatosDeClientes(
     where: { rol },
     select: { claves: true },
   });
-  if (!permisoRol?.claves.includes('clientes:lectura')) return false;
-  const consultado = await prisma.usuario.findUnique({
-    where: { id: consultadoId },
-    select: { rol: true },
-  });
-  return consultado?.rol === 'cliente';
+  return !!permisoRol?.claves.includes('clientes:lectura');
 }

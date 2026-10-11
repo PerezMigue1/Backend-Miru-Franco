@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { puedeVerPedidosDeOtros } from './permisos-pedido.util';
 
 @Injectable()
 export class EcommerceAccessService {
@@ -66,6 +67,31 @@ export class EcommerceAccessService {
       throw new NotFoundException('Pedido no encontrado');
     }
     this.assertOwnerOrAdmin(usuarioId, pedido.usuarioId, rol);
+    return { usuarioIdPedido: pedido.usuarioId };
+  }
+
+  /**
+   * LECTURA de los subrecursos de un pedido (artículos, envíos, historial, facturas, valoraciones): la misma
+   * regla que GET /pedidos/:id. Dueña, admin, o personal que ve pedidos ajenos (`puedeVerPedidosDeOtros`:
+   * caja:escritura o pedidos:entregar). Con `propios` el pedido ajeno responde 404 para cualquier rol.
+   * Las escrituras siguen con `assertPedido`.
+   */
+  async assertPedidoLectura(
+    usuarioId: string,
+    pedidoId: number,
+    propios = false,
+  ): Promise<{ usuarioIdPedido: string }> {
+    const pedido = await this.prisma.pedido.findUnique({
+      where: { id: pedidoId },
+      select: { usuarioId: true },
+    });
+    if (!pedido) throw new NotFoundException('Pedido no encontrado');
+    if (pedido.usuarioId === usuarioId) return { usuarioIdPedido: pedido.usuarioId };
+    if (propios) throw new NotFoundException('Pedido no encontrado');
+    const rol = await this.getRol(usuarioId);
+    if (!(await puedeVerPedidosDeOtros(this.prisma, rol))) {
+      throw new ForbiddenException('No tienes permiso para acceder a este recurso');
+    }
     return { usuarioIdPedido: pedido.usuarioId };
   }
 

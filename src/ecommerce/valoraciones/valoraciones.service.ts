@@ -74,7 +74,7 @@ export class ValoracionesService {
   }
 
   async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
-    await this.access.assertPedido(solicitanteId, pedidoId, propios);
+    await this.access.assertPedidoLectura(solicitanteId, pedidoId, propios);
     const data = await this.prisma.valoracion.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'desc' },
@@ -85,16 +85,13 @@ export class ValoracionesService {
   async obtenerPorId(id: number, solicitanteId: string) {
     const row = await this.prisma.valoracion.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Valoración no encontrada');
-    await this.access.assertPedido(solicitanteId, row.pedidoId);
+    await this.access.assertPedidoLectura(solicitanteId, row.pedidoId);
     return { success: true, data: row };
   }
 
   async crear(solicitanteId: string, dto: CreateValoracionDto) {
-    // Solo se valora lo que una misma compró: ni el admin publica reseñas sobre el pedido de otra persona.
-    const { usuarioIdPedido } = await this.access.assertPedido(solicitanteId, dto.pedidoId);
-    if (usuarioIdPedido !== solicitanteId) {
-      throw new ForbiddenException('Solo puedes valorar productos de tus propios pedidos');
-    }
+    // La clienta solo valora lo que ella compró; el admin, cualquier pedido (como en e26619d).
+    await this.access.assertPedido(solicitanteId, dto.pedidoId);
 
     const enPedido = await this.prisma.pedidoItem.findFirst({
       where: { pedidoId: dto.pedidoId, productoId: dto.productoId },
@@ -136,8 +133,8 @@ export class ValoracionesService {
   ) {
     const row = await this.prisma.valoracion.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Valoración no encontrada');
-    // Editar es solo de la autora; el admin modera borrando, no cambia lo que otra persona escribió.
-    if (row.usuarioId !== solicitanteId) {
+    // Edita la autora o el admin (como en e26619d); otra clienta, no.
+    if (row.usuarioId !== solicitanteId && !this.access.isAdmin(await this.access.getRol(solicitanteId))) {
       throw new ForbiddenException('Solo la autora puede editar su valoración');
     }
 

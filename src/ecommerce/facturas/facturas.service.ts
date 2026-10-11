@@ -17,7 +17,7 @@ export class FacturasService {
   ) {}
 
   async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
-    await this.access.assertPedido(solicitanteId, pedidoId, propios);
+    await this.access.assertPedidoLectura(solicitanteId, pedidoId, propios);
     const data = await this.prisma.factura.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'desc' },

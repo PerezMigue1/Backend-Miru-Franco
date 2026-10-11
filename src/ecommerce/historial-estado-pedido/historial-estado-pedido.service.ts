@@ -12,7 +12,7 @@ export class HistorialEstadoPedidoService {
   ) {}
 
   async listarPorPedido(pedidoId: number, solicitanteId: string, propios = false) {
-    await this.access.assertPedido(solicitanteId, pedidoId, propios);
+    await this.access.assertPedidoLectura(solicitanteId, pedidoId, propios);
     const data = await this.prisma.historialEstadoPedido.findMany({
       where: { pedidoId },
       orderBy: { creadoEn: 'asc' },
@@ -25,7 +25,7 @@ export class HistorialEstadoPedidoService {
       where: { id },
     });
     if (!row) throw new NotFoundException('Registro de historial no encontrado');
-    await this.access.assertPedido(solicitanteId, row.pedidoId, propios);
+    await this.access.assertPedidoLectura(solicitanteId, row.pedidoId, propios);
     return { success: true, data: row };
   }
 
