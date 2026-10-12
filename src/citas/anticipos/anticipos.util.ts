@@ -27,6 +27,10 @@ export const referenciaCita = (citaId: number) => `cita-${citaId}`;
 export const RUTA_RETORNO_APP = 'pagos-en-linea/citas/retorno-app';
 export const DEEP_LINK_ANTICIPO_APP = 'appmirufranco://anticipo';
 export const deepLinkAnticipoApp = (citaId: number) => `${DEEP_LINK_ANTICIPO_APP}/${citaId}?retorno=mp`;
+/** Lo mismo para un pedido de la tienda pagado desde la app: regresa a RUTA_RETORNO_APP_PEDIDO y de ahí al deep link. */
+export const RUTA_RETORNO_APP_PEDIDO = 'pagos-en-linea/mercadopago/retorno-app';
+export const DEEP_LINK_PEDIDO_APP = 'appmirufranco://pedido';
+export const deepLinkPedidoApp = (pedidoId: number) => `${DEEP_LINK_PEDIDO_APP}/${pedidoId}?retorno=mp`;
 
 export function citaDeReferencia(referencia: string | null | undefined): number | null {
   const m = /^cita-(\d+)$/.exec(String(referencia ?? ''));

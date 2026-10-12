@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -10,12 +11,14 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RUTA_RETORNO_APP_PEDIDO, deepLinkPedidoApp } from '../../citas/anticipos/anticipos.util';
 import { PagosEnLineaService } from './pagos-en-linea.service';
 import { CrearPreferenciaDto } from './dto/crear-preferencia.dto';
 import { validarFirmaMercadoPago } from './firma-mercadopago';
@@ -24,11 +27,14 @@ import { validarFirmaMercadoPago } from './firma-mercadopago';
 export class PagosEnLineaController {
   constructor(private readonly servicio: PagosEnLineaService) {}
 
-  /** La clienta pide pagar su pedido: devuelve la URL de Mercado Pago a la que se le redirige. */
+  /**
+   * La clienta pide pagar su pedido: devuelve la URL de Mercado Pago a la que se le redirige.
+   * Con ?origen=app, Mercado Pago regresa a /api/pagos-en-linea/mercadopago/retorno-app en lugar de la web.
+   */
   @Post('preferencia')
   @UseGuards(JwtAuthGuard)
-  crearPreferencia(@Body() dto: CrearPreferenciaDto, @CurrentUser() user: { id: string }) {
-    return this.servicio.crearPreferencia(dto.pedidoId, user.id);
+  crearPreferencia(@Body() dto: CrearPreferenciaDto, @Query('origen') origen: string | undefined, @CurrentUser() user: { id: string }) {
+    return this.servicio.crearPreferencia(dto.pedidoId, user.id, new Date(), origen === 'app');
   }
 
   /** Estado real del pago para la pantalla de confirmación. */
@@ -61,5 +67,20 @@ export class PagosEnLineaController {
     if (tipo !== 'payment') return { ok: true };
     await this.servicio.procesarPago(dataId);
     return { ok: true };
+  }
+}
+
+/**
+ * GET /api/pagos-en-linea/mercadopago/retorno-app?pedidoId=<id>: Mercado Pago regresa aquí cuando el pedido
+ * se pagó desde la app. Pública (el navegador llega sin sesión) y siempre al deep link fijo con solo el id del
+ * pedido: los parámetros que agrega Mercado Pago no se reenvían; la app consulta el estado real con /estado.
+ */
+@Controller()
+export class RetornoAppPedidoController {
+  @Get(RUTA_RETORNO_APP_PEDIDO)
+  retornoApp(@Query('pedidoId') pedidoId: string | undefined, @Res() res: Response) {
+    const id = typeof pedidoId === 'string' && /^[1-9]\d*$/.test(pedidoId) ? Number(pedidoId) : NaN;
+    if (!Number.isSafeInteger(id)) throw new BadRequestException('pedidoId inválido');
+    res.redirect(302, deepLinkPedidoApp(id));
   }
 }

@@ -80,7 +80,7 @@ describe('Pagos en línea por HTTP', () => {
     const ok = await enviar({ pedidoId: 42 });
     expect(ok.status).toBe(201);
     expect(await ok.json()).toEqual({ initPoint: 'https://mp.test/pagar' });
-    expect(servicio.crearPreferencia).toHaveBeenCalledWith(42, 'clienta-1');
+    expect(servicio.crearPreferencia).toHaveBeenCalledWith(42, 'clienta-1', expect.any(Date), false);
   });
 
   it('estado del pago de un pedido para la confirmación', async () => {

@@ -23,7 +23,7 @@ import { DevolucionesController } from './devoluciones/devoluciones.controller';
 import { DevolucionesService } from './devoluciones/devoluciones.service';
 import { NotificacionesController } from './notificaciones/notificaciones.controller';
 import { NotificacionesService } from './notificaciones/notificaciones.service';
-import { PagosEnLineaController } from './mercadopago/pagos-en-linea.controller';
+import { PagosEnLineaController, RetornoAppPedidoController } from './mercadopago/pagos-en-linea.controller';
 import { PagosEnLineaService } from './mercadopago/pagos-en-linea.service';
 import { MercadoPagoClient } from './mercadopago/mercadopago.client';
 import { ApartadosService } from './pedidos/apartados.service';
@@ -44,6 +44,7 @@ import { AnticiposModule } from '../citas/anticipos/anticipos.module';
     DevolucionesController,
     NotificacionesController,
     PagosEnLineaController,
+    RetornoAppPedidoController,
   ],
   providers: [
     EcommerceAccessService,

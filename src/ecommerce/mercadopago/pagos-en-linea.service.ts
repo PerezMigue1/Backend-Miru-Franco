@@ -16,7 +16,7 @@ import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
 import { METODO_PAGO_MERCADOPAGO, VIGENCIA_PEDIDO_EN_LINEA_MS } from '../pedidos/flujo-pedido';
 import { MercadoPagoClient, PagoMercadoPago } from './mercadopago.client';
 import { AnticiposCitasService } from '../../citas/anticipos/anticipos-citas.service';
-import { citaDeReferencia } from '../../citas/anticipos/anticipos.util';
+import { RUTA_RETORNO_APP_PEDIDO, citaDeReferencia } from '../../citas/anticipos/anticipos.util';
 
 export type ResultadoPago = 'pagado' | 'ya_procesado' | 'revision' | 'no_aprobado' | 'ignorado';
 export type EstadoPagoEnLinea = 'aprobado' | 'pendiente' | 'rechazado' | 'revision' | 'sin_pago' | 'cancelado';
@@ -47,7 +47,7 @@ export class PagosEnLineaService {
     @Optional() private readonly anticipos?: AnticiposCitasService,
   ) {}
 
-  async crearPreferencia(pedidoId: number, usuarioId: string, ahora: Date = new Date()) {
+  async crearPreferencia(pedidoId: number, usuarioId: string, ahora: Date = new Date(), desdeApp = false) {
     const pedido = await this.prisma.pedido.findUnique({ where: { id: pedidoId }, include: { items: true } });
     if (!pedido) throw new NotFoundException('Pedido no encontrado');
     if (pedido.usuarioId !== usuarioId) throw new ForbiddenException('No tienes permiso para pagar este pedido');
@@ -74,13 +74,16 @@ export class PagosEnLineaService {
     }
 
     const confirmacion = `${(process.env.FRONTEND_URL ?? '').replace(/\/+$/, '')}/cliente/tienda-online/confirmacion?pedidoId=${pedido.id}`;
+    // Desde la app, Mercado Pago regresa al backend, que redirige al deep link (así no se abre la web).
+    const backend = (process.env.BACKEND_URL ?? '').replace(/\/+$/, '');
+    const regreso = desdeApp && backend ? `${backend}/api/${RUTA_RETORNO_APP_PEDIDO}?pedidoId=${pedido.id}` : confirmacion;
     const cuerpo = {
       items,
       external_reference: String(pedido.id),
-      back_urls: { success: confirmacion, failure: confirmacion, pending: confirmacion },
+      back_urls: { success: regreso, failure: regreso, pending: regreso },
       // El regreso automático solo lo acepta Mercado Pago con una URL pública https (en local responde 400
       // invalid_auto_return); sin él, la clienta regresa con el botón "Volver al sitio".
-      ...(confirmacion.startsWith('https://') && { auto_return: 'approved' }),
+      ...(regreso.startsWith('https://') && { auto_return: 'approved' }),
       expires: true,
       expiration_date_from: ahora.toISOString(),
       expiration_date_to: vence.toISOString(),
