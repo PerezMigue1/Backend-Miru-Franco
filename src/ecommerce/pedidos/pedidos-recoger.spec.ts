@@ -57,7 +57,7 @@ function montar(pedido: { estado: EstadoPedido; metodoPago?: string | null; usua
     isAdmin: (rol: string | null) => rol === 'admin',
   };
   const eventos = { emit: jest.fn() };
-  const servicio = new PedidosService(prisma as any, access as any, eventos as any);
+  const servicio = new PedidosService(prisma as any, access as any, eventos as any, {} as any);
   return { servicio, actualizaciones, historial, eventos, tx };
 }
 
@@ -90,10 +90,42 @@ describe('Pedidos para recoger en el salón: sin envío', () => {
     expect(data).toMatchObject({ estado: 'pendiente_pago', metodoPago: 'pago_en_salon', direccionEnvioId: null, costoEnvio: 0 });
   });
 
-  it('la clienta no puede crear su pedido ya pagado (403) y nadie lo crea como enviado (400)', async () => {
+  it('la clienta no puede crear su pedido ya pagado y nadie lo crea como enviado (400)', async () => {
     const { servicio } = montar({ estado: EstadoPedido.borrador });
-    await expect(servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pagado } as any)).rejects.toMatchObject({ status: 403 });
+    await expect(servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pagado, metodoPago: 'mercado_pago' } as any)).rejects.toMatchObject({ status: 400 });
     await expect(servicio.crear(STAFF, { items: item, estado: EstadoPedido.enviado } as any)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('la clienta no crea en borrador, sin estado ni con otro método de pago (400), y no se guarda nada', async () => {
+    const { servicio, tx } = montar({ estado: EstadoPedido.borrador });
+    for (const dto of [
+      { estado: EstadoPedido.borrador, metodoPago: 'mercado_pago' },
+      { metodoPago: 'mercado_pago' },
+      { estado: EstadoPedido.pendiente_pago },
+      { estado: EstadoPedido.pendiente_pago, metodoPago: 'tarjeta_credito' },
+      { estado: EstadoPedido.pendiente_pago, metodoPago: 'Mercado_Pago' },
+    ]) {
+      await expect(servicio.crear(CLIENTA, { items: item, ...dto } as any)).rejects.toMatchObject({ status: 400 });
+    }
+    // Desde el portal, aunque tenga caja, también aplica la regla de clienta.
+    await expect(servicio.crear(STAFF, { items: item, estado: EstadoPedido.borrador } as any, true)).rejects.toMatchObject({ status: 400 });
+    expect(tx.pedido.create).not.toHaveBeenCalled();
+  });
+
+  it('la clienta paga en línea: pendiente_pago con mercado_pago, y la referencia de pago que mande se ignora', async () => {
+    const { servicio, tx } = montar({ estado: EstadoPedido.borrador });
+    await servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pendiente_pago, metodoPago: 'mercado_pago', referenciaPago: 'pago-falso-123' } as any);
+    const data = (tx.pedido.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0].data;
+    expect(data).toMatchObject({ estado: 'pendiente_pago', metodoPago: 'mercado_pago', referenciaPago: null });
+  });
+
+  it('el personal sigue creando con sus estados, método y referencia libres', async () => {
+    const { servicio, tx } = montar({ estado: EstadoPedido.borrador });
+    await servicio.crear(STAFF, { items: item } as any);
+    await servicio.crear(STAFF, { items: item, estado: EstadoPedido.pagado, metodoPago: 'efectivo', referenciaPago: 'ticket-9' } as any);
+    const creados = (tx.pedido.create.mock.calls as unknown as [{ data: Record<string, unknown> }][]).map(([a]) => a.data);
+    expect(creados[0]).toMatchObject({ estado: 'borrador', metodoPago: null, referenciaPago: null });
+    expect(creados[1]).toMatchObject({ estado: 'pagado', metodoPago: 'efectivo', referenciaPago: 'ticket-9' });
   });
 });
 

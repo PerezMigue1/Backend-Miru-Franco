@@ -57,6 +57,14 @@ export interface PedidoEvent {
   usuarioId: string;
 }
 
+/** La clienta canceló un pedido ya pagado (PedidosService.actualizar): qué pasó con su dinero. */
+export interface PedidoCanceladoPagadoEvent extends PedidoEvent {
+  /** Nombre (o correo) de la clienta, para que el personal la reconozca. */
+  clienta: string;
+  monto: number;
+  reembolso: 'reembolsado' | 'en_revision';
+}
+
 /** Tipo usado tanto al programar los 2 recordatorios en `onCitaCreada` como al
  *  identificarlos para descartarlos en la cascada de `onCitaCancelada` —
  *  cambiarlo en un solo lado rompe esa cascada silenciosamente. */
@@ -414,6 +422,46 @@ export class NotificacionesListener {
       });
     } catch (e) {
       this.logger.error(`No se pudo avisar del anticipo en revisión de la cita ${payload.citaId}`, e);
+      return;
+    }
+    this.despachador.drenarInmediatas(envioIds);
+  }
+
+  /**
+   * La clienta canceló un pedido ya pagado: aviso por la app a quien maneja la caja (estilista y admin) para
+   * no prepararlo y, si el reembolso no salió solo, reembolsarlo a mano.
+   */
+  @OnEvent('pedido.cancelado_pagado')
+  async onPedidoCanceladoPagado(payload: PedidoCanceladoPagadoEvent): Promise<void> {
+    const monto = `$${payload.monto.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const mensaje =
+      payload.reembolso === 'reembolsado'
+        ? `${payload.clienta} canceló el pedido #${payload.pedidoId} ya pagado (${monto}): el reembolso en Mercado Pago ya salió`
+        : `${payload.clienta} canceló el pedido #${payload.pedidoId} ya pagado (${monto}): el reembolso quedó en revisión, reembolsar a mano`;
+    let envioIds: string[] = [];
+    try {
+      const destinatarios = await this.resolver.resolverUsuariosPorPermiso('caja:escritura');
+      await this.prisma.$transaction(async (tx) => {
+        for (const usuarioId of destinatarios) {
+          const canales = await this.resolver.resolverCanales(usuarioId, 'pedido_cancelado_pagado', ['in_app']);
+          const { envios } = await this.outbox.encolar(tx, {
+            usuarioId,
+            tipo: 'pedido_cancelado_pagado',
+            titulo: payload.reembolso === 'reembolsado' ? 'Pedido pagado cancelado' : 'Reembolso por revisar',
+            mensaje,
+            metadata: { monto: payload.monto, reembolso: payload.reembolso },
+            entidadTipo: 'pedido',
+            entidadId: String(payload.pedidoId),
+            urlAccion: '/operacion/pedidos-online',
+            // Un envío por destinatario: la clave de idempotencia es por entidad, tipo y canal.
+            canales: canales.map((c) => ({ ...c, discriminador: usuarioId })),
+          });
+          envioIds = envioIds.concat(envios.map((e) => e.id));
+        }
+      });
+    } catch (e) {
+      // Nunca afecta el pedido, que ya quedó cancelado.
+      this.logger.error(`No se pudo avisar de la cancelación del pedido pagado ${payload.pedidoId}`, e);
       return;
     }
     this.despachador.drenarInmediatas(envioIds);

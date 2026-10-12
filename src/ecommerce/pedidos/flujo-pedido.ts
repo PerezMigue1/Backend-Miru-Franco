@@ -53,8 +53,11 @@ export function transicionPermitida(
 /** La clienta solo puede cancelar mientras el salón no empezó a preparar su pedido. */
 export const ESTADOS_CANCELABLES_POR_CLIENTA: readonly EstadoPedido[] = [pendiente_pago, pagado];
 
-/** Estados con los que la clienta puede crear su pedido. */
-export const ESTADOS_INICIALES_CLIENTA: readonly EstadoPedido[] = [borrador, pendiente_pago];
+/** Estados con los que la clienta puede crear su pedido: siempre nace pendiente de pago. */
+export const ESTADOS_INICIALES_CLIENTA: readonly EstadoPedido[] = [pendiente_pago];
+
+/** Cómo puede pagar la clienta su pedido: en línea con Mercado Pago o al recogerlo en el salón. */
+export const METODOS_PAGO_CLIENTA: readonly string[] = [METODO_PAGO_MERCADOPAGO, METODO_PAGO_EN_SALON];
 
 /** Con qué estado puede registrar el personal un pedido nuevo (nunca 'enviado'; 'cancelado'
  *  descontaría stock sin devolverlo). */

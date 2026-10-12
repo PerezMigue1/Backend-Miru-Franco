@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { EstadoPedido } from '@prisma/client';
 import { PermisosGuard } from './guards/permisos.guard';
@@ -162,7 +162,7 @@ function montarPedidos(pedidos: any[]) {
     $transaction: jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(tx) : Promise.all(arg))),
   };
   const access = { getRol: jest.fn(async (id: string) => ROL_DE(id)), isAdmin: (r: string | null) => r === 'admin' };
-  return { servicio: new PedidosService(prisma, access as any, { emit: jest.fn() } as any), prisma, tx, creados };
+  return { servicio: new PedidosService(prisma, access as any, { emit: jest.fn() } as any, {} as any), prisma, tx, creados };
 }
 
 describe.each(ROLES_PERSONAL)('Pedidos en el portal como clienta: %s', (rol) => {
@@ -178,7 +178,7 @@ describe.each(ROLES_PERSONAL)('Pedidos en el portal como clienta: %s', (rol) => 
 
   it('crea su pedido a su nombre y con las reglas de clienta (no puede nacer pagado)', async () => {
     const { servicio } = montarPedidos([]);
-    await expect(servicio.crear(yo, { estado: EstadoPedido.pagado, items: [{ presentacionId: 3, cantidad: 1 }] } as any, true)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(servicio.crear(yo, { estado: EstadoPedido.pagado, metodoPago: 'pago_en_salon', items: [{ presentacionId: 3, cantidad: 1 }] } as any, true)).rejects.toBeInstanceOf(BadRequestException);
     await expect(servicio.crear(yo, { usuarioId: OTRA, estado: EstadoPedido.pendiente_pago, items: [{ presentacionId: 3, cantidad: 1 }] } as any, true)).rejects.toBeInstanceOf(ForbiddenException);
   });
 

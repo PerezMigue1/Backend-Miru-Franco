@@ -3,12 +3,14 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { EstadoPedido, Prisma } from '@prisma/client';
+import { EstadoPago, EstadoPedido, Pago, Pedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
+import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
 import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
 import { PedidoItemLineDto } from './dto/pedido-item-line.dto';
@@ -29,18 +31,29 @@ import {
   ESTADOS_INICIALES_CLIENTA,
   ESTADOS_INICIALES_PERSONAL,
   MENSAJE_SIN_ENVIO,
+  METODO_PAGO_MERCADOPAGO,
+  METODOS_PAGO_CLIENTA,
   esPagoEnSalon,
   transicionPermitida,
   METODOS_COBRO_SALON,
   MetodoCobroSalon,
 } from './flujo-pedido';
 
+/** Mismo proveedor con el que el webhook registra el pago aprobado (pagos-en-linea.service.ts). */
+const PROVEEDOR_MERCADOPAGO = 'mercadopago';
+
+/** Qué pasó con el dinero cuando la clienta cancela un pedido ya pagado (lo leen la web y la app). */
+export type EstadoReembolsoCancelacion = 'reembolsado' | 'en_revision';
+
 @Injectable()
 export class PedidosService {
+  private readonly logger = new Logger(PedidosService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: EcommerceAccessService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly mercadoPago: MercadoPagoClient,
   ) {}
 
   private includeDefault(): Prisma.PedidoInclude {
@@ -247,12 +260,18 @@ export class PedidosService {
       throw new BadRequestException(MENSAJE_SIN_ENVIO);
     }
 
-    const estado = dto.estado ?? EstadoPedido.borrador;
-    // Desde el portal compra como clienta: mismos estados iniciales que ella, aunque tenga caja.
+    // Desde el portal compra como clienta: mismas reglas que ella, aunque tenga caja.
     const esPersonal = !propios && (await puedeGestionarPedidos(this.prisma, rol));
-    if (!esPersonal && !ESTADOS_INICIALES_CLIENTA.includes(estado)) {
-      throw new ForbiddenException('Solo el personal del salón puede fijar ese estado');
+    if (!esPersonal) {
+      // La clienta paga en línea o al recoger: su pedido siempre nace pendiente de pago.
+      if (!dto.estado || !ESTADOS_INICIALES_CLIENTA.includes(dto.estado)) {
+        throw new BadRequestException(`Un pedido nuevo empieza como '${EstadoPedido.pendiente_pago}'`);
+      }
+      if (!dto.metodoPago || !METODOS_PAGO_CLIENTA.includes(dto.metodoPago)) {
+        throw new BadRequestException(`Elige cómo pagar el pedido: ${METODOS_PAGO_CLIENTA.join(' o ')}`);
+      }
     }
+    const estado = dto.estado ?? EstadoPedido.borrador;
     if (esPersonal && !ESTADOS_INICIALES_PERSONAL.includes(estado)) {
       throw new BadRequestException(`Un pedido nuevo no puede empezar como '${estado}'`);
     }
@@ -284,7 +303,8 @@ export class PedidosService {
           moneda,
           notasCliente: dto.notasCliente ?? null,
           metodoPago: dto.metodoPago ?? null,
-          referenciaPago: dto.referenciaPago ?? null,
+          // La referencia del pago en línea la pone el webhook; la clienta no la fija.
+          referenciaPago: esPersonal ? dto.referenciaPago ?? null : null,
           items: {
             create: detalles.map((d) => ({
               productoId: d.productoId,
@@ -518,7 +538,80 @@ export class PedidosService {
       }
     }
 
+    // La clienta canceló un pedido ya pagado: se le devuelve el pago y se avisa al personal. Va después de
+    // confirmar la cancelación (el cambio condicional de estado asegura que solo una llega aquí).
+    if (cambiaEstado && !puedeCambiarEstado && dto.estado === EstadoPedido.cancelado && estadoAnterior === EstadoPedido.pagado) {
+      const monto = Number(actual.total);
+      const estadoReembolso = await this.reembolsarCancelacionClienta(actual);
+      this.eventEmitter.emit('pedido.cancelado_pagado', {
+        pedidoId: id,
+        usuarioId: usuarioIdPedido,
+        clienta: data.usuario?.nombre?.trim() || data.usuario?.email || usuarioIdPedido,
+        monto,
+        reembolso: estadoReembolso,
+      });
+      return { success: true, data, reembolso: { estado: estadoReembolso, monto } };
+    }
+
     return { success: true, data };
+  }
+
+  /**
+   * Reembolso total del pago en línea cuando la clienta cancela un pedido pagado. Nunca lanza: el pedido ya
+   * quedó cancelado. Si no sale (o no hay pago de Mercado Pago que devolver), el pago queda en revisión para
+   * que el personal lo reembolse a mano.
+   */
+  private async reembolsarCancelacionClienta(pedido: Pedido): Promise<EstadoReembolsoCancelacion> {
+    // Solo el pago con Mercado Pago se devuelve solo; cualquier otro método lo revisa el personal.
+    if (pedido.metodoPago !== METODO_PAGO_MERCADOPAGO) {
+      this.logger.warn(`El pedido ${pedido.id} se canceló pagado con '${pedido.metodoPago}': reembolso en revisión`);
+      return 'en_revision';
+    }
+    let pago: Pago | null = null;
+    try {
+      pago = await this.prisma.pago.findFirst({
+        where: {
+          pedidoId: pedido.id,
+          estado: EstadoPago.aprobado,
+          proveedor: PROVEEDOR_MERCADOPAGO,
+          referenciaExterna: { not: null },
+        },
+        orderBy: { id: 'desc' },
+      });
+      if (!pago) {
+        this.logger.warn(`El pedido ${pedido.id} se canceló pagado sin un pago aprobado de Mercado Pago: reembolso en revisión`);
+        return 'en_revision';
+      }
+      try {
+        // Clave por pago: si se reintenta, Mercado Pago no reembolsa dos veces.
+        await this.mercadoPago.reembolsarPago(pago.referenciaExterna!, `reembolso-pedido-${pago.id}`);
+      } catch (e) {
+        // Si ya estaba reembolsado (desde el panel de Mercado Pago o un intento anterior), cuenta como hecho.
+        const enMp = await this.mercadoPago.obtenerPago(pago.referenciaExterna!).catch(() => null);
+        if (enMp?.status !== 'refunded') throw e;
+      }
+    } catch (e) {
+      this.logger.warn(
+        `No se pudo reembolsar el pago ${pago?.referenciaExterna} del pedido ${pedido.id}: queda en revisión (${e instanceof Error ? e.message : e})`,
+      );
+      if (pago) {
+        await this.prisma.pago
+          .updateMany({
+            where: { id: pago.id, estado: EstadoPago.aprobado },
+            data: { estado: EstadoPago.en_revision, errorMensaje: 'No se pudo reembolsar al cancelar la clienta: reembolsar a mano' },
+          })
+          .catch((err) => this.logger.error(`No se pudo dejar en revisión el pago ${pago!.id} del pedido ${pedido.id}`, err));
+      }
+      return 'en_revision';
+    }
+    // El dinero ya se devolvió: aunque falle el registro, para la clienta el reembolso salió.
+    await this.prisma.pago
+      .updateMany({
+        where: { id: pago.id, estado: EstadoPago.aprobado },
+        data: { estado: EstadoPago.reembolsado, reembolsadoEn: new Date(), errorMensaje: 'Reembolsado al cancelar la clienta' },
+      })
+      .catch((err) => this.logger.error(`El pago ${pago!.id} del pedido ${pedido.id} se reembolsó pero no se registró`, err));
+    return 'reembolsado';
   }
 
   /** Lee el pedido y comprueba el permiso de entregas (admin o `pedidos:entregar`). */

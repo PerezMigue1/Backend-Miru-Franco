@@ -42,7 +42,7 @@ function montar(pedido: { estado: EstadoPedido; metodoPago?: string; total?: num
   };
   const access = { getRol: jest.fn(async (id: string) => ROL_DE[id] ?? 'cliente'), isAdmin: (rol: string | null) => rol === 'admin' };
   const eventos = { emit: jest.fn() };
-  return { servicio: new PedidosService(prisma as any, access as any, eventos as any), actual, pagos, historial, eventos, tx, prisma };
+  return { servicio: new PedidosService(prisma as any, access as any, eventos as any, {} as any), actual, pagos, historial, eventos, tx, prisma };
 }
 
 describe('Permiso pedidos:entregar', () => {
