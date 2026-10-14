@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { normalizarRangoFechas, normalizarRangoFechasSoloDia } from './fecha-rango.util';
 
 describe('normalizarRangoFechas', () => {
@@ -16,6 +17,20 @@ describe('normalizarRangoFechas', () => {
     const r = normalizarRangoFechas('2026-02-14', '2026-02-14');
     expect(r.gte?.getTime()).toBe(new Date('2026-02-14T00:00:00.000-06:00').getTime());
     expect(r.lte?.getTime()).toBe(new Date('2026-02-14T23:59:59.999-06:00').getTime());
+  });
+});
+
+describe('normalizarRangoFechas: desde posterior a hasta', () => {
+  it('responde 400 en vez de devolver un rango vacío sin avisar', () => {
+    expect(() => normalizarRangoFechas('2026-10-05', '2026-10-03')).toThrow(BadRequestException);
+    expect(() => normalizarRangoFechas('2026-10-05', '2026-10-03')).toThrow('La fecha "desde" no puede ser posterior a "hasta"');
+    expect(() => normalizarRangoFechas('2026-10-03T15:00:00.000Z', '2026-10-03T14:59:59.000Z')).toThrow(BadRequestException);
+  });
+
+  it('el mismo día o un rango abierto siguen igual', () => {
+    expect(normalizarRangoFechas('2026-10-03', '2026-10-03').gte).toBeInstanceOf(Date);
+    expect(normalizarRangoFechas('2026-10-03', undefined).lte).toBeUndefined();
+    expect(normalizarRangoFechas(undefined, '2026-10-03').gte).toBeUndefined();
   });
 });
 

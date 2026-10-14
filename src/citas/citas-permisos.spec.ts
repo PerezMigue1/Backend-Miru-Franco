@@ -30,7 +30,8 @@ const ESTILISTA = quien('est-1', 'estilista');
 const EMPLEADO = quien('emp-1', 'empleado');
 const ADMIN = quien('adm-1', 'admin');
 
-const MANANA = new Date(Date.now() + 24 * 60 * 60 * 1000);
+// Miércoles futuro a las 10:00 (hora de México): reprogramar cae dentro del horario del salón.
+const MANANA = new Date('2030-01-09T10:00:00.000-06:00');
 const enHoras = (h: number) => new Date(MANANA.getTime() + h * 60 * 60 * 1000).toISOString();
 
 /** Prisma en memoria: dos citas, la #1 de la clienta A atendida por el becario y la #2 de la clienta B. */
@@ -39,7 +40,7 @@ function montar() {
     { id: 1, clienteId: 'cli-a', especialistaId: 'bec-1', estado: 'pendiente', notas: null, fechaHoraInicio: MANANA, fechaHoraFin: MANANA },
     { id: 2, clienteId: 'cli-b', especialistaId: 'est-1', estado: 'pendiente', notas: null, fechaHoraInicio: MANANA, fechaHoraFin: MANANA },
   ];
-  const conRelaciones = (c: (typeof citas)[number]) => ({ ...c, servicio: { nombre: 'Corte' }, cliente: { id: c.clienteId } });
+  const conRelaciones = (c: (typeof citas)[number]) => ({ ...c, servicio: { nombre: 'Corte', duracionMinutos: 60 }, cliente: { id: c.clienteId } });
   const coincide = (c: any, where: any) => Object.entries(where ?? {}).every(([k, v]) => typeof v !== 'string' || c[k] === v);
   const prisma: any = {
     cita: {
@@ -65,7 +66,10 @@ function montar() {
   };
   const inventario = { registrarSalida: jest.fn(async () => ({ data: { ok: true } })) };
   const eventos = { emit: jest.fn() };
-  const servicio = new CitasService(prisma, inventario as any, {} as any, eventos as any);
+  const configuracion = {
+    obtener: jest.fn(async () => ({ data: { entradaLunesViernes: '09:30', salidaLunesViernes: '19:30', entradaSabado: '09:30', salidaSabado: '19:00', entradaDomingo: null, salidaDomingo: null } })),
+  };
+  const servicio = new CitasService(prisma, inventario as any, configuracion as any, eventos as any);
   return { servicio, prisma, citas, eventos, inventario };
 }
 

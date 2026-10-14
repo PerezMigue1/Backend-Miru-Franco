@@ -3,7 +3,7 @@ import { PosService, diaDelCorte } from './pos.service';
 type Cobro = { id: number; pagadoEn: string; metodo: string; monto: number; estado?: string; cobradoPorId: string | null; corteId?: number | null; citaId?: number | null };
 
 /** Prisma en memoria: ventas y cobros se filtran como lo haría la base (gte/lte, cajera, sin corte). */
-function prismaConVentas(ventas: { id: number; creadoEn: string; metodoPago: string; total: number }[], cobros: Cobro[] = []) {
+function prismaConVentas(ventas: { id: number; creadoEn: string; metodoPago: string; total: number; estado?: string }[], cobros: Cobro[] = []) {
   const creados: Record<string, unknown>[] = [];
   const vinculadas: number[] = [];
   const cobrosVinculados: number[] = [];
@@ -44,7 +44,14 @@ function prismaConVentas(ventas: { id: number; creadoEn: string; metodoPago: str
       if (Array.isArray(arg)) return Promise.all(arg);
       const tx = {
         corteCaja: { create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => (creados.push(data), { id: 1, ...data })) },
-        ventaLocal: { updateMany: jest.fn(async ({ where }: { where: { id: { in: number[] } } }) => vinculadas.push(...where.id.in)) },
+        ventaLocal: {
+          updateMany: jest.fn(async ({ where }: { where: { id: { in: number[] }; estado?: string } }) => {
+            // Como la base: si el where pide estado, una venta cancelada mientras tanto no se liga.
+            const elegibles = ventas.filter((v) => where.id.in.includes(v.id) && (where.estado === undefined || (v.estado ?? 'pagada') === where.estado));
+            vinculadas.push(...elegibles.map((v) => v.id));
+            return { count: elegibles.length };
+          }),
+        },
         pago: {
           updateMany: jest.fn(async ({ where, data }: any) => {
             // Como la base: solo los que siguen sin corte si el where lo pide.
@@ -102,6 +109,21 @@ describe('Corte de caja por día de México', () => {
       servicioCon(prisma).crearCorte({ fecha: '2026-02-30', efectivoInicial: 0, efectivoFinal: 0 }, 'cajero-1'),
     ).rejects.toThrow('Fecha inválida');
     expect(prisma.ventaLocal.findMany).not.toHaveBeenCalled();
+  });
+
+  it('si una venta se cancela entre la lectura y el guardado, el corte se rechaza (409) en vez de contarla', async () => {
+    const lista: { id: number; creadoEn: string; metodoPago: string; total: number; estado?: string }[] = ventas.map((v) => ({ ...v }));
+    const { prisma } = prismaConVentas(lista);
+    const leer = prisma.ventaLocal.findMany.getMockImplementation()!;
+    prisma.ventaLocal.findMany.mockImplementationOnce(async (args: any) => {
+      const filas = await leer(args);
+      lista.find((v) => v.id === 2)!.estado = 'cancelada'; // otra caja la canceló
+      return filas;
+    });
+
+    await expect(
+      servicioCon(prisma).crearCorte({ fecha: '2026-10-03', efectivoInicial: 0, efectivoFinal: 350 }, 'cajero-1'),
+    ).rejects.toMatchObject({ status: 409 });
   });
 
   it('el listado de cortes filtra CorteCaja.fecha por el mismo día con el que se guarda', async () => {

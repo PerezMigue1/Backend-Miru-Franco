@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { PagosService } from './pagos.service';
 
 function montar(pagoExistente?: Record<string, unknown>) {
@@ -78,5 +79,36 @@ describe('Reembolsar un pago de pedido que ya tiene reembolsos por devolución',
     await servicio.actualizar(5, 'cajera-2', { estado: 'reembolsado' } as any, 'estilista', ['caja:escritura']);
     expect(prisma.pago.updateMany).toHaveBeenCalledTimes(1);
     expect(prisma.devolucion.count.mock.calls[0][0].where).toEqual({ pedidoId: 7, estado: 'aprobada', tipo: 'reembolso' });
+  });
+});
+
+describe('Cambiar el monto de un pago ya cobrado', () => {
+  const caja: [string, string[]] = ['estilista', ['caja:escritura']];
+
+  it.each([
+    ['aprobado', { estado: 'aprobado', corteId: null }],
+    ['reembolsado', { estado: 'reembolsado', corteId: null }],
+    ['en revisión (Mercado Pago ya lo capturó)', { estado: 'en_revision', corteId: null }],
+    ['incluido en un corte', { estado: 'pendiente', corteId: 12 }],
+  ])('%s: cambiar el monto responde 409 y no se guarda nada', async (_caso, extra) => {
+    const { servicio, actualizados } = montar({ id: 5, pedidoId: 7, monto: 350, pagadoEn: null, ...extra });
+    const intento = servicio.actualizar(5, 'cajera-1', { monto: 3500 } as any, ...caja);
+    await expect(intento).rejects.toBeInstanceOf(ConflictException);
+    await expect(servicio.actualizar(5, 'cajera-1', { monto: 3500 } as any, ...caja)).rejects.toThrow(
+      'No se puede cambiar el monto de un pago ya cobrado, reembolsado o incluido en un corte de caja',
+    );
+    expect(actualizados).toHaveLength(0);
+  });
+
+  it('un pago aprobado acepta el mismo monto (la web reenvía el total del pedido al cobrar)', async () => {
+    const { servicio, actualizados } = montar({ id: 5, pedidoId: 7, estado: 'aprobado', corteId: null, monto: '350.00', pagadoEn: new Date() });
+    await servicio.actualizar(5, 'cajera-1', { estado: 'aprobado', monto: 350, metodo: 'efectivo' } as any, ...caja);
+    expect(actualizados).toHaveLength(1);
+  });
+
+  it('un pago pendiente sin corte sigue pudiendo cambiar de monto', async () => {
+    const { servicio, actualizados } = montar({ id: 5, pedidoId: 7, estado: 'pendiente', corteId: null, monto: 300, pagadoEn: null });
+    await servicio.actualizar(5, 'cajera-1', { estado: 'aprobado', monto: 350 } as any, ...caja);
+    expect(actualizados[0]).toMatchObject({ monto: 350, estado: 'aprobado' });
   });
 });

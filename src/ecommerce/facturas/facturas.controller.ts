@@ -10,6 +10,7 @@ import {
   Put,
   Query,
   UseGuards,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../../common/guards/permisos.guard';
@@ -37,17 +38,17 @@ export class FacturasController {
 
   @Get('pedido/:pedidoId')
   listarPorPedido(
-    @Param('pedidoId') pedidoId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
-    return this.service.listarPorPedido(Number(pedidoId), user.id, esPropios(propios));
+    return this.service.listarPorPedido(pedidoId, user.id, esPropios(propios));
   }
 
   /** La dueña del pedido ve su factura; la nota sin pedido o la factura ajena, solo caja (lectura). */
   @Get(':id')
-  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.obtenerPorId(Number(id), user.id);
+  obtener(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.obtenerPorId(id, user.id);
   }
 
   /** Caja registra cualquier documento; la clienta solo solicita un CFDI de un pedido suyo (nace 'solicitada'). */
@@ -61,16 +62,16 @@ export class FacturasController {
   @Put(':id')
   @Permisos('caja:escritura')
   actualizar(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: { id: string },
     @Body() dto: UpdateFacturaDto,
   ) {
-    return this.service.actualizar(Number(id), user.id, dto);
+    return this.service.actualizar(id, user.id, dto);
   }
 
   @Delete(':id')
   @Permisos('caja:escritura')
-  eliminar(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.eliminar(Number(id), user.id);
+  eliminar(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.eliminar(id, user.id);
   }
 }

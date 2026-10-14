@@ -79,6 +79,22 @@ describe('Comisiones por servicio (monto fijo)', () => {
   });
 });
 
+describe('Tope del monto de comisión (columna Decimal(10,2))', () => {
+  const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+  const validar = (monto: unknown) => pipe.transform({ monto }, { type: 'body', metatype: GuardarComisionDto });
+
+  it('un monto que no cabe en la columna responde 400 con mensaje en español (antes daba 500)', async () => {
+    const error = await validar(100000000000).catch((e) => e);
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect(JSON.stringify(error.getResponse())).toContain('El monto de la comisión no puede ser mayor a 99,999,999.99');
+    await expect(validar(100000000)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('el máximo que cabe sí se acepta', async () => {
+    await expect(validar(99999999.99)).resolves.toMatchObject({ monto: 99999999.99 });
+  });
+});
+
 describe('Quién recibe comisiones', () => {
   it('activa el interruptor y crea el perfil de empleada si no existe', async () => {
     const { servicio, perfiles } = montar();

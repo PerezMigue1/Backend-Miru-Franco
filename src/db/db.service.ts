@@ -17,6 +17,7 @@ import {
   MAX_FILE_SIZE_BYTES,
   TRUNCATE_ALLOWED_TABLE_REGEX,
   TRUNCATE_BLOCKED_TABLES,
+  neutralizarFormulaCsv,
   type ImportMode,
   type TablaPermitida,
 } from './db.constants';
@@ -184,7 +185,7 @@ export class DbService {
       tabla: table,
       restartIdentity,
       cascade,
-      message: 'truncate ok',
+      message: `Se vació la tabla ${table}`,
     };
   }
 
@@ -1139,7 +1140,7 @@ export class DbService {
     const headers = this.getUniqueHeaders(datos);
     const headerLine = headers.map((h) => this.escapeCsvField(h)).join(',');
     const rows = datos.map((row) =>
-      headers.map((h) => this.escapeCsvField(this.valueToStr(row[h]))).join(','),
+      headers.map((h) => this.escapeCsvField(neutralizarFormulaCsv(this.valueToStr(row[h])))).join(','),
     );
     const csv = [headerLine, ...rows].join('\n');
 

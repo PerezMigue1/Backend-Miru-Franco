@@ -228,6 +228,20 @@ describe('Paneles /admin y /operacion: guards reales con las claves de producciÃ
     }
     expect(indebidos).toEqual([]);
   });
+
+  it('cliente: las rutas de personal del fixture (asistencia, permisos, horas extra) quedan denegadas', async () => {
+    const delCliente = FIXTURE.filter((x) => x.rol === 'cliente');
+    expect(delCliente.length).toBeGreaterThan(0);
+    const indebidos: string[] = [];
+    for (const e of delCliente) {
+      const par = emparejar(rutas, e.metodo, e.ruta);
+      if (!par) continue; // lo reporta la prueba de endpoints existentes
+      const resultado = await evaluarGuards(par.r, par.params, 'cliente');
+      const obtenido = resultado === 'permitido' ? 'permitido' : 'denegado';
+      if (obtenido !== (e.esperado ?? 'permitido')) indebidos.push(`${e.metodo} ${e.ruta} (${par.r.nombre}): ${resultado}`);
+    }
+    expect(indebidos).toEqual([]);
+  });
 });
 
 // ---------- b) Chequeos dentro de los servicios ----------

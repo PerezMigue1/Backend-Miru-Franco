@@ -32,7 +32,8 @@ export class ListCitasDto {
 
   /** Portal de clienta: solo las citas donde quien consulta es la clienta, sea del rol que sea. */
   @IsOptional()
-  @Transform(({ value }) => esPropios(value))
+  // obj[key]: el valor original; con enableImplicitConversion `value` ya llega como Boolean('false') === true.
+  @Transform(({ obj, key }) => esPropios(obj[key]))
   propios?: boolean;
 
   @IsOptional()

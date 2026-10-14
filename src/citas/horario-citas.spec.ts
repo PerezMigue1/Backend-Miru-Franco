@@ -45,7 +45,7 @@ function montar(iniciales: Partial<CitaMem>[] = []) {
     id: i + 1, clienteId: 'cli-1', especialistaId: 'est-1', servicioId: 5, estado: 'pendiente', notas: null,
     fechaHoraInicio: hora('10:00'), fechaHoraFin: hora('11:00'), horaCheckOut: null, ventaItem: null, ...c,
   }) as CitaMem);
-  const conRelaciones = (c: CitaMem) => ({ ...c, servicio: { nombre: 'Corte' } });
+  const conRelaciones = (c: CitaMem) => ({ ...c, servicio: { nombre: 'Corte', duracionMinutos: 60 } });
   /** Candados por clave como pg_advisory_xact_lock: se sueltan al terminar la transacción. */
   const candados = new Map<string, Promise<void>>();
   const clavesBloqueadas: string[] = [];
@@ -268,5 +268,98 @@ describe('PATCH /citas/:id: completar y citas ya cobradas', () => {
     expect(prisma.cita.update).not.toHaveBeenCalled();
     expect(prisma.cita.updateMany).not.toHaveBeenCalled();
     expect(prisma.cita.findUnique.mock.calls[0][0]).toMatchObject({ include: { ventaItem: expect.anything() } });
+  });
+});
+
+describe('Crear y reprogramar solo dentro del horario del salón (hora de México)', () => {
+  // Horario de la configuración simulada en montar(): L a S de 09:00 a 19:00, domingo cerrado.
+  const DOMINGO = '2027-03-14';
+  const SABADO = '2027-03-13';
+  const en = (dia: string, hh: string) => new Date(`${dia}T${hh}:00.000-06:00`).toISOString();
+  const nueva = (dia: string, inicio: string, fin: string) => ({ clienteId: 'cli-2', especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: en(dia, inicio), fechaHoraFin: en(dia, fin) }) as any;
+  const moverA = (dia: string, inicio: string, fin: string) => ({ fechaHoraInicio: en(dia, inicio), fechaHoraFin: en(dia, fin) }) as any;
+  const CLIENTA: Solicitante = { id: 'cli-1', rol: 'cliente', claves: ['citas:propia'] };
+
+  it.each([
+    ['en domingo (cerrado)', DOMINGO, '10:00', '11:00', 'El salón no abre ese día'],
+    ['a las 23:00', DIA, '23:00', '23:30', 'fuera del horario del salón'],
+    ['a las 03:00', DIA, '03:00', '04:00', 'fuera del horario del salón'],
+    ['antes de abrir', DIA, '08:30', '09:30', 'fuera del horario del salón'],
+    ['terminando después del cierre', SABADO, '18:30', '19:30', 'fuera del horario del salón'],
+  ])('crear %s responde 400 y no se crea', async (_caso, dia, inicio, fin, mensaje) => {
+    const { servicio, citas } = montar([]);
+    const r = servicio.crear(nueva(dia, inicio, fin), ADMIN);
+    await expect(r).rejects.toBeInstanceOf(BadRequestException);
+    await expect(r).rejects.toThrow(mensaje);
+    expect(citas).toHaveLength(0);
+  });
+
+  it('crear pegada a la apertura o al cierre sí se acepta', async () => {
+    const { servicio, citas } = montar([]);
+    await servicio.crear(nueva(DIA, '09:00', '10:00'), ADMIN);
+    await servicio.crear(nueva(SABADO, '18:00', '19:00'), ADMIN);
+    expect(citas).toHaveLength(2);
+  });
+
+  it.each([
+    ['a domingo', DOMINGO, '10:00', '11:00'],
+    ['a las 23:00', DIA, '23:00', '23:59'],
+    ['a la madrugada', DIA, '03:00', '04:00'],
+  ])('reprogramar %s responde 400 y no se mueve', async (_caso, dia, inicio, fin) => {
+    const { servicio, citas } = montar([{}]);
+    await expect(servicio.reprogramar(1, moverA(dia, inicio, fin), ADMIN)).rejects.toBeInstanceOf(BadRequestException);
+    expect(citas[0]).toMatchObject({ estado: 'pendiente', fechaHoraInicio: hora('10:00') });
+  });
+
+  it('una llegada sin cita no depende del horario del salón', async () => {
+    jest.useFakeTimers({ now: new Date(`${DOMINGO}T23:00:00.000-06:00`), doNotFake: ['setImmediate'] });
+    try {
+      const { servicio, citas } = montar([]);
+      await servicio.crearSinCita({ nombre: 'Ana', especialistaId: 'est-1', servicioId: 5 } as any);
+      expect(citas).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  describe('Portal (clienta o ?propios=true): en el futuro y con la duración del servicio', () => {
+    beforeEach(() => jest.useFakeTimers({ now: new Date(`${DIA}T12:00:00.000-06:00`), doNotFake: ['setImmediate'] }));
+    afterEach(() => jest.useRealTimers());
+
+    it.each([
+      ['en el pasado', '10:00', '11:00', 'Elige un horario que todavía no haya pasado'],
+      ['de 5 minutos', '15:00', '15:05', 'La cita debe durar 60 minutos'],
+      ['más larga que el servicio', '15:00', '17:00', 'La cita debe durar 60 minutos'],
+    ])('crear %s responde 400', async (_caso, inicio, fin, mensaje) => {
+      const { servicio, citas } = montar([]);
+      await expect(servicio.crear(nueva(DIA, inicio, fin), CLIENTA)).rejects.toThrow(mensaje);
+      await expect(servicio.crear(nueva(DIA, inicio, fin), ADMIN, true)).rejects.toThrow(mensaje);
+      expect(citas).toHaveLength(0);
+    });
+
+    it('crear en el futuro, en horario y con la duración del servicio se acepta', async () => {
+      const { servicio, citas } = montar([]);
+      await servicio.crear(nueva(DIA, '15:00', '16:00'), CLIENTA);
+      expect(citas[0]).toMatchObject({ clienteId: 'cli-1', fechaHoraInicio: hora('15:00') });
+    });
+
+    it.each([
+      ['al pasado', '10:00', '11:00', 'Elige un horario que todavía no haya pasado'],
+      ['con otra duración', '15:00', '15:05', 'La cita debe durar 60 minutos'],
+    ])('reprogramar %s responde 400 y no se mueve', async (_caso, inicio, fin, mensaje) => {
+      const { servicio, citas } = montar([
+        { fechaHoraInicio: hora('17:00'), fechaHoraFin: hora('18:00') },
+        { clienteId: ADMIN.id, especialistaId: 'est-2', fechaHoraInicio: hora('17:00'), fechaHoraFin: hora('18:00') },
+      ]);
+      await expect(servicio.reprogramar(1, moverA(DIA, inicio, fin), CLIENTA)).rejects.toThrow(mensaje);
+      await expect(servicio.reprogramar(2, moverA(DIA, inicio, fin), ADMIN, true)).rejects.toThrow(mensaje);
+      expect(citas.map((c) => [c.estado, c.fechaHoraInicio])).toEqual([['pendiente', hora('17:00')], ['pendiente', hora('17:00')]]);
+    });
+
+    it('el panel del personal sí registra una cita de otra duración o ya pasada (dentro del horario)', async () => {
+      const { servicio, citas } = montar([]);
+      await servicio.crear(nueva(DIA, '10:00', '10:05'), ADMIN);
+      expect(citas).toHaveLength(1);
+    });
   });
 });

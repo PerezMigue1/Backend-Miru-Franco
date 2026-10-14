@@ -151,3 +151,28 @@ describe('Rutas /api/pregunta-seguridad: límite de intentos y respuestas iguale
     expect(cuarto.status).toBe(429);
   });
 });
+
+describe('GET /pregunta-seguridad/por-email sin email', () => {
+  it('400 "El correo es obligatorio" (antes 200 con success:false) y no consulta', async () => {
+    const service = { obtenerPreguntaPorEmail: jest.fn() };
+    const controller = new PreguntaSeguridadController(service);
+    for (const email of [undefined, '']) {
+      const e = await errorDe(controller.obtenerPreguntaPorEmail(email));
+      expect(e).toBeInstanceOf(BadRequestException);
+      expect(e.message).toBe('El correo es obligatorio');
+    }
+    expect(service.obtenerPreguntaPorEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /pregunta-seguridad/verificar: "Por definir" nunca vale', () => {
+  it('cuenta guardada con la respuesta por defecto de admin: el mismo 400 genérico', async () => {
+    const hash = await bcrypt.hash('Por definir', 4);
+    const servicio = new PreguntaSeguridadService(
+      prismaCon({ 'admin-creada@example.com': { id: 'u-9', activo: true, preguntaSeguridad: PREGUNTA, respuestaSeguridad: hash } }) as any,
+    );
+    const e = await errorDe(servicio.verificarRespuesta('admin-creada@example.com', { [PREGUNTA]: 'Por definir' }));
+    expect(e).toBeInstanceOf(BadRequestException);
+    expect(e.message).toBe(DATOS_NO_COINCIDEN);
+  });
+});

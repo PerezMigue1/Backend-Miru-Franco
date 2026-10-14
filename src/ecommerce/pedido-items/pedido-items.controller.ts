@@ -10,6 +10,7 @@ import {
   Put,
   Query,
   UseGuards,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -26,43 +27,43 @@ export class PedidoItemsController {
 
   @Get()
   listar(
-    @Param('pedidoId') pedidoId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
-    return this.service.listarPorPedido(Number(pedidoId), user.id, esPropios(propios));
+    return this.service.listarPorPedido(pedidoId, user.id, esPropios(propios));
   }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
   crear(
-    @Param('pedidoId') pedidoId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
     @CurrentUser() user: { id: string },
     @Body() body: CreatePedidoItemBodyDto,
   ) {
     const dto: CreatePedidoItemDto = {
       ...body,
-      pedidoId: Number(pedidoId),
+      pedidoId,
     };
     return this.service.crear(user.id, dto);
   }
 
   @Put(':itemId')
   actualizar(
-    @Param('pedidoId') pedidoId: string,
-    @Param('itemId') itemId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
     @CurrentUser() user: { id: string },
     @Body() dto: UpdatePedidoItemDto,
   ) {
-    return this.service.actualizar(Number(itemId), user.id, dto, Number(pedidoId));
+    return this.service.actualizar(itemId, user.id, dto, pedidoId);
   }
 
   @Delete(':itemId')
   eliminar(
-    @Param('pedidoId') pedidoId: string,
-    @Param('itemId') itemId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
     @CurrentUser() user: { id: string },
   ) {
-    return this.service.eliminar(Number(itemId), user.id, Number(pedidoId));
+    return this.service.eliminar(itemId, user.id, pedidoId);
   }
 }

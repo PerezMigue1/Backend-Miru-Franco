@@ -33,6 +33,11 @@ export class OauthService {
     if (!clientId || !clientIdEsperado || clientId !== clientIdEsperado) {
       throw new BadRequestException('client_id inválido');
     }
+    this.validarRedirectUri(redirectUri);
+  }
+
+  /** redirect_uri contra ALEXA_REDIRECT_URIS (también en POST /oauth/code, que no siempre trae client_id). */
+  validarRedirectUri(redirectUri: string) {
     if (!redirectUri || !this.redirectUrisPermitidas().includes(redirectUri)) {
       throw new BadRequestException('redirect_uri no autorizada');
     }

@@ -1,3 +1,9 @@
+import { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import type { AddressInfo } from 'node:net';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PermisosGuard } from '../common/guards/permisos.guard';
+import { ProductosController } from './productos.controller';
 import { ProductosService } from './productos.service';
 
 /** Prisma en memoria: guarda lo que recibe `create` y lo devuelve en `findUnique`, como la base. */
@@ -53,5 +59,60 @@ describe('ProductosService: los datos se guardan tal cual', () => {
     const { data: leido } = await servicio.obtenerPorId(creado.id);
 
     expect(leido.ingredientes).toBe(ingredientes);
+  });
+});
+
+describe('/api/productos/:id: un id que no es número responde 400, no 500', () => {
+  let app: INestApplication;
+  let base: string;
+  const productos = {
+    obtenerPorId: jest.fn(async () => ({ success: true })),
+    actualizar: jest.fn(async () => ({ success: true })),
+    eliminar: jest.fn(async () => ({ success: true })),
+  };
+
+  beforeAll(async () => {
+    const modulo = await Test.createTestingModule({
+      controllers: [ProductosController],
+      providers: [{ provide: ProductosService, useValue: productos }],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(PermisosGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
+    app = modulo.createNestApplication({ logger: false });
+    app.setGlobalPrefix('api');
+    await app.listen(0, '127.0.0.1');
+    base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  const pedir = (metodo: string, id: string) =>
+    fetch(`${base}/api/productos/${id}`, {
+      method: metodo,
+      headers: { 'Content-Type': 'application/json' },
+      body: metodo === 'PUT' ? JSON.stringify({ nombre: 'Shampoo' }) : undefined,
+    });
+
+  it.each(['GET', 'PUT', 'DELETE'])('%s con id "abc": 400 "Id inválido" y el servicio no se llama', async (metodo) => {
+    const res = await pedir(metodo, 'abc');
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toBe('Id inválido');
+    expect(productos.obtenerPorId).not.toHaveBeenCalled();
+    expect(productos.actualizar).not.toHaveBeenCalled();
+    expect(productos.eliminar).not.toHaveBeenCalled();
+  });
+
+  it('con un id numérico llega como número al servicio', async () => {
+    expect((await pedir('GET', '5')).status).toBe(200);
+    expect(productos.obtenerPorId).toHaveBeenCalledWith(5);
+    expect((await pedir('DELETE', '5')).status).toBe(200);
+    expect(productos.eliminar).toHaveBeenCalledWith(5);
   });
 });

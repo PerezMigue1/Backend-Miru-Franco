@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsNotEmpty, IsString } from 'class-validator';
+import { IsDateString, IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 
 const TIPOS_SOLICITUD = ['permiso', 'vacaciones', 'falta_justificada', 'incapacidad'] as const;
 
@@ -18,5 +18,6 @@ export class CreateSolicitudPermisoDto {
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(500, { message: 'El motivo no puede pasar de 500 caracteres' })
   motivo: string;
 }

@@ -10,6 +10,7 @@ import {
   Put,
   Query,
   UseGuards,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -31,8 +32,8 @@ export class CarritoController {
   }
 
   @Get(':id')
-  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.obtenerPorId(Number(id), user.id);
+  obtener(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.obtenerPorId(id, user.id);
   }
 
   @Post()
@@ -46,15 +47,15 @@ export class CarritoController {
 
   @Put(':id')
   actualizar(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: { id: string },
     @Body() dto: UpdateCarritoItemDto,
   ) {
-    return this.service.actualizar(Number(id), user.id, dto);
+    return this.service.actualizar(id, user.id, dto);
   }
 
   @Delete(':id')
-  eliminar(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.eliminar(Number(id), user.id);
+  eliminar(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.eliminar(id, user.id);
   }
 }

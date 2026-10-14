@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CorregirAsistenciaDto } from './dto/corregir-asistencia.dto';
 
@@ -105,16 +105,24 @@ export class AsistenciaService {
     return { success: true, count: data.length, data };
   }
 
-  async corregir(id: number, corregidoPorId: string, dto: CorregirAsistenciaDto) {
+  async corregir(id: number, corregidoPorId: string, dto: CorregirAsistenciaDto, rol?: string | null) {
     const existe = await this.prisma.registroAsistencia.findUnique({ where: { id } });
     if (!existe) {
       throw new NotFoundException('Registro de asistencia no encontrado');
+    }
+    // Nadie corrige su propia asistencia, salvo el admin.
+    if (existe.usuarioId === corregidoPorId && rol !== 'admin') {
+      throw new ForbiddenException('No puedes corregir tu propio registro de asistencia');
     }
 
     const horaEntradaFinal = dto.horaEntrada ? new Date(dto.horaEntrada) : existe.horaEntrada;
     const horaSalidaFinal = dto.horaSalida !== undefined ? new Date(dto.horaSalida) : existe.horaSalida;
     if (horaSalidaFinal && horaSalidaFinal < horaEntradaFinal) {
       throw new BadRequestException('La hora de salida no puede ser anterior a la hora de entrada');
+    }
+    // La salida fijada a mano no pasa de las 23:59:59 del día del registro (hora de México, -06:00 fijo).
+    if (dto.horaSalida !== undefined && new Date(dto.horaSalida) > new Date(`${existe.fecha}T23:59:59.999-06:00`)) {
+      throw new BadRequestException('La hora de salida no puede pasar del final del día del registro');
     }
 
     const registro = await this.prisma.registroAsistencia.update({

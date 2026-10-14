@@ -117,3 +117,69 @@ describe('ExportDirectService: filtro de fechas de la exportación', () => {
     expect(consulta.values).toEqual(['2026-10-03T06:00:00.000Z', '2026-10-04T05:59:59.999Z']);
   });
 });
+
+describe('ExportDirectService: solo tablas de la aplicación', () => {
+  const columnasYFilas = () =>
+    poolFalso(async (sql) =>
+      sql.includes('information_schema.columns') ? { rows: [{ column_name: 'name' }] } : { rows: [{ name: 'x' }] },
+    );
+
+  it.each(['pg_settings', 'pg_catalog.pg_settings', 'information_schema.tables', 'otro.pedidos', '_prisma_migrations', 'tabla_que_no_existe'])(
+    '%s responde 400 sin consultar la base',
+    async (tabla) => {
+      for (const extra of [{ formato: 'csv' }, { meta: '1' }, { meta: 'schema' }, { meta: 'explain' }]) {
+        const { pool, envios } = columnasYFilas();
+        const r = await servicioCon(pool).handleGet({ tabla, ...extra });
+        expect(r).toMatchObject({ kind: 'json', status: 400, body: { error: 'Solo se pueden exportar tablas de la aplicación' } });
+        expect(envios).toHaveLength(0);
+      }
+    },
+  );
+
+  it('una tabla del modelo (con o sin "public.") se sigue exportando', async () => {
+    for (const tabla of ['pedidos', 'public.citas']) {
+      const { pool } = columnasYFilas();
+      await expect(servicioCon(pool).handleGet({ tabla, formato: 'json' })).resolves.toMatchObject({ kind: 'file', status: 200 });
+    }
+  });
+
+  it('el listado de tablas solo trae las de la aplicación', async () => {
+    const { pool } = poolFalso(async () => ({
+      rows: [
+        { table_schema: 'public', table_name: 'pedidos' },
+        { table_schema: 'public', table_name: '_prisma_migrations' },
+        { table_schema: 'neon_auth', table_name: 'users_sync' },
+        { table_schema: 'public', table_name: 'usuarios' },
+      ],
+    }));
+    const r = await servicioCon(pool).handleGet({});
+    expect(r).toMatchObject({ kind: 'json', status: 200, body: { tablas: ['pedidos', 'usuarios'] } });
+  });
+});
+
+describe('ExportDirectService: CSV sin fórmulas', () => {
+  it('un valor que empieza con =, +, - o @ sale con comilla simple delante; los números no cambian', async () => {
+    const { pool } = poolFalso(async (sql) =>
+      sql.includes('information_schema.columns')
+        ? { rows: [{ column_name: 'nombre' }, { column_name: 'monto' }] }
+        : {
+            rows: [
+              { nombre: '=HYPERLINK("http://x","clic")', monto: '-150.00' },
+              { nombre: '+52 55 1234', monto: -3 },
+              { nombre: '-2+3', monto: '10' },
+              { nombre: '@SUM(A1)', monto: null },
+              { nombre: 'Ana', monto: '+5' },
+            ],
+          },
+    );
+    const r = (await servicioCon(pool).handleGet({ tabla: 'pedidos', formato: 'csv' })) as { body: string };
+    expect(r.body.split('\r\n')).toEqual([
+      'nombre,monto',
+      `"'=HYPERLINK(""http://x"",""clic"")",-150.00`,
+      "'+52 55 1234,-3",
+      "'-2+3,10",
+      "'@SUM(A1),",
+      'Ana,+5',
+    ]);
+  });
+});

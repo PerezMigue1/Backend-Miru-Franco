@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { rangoDiaMexico } from './zona-mexico';
 
 const REGEX_FECHA_SOLO = /^\d{4}-\d{2}-\d{2}$/;
@@ -14,6 +15,7 @@ const REGEX_FECHA_SOLO = /^\d{4}-\d{2}-\d{2}$/;
  * - Valores inválidos se ignoran silenciosamente (mismo comportamiento previo: el llamador
  *   decide si validar el formato antes de pasarlo aquí). Un día imposible con formato válido
  *   (2026-02-30) se desborda al mes siguiente, como antes.
+ * - `desde` posterior a `hasta` responde 400 (antes devolvía un rango vacío sin avisar).
  */
 export function normalizarRangoFechas(desde?: string, hasta?: string): { gte?: Date; lte?: Date } {
   const rango: { gte?: Date; lte?: Date } = {};
@@ -28,6 +30,9 @@ export function normalizarRangoFechas(desde?: string, hasta?: string): { gte?: D
     if (!Number.isNaN(h.getTime())) rango.lte = h;
   }
 
+  if (rango.gte && rango.lte && rango.gte > rango.lte) {
+    throw new BadRequestException('La fecha "desde" no puede ser posterior a "hasta"');
+  }
   return rango;
 }
 

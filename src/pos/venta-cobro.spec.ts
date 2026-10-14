@@ -61,6 +61,18 @@ describe('Precio: el backend ignora el que manda el frontend', () => {
   });
 });
 
+describe('Precio: no se vende una presentación en $0', () => {
+  it.each(['0', '0.00'])('precio %s: 400 con mensaje claro y no se crea la venta', async (precio) => {
+    const { pos, creadas, prisma } = montar();
+    prisma.productoPresentacion.findUnique.mockResolvedValue({ id: 3, precio: new Prisma.Decimal(precio), stock: 10, disponible: true });
+    await expect(pos.crearVenta({ metodoPago: 'efectivo', items: [producto()] } as any, 'caj-1')).rejects.toMatchObject({
+      status: 400,
+      message: 'Este producto no tiene precio válido (presentación 3)',
+    });
+    expect(creadas).toHaveLength(0);
+  });
+});
+
 describe('Descuento: solo por el campo descuento y con motivo', () => {
   it('descuento mayor a 0 sin motivo responde 400', async () => {
     const { pos } = montar();
@@ -190,7 +202,11 @@ describe('DTO de venta', () => {
 describe('Cancelar una venta libera sus citas', () => {
   it('quita el cita_id de las líneas para que la cita vuelva a quedar por cobrar', async () => {
     const tx: any = {
-      ventaLocal: { update: jest.fn(async () => ({})), findUnique: jest.fn(async () => ({ id: 7, estado: 'cancelada' })) },
+      ventaLocal: {
+        update: jest.fn(async () => ({})),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+        findUnique: jest.fn(async () => ({ id: 7, estado: 'cancelada' })),
+      },
       ventaLocalItem: { updateMany: jest.fn(async () => ({ count: 1 })) },
     };
     const prisma: any = {
@@ -200,5 +216,61 @@ describe('Cancelar una venta libera sus citas', () => {
     const pos = new PosService(prisma, { registrarEntrada: jest.fn() } as any, { emit: jest.fn() } as any);
     await pos.cancelarVenta(7, { motivoCancelacion: 'Método equivocado' } as any, 'caj-1');
     expect(tx.ventaLocalItem.updateMany).toHaveBeenCalledWith({ where: { ventaId: 7, citaId: { not: null } }, data: { citaId: null } });
+  });
+});
+
+describe('Cancelar una venta: nunca después del corte y una sola vez', () => {
+  /** Una venta en memoria; el cambio de estado condicional se comporta como en la base. */
+  function montarCancelacion(extra: Record<string, unknown> = {}) {
+    const venta: any = { id: 9, estado: 'pagada', corteId: null, items: [{ presentacionId: 3, cantidad: 2, citaId: null }], ...extra };
+    const tx: any = {
+      ventaLocal: {
+        update: jest.fn(async ({ data }: any) => Object.assign(venta, data)),
+        updateMany: jest.fn(async ({ where, data }: any) => {
+          const coincide = Object.entries(where).every(([k, v]) => (venta[k] ?? null) === v);
+          if (!coincide) return { count: 0 };
+          Object.assign(venta, data);
+          return { count: 1 };
+        }),
+        findUnique: jest.fn(async () => ({ ...venta })),
+      },
+      ventaLocalItem: { updateMany: jest.fn(async () => ({ count: 0 })) },
+    };
+    const prisma: any = {
+      // Cada lectura es una foto del momento, como en la base.
+      ventaLocal: { findUnique: jest.fn(async () => ({ ...venta, items: venta.items })) },
+      $transaction: jest.fn(async (fn: any) => fn(tx)),
+    };
+    const inventario = { registrarEntrada: jest.fn(async () => ({})) };
+    const pos = new PosService(prisma, inventario as any, { emit: jest.fn() } as any);
+    return { pos, venta, inventario, prisma };
+  }
+  const motivo = { motivoCancelacion: 'Cobro equivocado' } as any;
+
+  it('una venta que ya entró a un corte de caja responde 409 y no devuelve stock', async () => {
+    const { pos, venta, inventario } = montarCancelacion({ corteId: 4 });
+    await expect(pos.cancelarVenta(9, motivo, 'caj-1')).rejects.toBeInstanceOf(ConflictException);
+    await expect(pos.cancelarVenta(9, motivo, 'caj-1')).rejects.toThrow(
+      'Esta venta ya entró a un corte de caja: no se puede cancelar',
+    );
+    expect(venta.estado).toBe('pagada');
+    expect(inventario.registrarEntrada).not.toHaveBeenCalled();
+  });
+
+  it('dos cancelaciones al mismo tiempo: solo una devuelve el stock, la otra responde 409', async () => {
+    const { pos, venta, inventario } = montarCancelacion();
+    const resultados = await Promise.allSettled([pos.cancelarVenta(9, motivo, 'caj-1'), pos.cancelarVenta(9, motivo, 'caj-2')]);
+    expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rechazo = resultados.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(rechazo.reason).toBeInstanceOf(ConflictException);
+    expect(inventario.registrarEntrada).toHaveBeenCalledTimes(1);
+    expect(venta.estado).toBe('cancelada');
+  });
+
+  it('una venta pagada sin corte se cancela como antes: guarda el motivo y devuelve el stock', async () => {
+    const { pos, venta, inventario } = montarCancelacion();
+    await expect(pos.cancelarVenta(9, motivo, 'caj-1')).resolves.toMatchObject({ success: true, data: { estado: 'cancelada' } });
+    expect(venta).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'Cobro equivocado' });
+    expect(inventario.registrarEntrada).toHaveBeenCalledWith(expect.objectContaining({ presentacionId: 3, cantidad: 2 }), 'caj-1', expect.anything());
   });
 });

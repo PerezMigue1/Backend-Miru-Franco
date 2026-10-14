@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSolicitudPermisoDto } from './dto/create-solicitud-permiso.dto';
 import { ResolverSolicitudPermisoDto } from './dto/resolver-solicitud-permiso.dto';
@@ -62,13 +62,17 @@ export class SolicitudesPermisoService {
     return { success: true, message: 'Solicitud registrada correctamente', data: solicitud };
   }
 
-  async resolver(id: number, resueltoPorId: string, dto: ResolverSolicitudPermisoDto) {
+  async resolver(id: number, resueltoPorId: string, dto: ResolverSolicitudPermisoDto, rol?: string | null) {
     const existe = await this.prisma.solicitudPermiso.findUnique({ where: { id } });
     if (!existe) {
       throw new NotFoundException('Solicitud no encontrada');
     }
     if (existe.estado !== 'pendiente') {
       throw new BadRequestException('Esta solicitud ya fue resuelta');
+    }
+    // Nadie resuelve su propia solicitud, salvo el admin.
+    if (existe.usuarioId === resueltoPorId && rol !== 'admin') {
+      throw new ForbiddenException('No puedes resolver tu propia solicitud');
     }
 
     const comentarioSanitizado = dto.comentarioResolucion ? sanitizeInput(dto.comentarioResolucion) : null;

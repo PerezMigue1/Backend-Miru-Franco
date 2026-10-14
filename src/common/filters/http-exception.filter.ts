@@ -30,6 +30,23 @@ const CODIGOS_RED_PG = new Set([
 const MENSAJES_CONEXION =
   /Can't reach database server|Timed out fetching a new connection|timeout exceeded when trying to connect|Connection terminated|Server has closed the connection/i;
 
+/** Mensajes de JSON.parse que Nest pasa tal cual cuando body-parser falla ('entity.parse.failed'). */
+const MENSAJE_JSON_INVALIDO = /in JSON at position|is not valid JSON|end of JSON input/;
+
+/**
+ * Los mensajes por defecto de Nest (en inglés) en español; los propios no cambian. body-parser marca
+ * el JSON inválido con type 'entity.parse.failed', pero Nest lo convierte en BadRequestException con
+ * solo el mensaje del parser, así que se reconoce por ese mensaje.
+ */
+export function traducirMensajePorDefecto(message: string): string {
+  if (message === 'Unauthorized') return 'Inicia sesión para continuar';
+  if (message === 'Forbidden resource') return 'No tienes permiso para realizar esta acción';
+  if (/^Cannot [A-Z]+ \//.test(message)) return 'Ruta no encontrada';
+  if (MENSAJE_JSON_INVALIDO.test(message)) return 'El cuerpo de la petición no es JSON válido';
+  if (message === 'Validation failed (numeric string is expected)') return 'Id inválido';
+  return message;
+}
+
 /** true si el error es de conexión a la base (caída, inalcanzable o pool agotado), no de la consulta. */
 export function esErrorDeConexion(exception: unknown): boolean {
   if (!exception || typeof exception !== 'object') return false;
@@ -73,7 +90,8 @@ export function resumenParaLog(exception: unknown): string {
 
 /**
  * Filtro global de excepciones.
- * - 4xx (HttpException): el mensaje pensado para el usuario, sin cambios.
+ * - 4xx (HttpException): el mensaje pensado para el usuario, sin cambios (los textos por defecto de
+ *   Nest en inglés salen en español, ver traducirMensajePorDefecto).
  * - 503: base caída o pool de conexiones agotado → mensaje genérico de servicio no disponible.
  * - 502/503/504 lanzados a propósito (HttpException): su mensaje, como antes.
  * - 500 y cualquier error no controlado (Prisma incluido) → mensaje genérico.
@@ -153,7 +171,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         typeof msg === 'object' && msg !== null && typeof msg.error === 'string'
           ? msg.error
           : this.getDefaultError(status);
-      const message = this.normalizeMessage(msg);
+      const message = traducirMensajePorDefecto(this.normalizeMessage(msg));
       const errors =
         typeof msg === 'object' && msg !== null && 'errors' in msg && typeof (msg as any).errors === 'object'
           ? (msg as any).errors

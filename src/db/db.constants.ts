@@ -47,3 +47,11 @@ export const IMPORT_MODES_BY_TABLE: Record<
     conflictKeys: ['id'],
   },
 };
+
+/**
+ * CSV: un valor que empieza con =, +, - o @ se abre como fórmula en Excel o Sheets; se le antepone
+ * una comilla simple. Un número (-150.00, +5) no es fórmula y queda igual.
+ */
+export function neutralizarFormulaCsv(valor: string): string {
+  return /^[=+\-@]/.test(valor) && !/^[+-]?\d+(\.\d+)?$/.test(valor) ? `'${valor}` : valor;
+}

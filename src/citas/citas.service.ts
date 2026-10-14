@@ -131,9 +131,57 @@ export class CitasService {
     }, OPCIONES_TX_HORARIO);
   }
 
+  /** Horario del salón en un día 'YYYY-MM-DD' (hora de México), según la configuración; null si no abre. */
+  private async horarioDelDia(fecha: string) {
+    const { data: config } = await this.configuracionService.obtener();
+    const [y, m, d] = fecha.split('-').map(Number);
+    const diaSemana = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=domingo … 6=sábado
+
+    let entrada: string | null;
+    let salida: string | null;
+    if (diaSemana === 0) {
+      entrada = config.entradaDomingo;
+      salida = config.salidaDomingo;
+    } else if (diaSemana === 6) {
+      entrada = config.entradaSabado;
+      salida = config.salidaSabado;
+    } else {
+      entrada = config.entradaLunesViernes;
+      salida = config.salidaLunesViernes;
+    }
+    if (!entrada || !salida) return null;
+    return {
+      entrada,
+      salida,
+      inicio: new Date(`${fecha}T${entrada}:00${OFFSET_MEXICO}`),
+      fin: new Date(`${fecha}T${salida}:00${OFFSET_MEXICO}`),
+    };
+  }
+
+  /**
+   * La cita cabe completa en el horario del salón del día en que empieza (mismo horario que ofrece
+   * `disponibilidad`). Desde el portal, además, empieza en el futuro y dura lo que dura el servicio.
+   */
+  private async validarHorarioCita(inicio: Date, fin: Date, portal: boolean, duracionMinutos: number) {
+    if (portal) {
+      if (inicio.getTime() <= Date.now()) throw new BadRequestException('Elige un horario que todavía no haya pasado');
+      if (fin.getTime() - inicio.getTime() !== duracionMinutos * 60_000) {
+        throw new BadRequestException(`La cita debe durar ${duracionMinutos} minutos, lo que dura el servicio`);
+      }
+    }
+    const horario = await this.horarioDelDia(diaEnMexico(inicio));
+    if (!horario) throw new BadRequestException('El salón no abre ese día');
+    if (inicio < horario.inicio || fin > horario.fin) {
+      throw new BadRequestException(`La cita queda fuera del horario del salón (${horario.entrada} a ${horario.salida})`);
+    }
+  }
+
   /** Carga la cita para editarla: 404 si no existe, permisos y 409 si ya se cobró en el POS. */
   private async citaEditable(id: number, solicitante: Solicitante, propios = false) {
-    const cita = await this.prisma.cita.findUnique({ where: { id }, include: { ventaItem: { select: { id: true } } } });
+    const cita = await this.prisma.cita.findUnique({
+      where: { id },
+      include: { ventaItem: { select: { id: true } }, servicio: { select: { duracionMinutos: true } } },
+    });
     if (!cita) throw new NotFoundException(`Cita ${id} no encontrada`);
     assertPuedeEscribirCita(cita, solicitante, propios);
     if (cita.ventaItem != null) throw new ConflictException(MENSAJE_CITA_COBRADA);
@@ -307,22 +355,7 @@ export class CitasService {
     }
     const duracionMinutos = servicio.duracionMinutos;
 
-    const { data: config } = await this.configuracionService.obtener();
-    const [y, m, d] = fecha.split('-').map(Number);
-    const diaSemana = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=domingo … 6=sábado
-
-    let entrada: string | null;
-    let salida: string | null;
-    if (diaSemana === 0) {
-      entrada = config.entradaDomingo;
-      salida = config.salidaDomingo;
-    } else if (diaSemana === 6) {
-      entrada = config.entradaSabado;
-      salida = config.salidaSabado;
-    } else {
-      entrada = config.entradaLunesViernes;
-      salida = config.salidaLunesViernes;
-    }
+    const horario = await this.horarioDelDia(fecha);
 
     const base = {
       success: true,
@@ -332,12 +365,11 @@ export class CitasService {
       duracionMinutos,
     };
 
-    if (!entrada || !salida) {
+    if (!horario) {
       return { ...base, abierto: false, motivo: 'El salón no abre ese día', slots: [] };
     }
 
-    const inicioDia = new Date(`${fecha}T${entrada}:00${OFFSET_MEXICO}`);
-    const finDia = new Date(`${fecha}T${salida}:00${OFFSET_MEXICO}`);
+    const { inicio: inicioDia, fin: finDia } = horario;
 
     const { gte, lte } = normalizarRangoFechas(fecha, fecha);
     const citasDelDia = await this.prisma.cita.findMany({
@@ -561,7 +593,7 @@ export class CitasService {
     // Validar servicio
     const servicio = await this.prisma.servicio.findUnique({
       where: { id: dto.servicioId },
-      select: { id: true, activo: true, anticipoMonto: true },
+      select: { id: true, activo: true, anticipoMonto: true, duracionMinutos: true },
     });
     if (!servicio || !servicio.activo) throw new NotFoundException('Servicio no encontrado o inactivo');
 
@@ -605,6 +637,9 @@ export class CitasService {
         anticipo = { anticipoRequerido: servicio.anticipoMonto, anticipoVenceEn: new Date(vence) };
       }
     }
+
+    // Portal: la cuenta de clienta o ?propios=true (el personal registra desde su panel citas pasadas o de otra duración).
+    await this.validarHorarioCita(fechaHoraInicio, fechaHoraFin, propios || solicitante.rol === 'cliente', servicio.duracionMinutos);
 
     const notas = dto.notas ? sanitizeInput(dto.notas) : null;
     if (notas && containsSQLInjection(notas)) {
@@ -731,8 +766,8 @@ export class CitasService {
 
   /**
    * Mueve la cita a otro horario con la misma validación que una cita nueva (fin después del inicio,
-   * notas limpias, sin encimarse con otra cita de la especialista y con el mismo candado). El
-   * anticipo se conserva (anticipoRequerido y anticipoPagadoEn no cambian), salvo una cita con pago en
+   * dentro del horario del salón, notas limpias, sin encimarse con otra cita de la especialista y con
+   * el mismo candado). El anticipo se conserva (anticipoRequerido y anticipoPagadoEn no cambian), salvo una cita con pago en
    * el salón aún sin pagar: su plazo pasa a 15 min antes del nuevo inicio. Una cita con pago en línea
    * conserva su plazo y una ya pagada no cambia.
    */
@@ -758,6 +793,7 @@ export class CitasService {
     if (propios && anticipoSinPagar && fechaHoraInicio.getTime() - ANTES_PAGO_SALON_MS - Date.now() < MARGEN_MINIMO_ANTICIPO_MS) {
       throw new BadRequestException(MENSAJE_SIN_TIEMPO_ANTICIPO);
     }
+    await this.validarHorarioCita(fechaHoraInicio, fechaHoraFin, propios || solicitante.rol === 'cliente', cita.servicio.duracionMinutos);
 
     // Pago en el salón sin pagar: el plazo sigue al nuevo inicio. Condicional en el mismo UPDATE para no
     // tocar una cita que se pagó entre la lectura y la escritura. Va antes de escribirSiNoCobrada, que

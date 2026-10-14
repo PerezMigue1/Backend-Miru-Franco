@@ -7,7 +7,7 @@ import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { crearFirma, ROLES_POR_USO, USOS_SUBIDA_PERSONAL } from './firma-cloudinary';
 
 export class FirmaSubidaDto {
-  @IsIn(USOS_SUBIDA_PERSONAL)
+  @IsIn(USOS_SUBIDA_PERSONAL, { message: 'El uso debe ser galeria o factura' })
   uso: (typeof USOS_SUBIDA_PERSONAL)[number];
 }
 

@@ -116,8 +116,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // esté disponible en los controladores (ej. quejas: crear/actualizar).
     const usuario = await this.prisma.usuario.findUnique({
       where: { id: payload.id },
-      select: { rol: true },
+      select: { rol: true, activo: true },
     });
+
+    // Desactivar o eliminar (borrado lógico) la cuenta corta su sesión al momento.
+    if (!usuario || usuario.activo === false) {
+      throw new UnauthorizedException('Sesión cerrada. Tu cuenta no está activa.');
+    }
 
     // El token movil solo existe para clientas: si el rol cambió, no hereda permisos de personal.
     if (esMovil && usuario?.rol !== 'cliente') {

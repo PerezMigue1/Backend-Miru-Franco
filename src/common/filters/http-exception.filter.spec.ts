@@ -1,9 +1,12 @@
 import {
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
+  ParseIntPipe,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -154,5 +157,52 @@ describe('HttpExceptionFilter', () => {
 
     expect(status).toBe(401);
     expect(body).toMatchObject({ error: 'Unauthorized', message: 'Token revocado. Por favor inicia sesión nuevamente.' });
+  });
+  describe('mensajes por defecto de Nest en español', () => {
+    /** Lo que hace Nest con un cuerpo JSON mal formado: BadRequestException con el mensaje del parser. */
+    const jsonInvalido = (texto: string) => {
+      try {
+        JSON.parse(texto);
+      } catch (e) {
+        return new BadRequestException((e as Error).message);
+      }
+      throw new Error('JSON válido');
+    };
+
+    it('401 sin mensaje propio (Passport) pide iniciar sesión', () => {
+      const { status, body } = responder(new UnauthorizedException());
+      expect(status).toBe(401);
+      expect(body.message).toBe('Inicia sesión para continuar');
+    });
+
+    it.each(['GET', 'POST', 'PATCH', 'DELETE'])('ruta inexistente (%s) responde "Ruta no encontrada" sin repetir la ruta', (metodo) => {
+      const { status, body } = responder(new NotFoundException(`Cannot ${metodo} /api/no-existe`), '/api/no-existe');
+      expect(status).toBe(404);
+      expect(body.message).toBe('Ruta no encontrada');
+    });
+
+    it.each(['{"nombre": }', '{nombre: 1}', '{"a":1', 'xx'])('cuerpo JSON mal formado (%s) no filtra el mensaje del parser', (texto) => {
+      const { status, body } = responder(jsonInvalido(texto));
+      expect(status).toBe(400);
+      expect(body.message).toBe('El cuerpo de la petición no es JSON válido');
+      expect(JSON.stringify(body)).not.toMatch(/position|Unexpected|token/i);
+    });
+
+    it('un id no numérico (ParseIntPipe) responde "Id inválido"', async () => {
+      const error = await new ParseIntPipe().transform('abc', { type: 'param', data: 'id' }).catch((e) => e);
+      const { status, body } = responder(error);
+      expect(status).toBe(400);
+      expect(body.message).toBe('Id inválido');
+    });
+
+    it('403 de un guard sin mensaje propio sale en español', () => {
+      const { body } = responder(new ForbiddenException('Forbidden resource'));
+      expect(body.message).toBe('No tienes permiso para realizar esta acción');
+    });
+
+    it('un mensaje propio en español que menciona JSON no cambia', () => {
+      const { body } = responder(new BadRequestException('El archivo no contiene un JSON válido'));
+      expect(body.message).toBe('El archivo no contiene un JSON válido');
+    });
   });
 });

@@ -231,5 +231,14 @@
   {"metodo":"GET","ruta":"/pregunta-seguridad","rol":"becario","panel":"/operacion","observado":[200]},
   {"metodo":"GET","ruta":"/reportes/comisiones","rol":"becario","panel":"/operacion","observado":[200]},
   {"metodo":"GET","ruta":"/seguimientos","rol":"becario","panel":"/operacion","observado":[200]},
-  {"metodo":"GET","ruta":"/solicitudes-permiso/mias","rol":"becario","panel":"/operacion","observado":[200]}
+  {"metodo":"GET","ruta":"/solicitudes-permiso/mias","rol":"becario","panel":"/operacion","observado":[200]},
+  {"metodo":"POST","ruta":"/asistencia/marcar","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"Ruta del personal (asistencia, permisos, horas extra): la clienta no tiene panel de personal"},
+  {"metodo":"GET","ruta":"/asistencia/mia","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"Ruta del personal (asistencia, permisos, horas extra): la clienta no tiene panel de personal"},
+  {"metodo":"POST","ruta":"/solicitudes-permiso","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"Ruta del personal (asistencia, permisos, horas extra): la clienta no tiene panel de personal"},
+  {"metodo":"GET","ruta":"/solicitudes-permiso/mias","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"Ruta del personal (asistencia, permisos, horas extra): la clienta no tiene panel de personal"},
+  {"metodo":"GET","ruta":"/horas-extra/mias","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"Ruta del personal (asistencia, permisos, horas extra): la clienta no tiene panel de personal"},
+  {"metodo":"POST","ruta":"/asistencia/marcar","rol":"empleado","panel":"/operacion","observado":[]},
+  {"metodo":"POST","ruta":"/solicitudes-permiso","rol":"empleado","panel":"/operacion","observado":[]},
+  {"metodo":"POST","ruta":"/asistencia/marcar","rol":"becario","panel":"/operacion","observado":[]},
+  {"metodo":"POST","ruta":"/solicitudes-permiso","rol":"becario","panel":"/operacion","observado":[]}
 ]

@@ -62,6 +62,18 @@ const SELECT_USUARIO_SEGURO = {
   activo: true,
 } as const;
 
+/** Listado (GET /usuarios): el select seguro sin datos de salud ni capilares; el detalle por id sí los trae. */
+const {
+  tipoCabello: _tipoCabello,
+  colorNatural: _colorNatural,
+  colorActual: _colorActual,
+  productosUsados: _productosUsados,
+  alergias: _alergias,
+  tratamientosQuimicos: _tratamientosQuimicos,
+  tratamientos: _tratamientos,
+  ...SELECT_USUARIO_LISTADO
+} = SELECT_USUARIO_SEGURO;
+
 /**
  * Mensajes de la recuperación por pregunta de seguridad: los mismos (y el mismo 400) exista o no la
  * cuenta, tenga o no pregunta, sea o no de Google, para no revelar datos de la cuenta.
@@ -69,6 +81,11 @@ const SELECT_USUARIO_SEGURO = {
 export const SIN_PREGUNTA_RECUPERACION =
   'No pudimos continuar con la recuperación por pregunta de seguridad. Intenta recuperar tu cuenta por correo.';
 export const DATOS_NO_COINCIDEN = 'Los datos no coinciden.';
+
+/** "Por definir" (sin importar mayúsculas ni espacios): la respuesta por defecto de la pantalla de admin. */
+export function esRespuestaPorDefinir(respuesta: unknown): boolean {
+  return typeof respuesta === 'string' && respuesta.replace(/\s+/g, '').toLowerCase() === 'pordefinir';
+}
 
 /** Respuesta del envío del código por SMS: la misma con 0, 1 o varias cuentas con ese número. */
 export const MENSAJE_ENVIO_CODIGO_SMS =
@@ -174,8 +191,11 @@ export class UsuariosService {
     // Hashear la contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Hashear la respuesta de seguridad
-    const respuestaHasheada = await bcrypt.hash((preguntaSeguridad?.respuesta || '').trim(), 10);
+    // Hashear la respuesta de seguridad. Sin respuesta real (vacía o el "Por definir" que mandaba la
+    // pantalla de admin) no se guarda pregunta ni respuesta: no hay recuperación por pregunta.
+    const respuestaPlana = (preguntaSeguridad?.respuesta || '').trim();
+    const sinRespuesta = !respuestaPlana || esRespuestaPorDefinir(respuestaPlana);
+    const respuestaHasheada = sinRespuesta ? null : await bcrypt.hash(respuestaPlana, 10);
 
     // Tratamientos tal como los manda la app y la web (bandera y texto); misma regla que el perfil.
     const tratamientos = normalizarTratamientos(
@@ -197,7 +217,7 @@ export class UsuariosService {
         password: hashedPassword,
         fechaNacimiento: new Date(fechaNacimiento),
         // Pregunta de seguridad embebida
-        preguntaSeguridad: preguntaSeguridad?.pregunta || '', // ✅ Ya sanitizado
+        preguntaSeguridad: sinRespuesta ? null : preguntaSeguridad?.pregunta || '', // ✅ Ya sanitizado
         respuestaSeguridad: respuestaHasheada,
         // Campos de perfil capilar embebidos
         tipoCabello: perfilCapilar?.tipoCabello as any,
@@ -355,8 +375,9 @@ export class UsuariosService {
       where: { email: emailSanitizado },
     });
 
+    // Sin cuenta, el mismo 400 que un código incorrecto: no revela qué correos están registrados.
     if (!usuario) {
-      throw new NotFoundException('Usuario no encontrado.');
+      throw new BadRequestException('Código incorrecto.');
     }
 
     // Un código de cambio de contraseña (cuentas confirmadas, ver cambio-password.ts) no es de activación:
@@ -479,7 +500,7 @@ export class UsuariosService {
             }
           : {}),
       },
-      select: SELECT_USUARIO_SEGURO,
+      select: SELECT_USUARIO_LISTADO,
     });
 
     return {
@@ -538,9 +559,21 @@ export class UsuariosService {
   async actualizarUsuario(id: string, updateData: any) {
     await this.validarFotoDelCliente(id, updateData.foto);
     // El consentimiento de datos sensibles solo se valida en el DTO: no es una columna.
-    const { email, password, tratamientosQuimicos, tratamientos, ...camposActualizables } = sinConsentimiento(updateData);
+    const { email, password, tratamientosQuimicos, tratamientos, perfilCapilar, ...camposActualizables } = sinConsentimiento(updateData);
+    // perfilCapilar no es columna (Prisma daba 500): sus campos van a las columnas, como en el perfil propio.
+    const pc = perfilCapilar ?? {};
+    if (pc.tipoCabello !== undefined && camposActualizables.tipoCabello === undefined) camposActualizables.tipoCabello = pc.tipoCabello;
+    for (const campo of ['colorNatural', 'colorActual', 'productosUsados', 'alergias']) {
+      if (typeof pc[campo] === 'string' && camposActualizables[campo] === undefined) camposActualizables[campo] = sanitizeInput(pc[campo]);
+    }
     // Misma regla y sanitización de tratamientos que el perfil.
-    Object.assign(camposActualizables, normalizarTratamientos(tratamientosQuimicos, tratamientos));
+    Object.assign(
+      camposActualizables,
+      normalizarTratamientos(
+        tratamientosQuimicos !== undefined ? tratamientosQuimicos : pc.tratamientosQuimicos,
+        tratamientos !== undefined ? tratamientos : pc.tratamientos,
+      ),
+    );
 
     if (camposActualizables.fechaNacimiento !== undefined) {
       camposActualizables.fechaNacimiento = this.normalizarFechaNacimiento(
@@ -566,6 +599,11 @@ export class UsuariosService {
   }
 
   async eliminarUsuario(id: string) {
+    const actual = await this.prisma.usuario.findUnique({ where: { id }, select: { rol: true, activo: true } });
+    if (actual?.rol === 'admin' && actual.activo) {
+      await this.assertNoDejaSinAdmins(id);
+    }
+
     const usuario = await this.prisma.usuario.update({
       where: { id },
       data: { activo: false },
@@ -893,6 +931,11 @@ export class UsuariosService {
   }
 
   async validarRespuestaSeguridad(email: string, respuesta: string) {
+    // "Por definir" nunca vale: protege las cuentas creadas desde admin con esa respuesta por defecto.
+    if (esRespuestaPorDefinir(respuesta)) {
+      throw new BadRequestException(DATOS_NO_COINCIDEN);
+    }
+
     // Sanitizar email y respuesta antes de procesar
     const emailSanitizado = sanitizeEmail(email);
     const respuestaSanitizada = sanitizeInput(respuesta);
@@ -944,6 +987,11 @@ export class UsuariosService {
   }
 
   async validarTokenRecuperacion(email: string, token: string) {
+    // Sin token no se consulta: Prisma ignora un filtro undefined y daría por válido cualquier correo.
+    if (typeof token !== 'string' || !token) {
+      throw new BadRequestException('Token inválido, expirado o ya utilizado');
+    }
+
     // Sanitizar email antes de buscar
     const emailSanitizado = sanitizeEmail(email);
 

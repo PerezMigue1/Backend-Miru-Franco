@@ -71,8 +71,8 @@ export class PedidosController {
   }
 
   @Get(':id')
-  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }, @Query('propios') propios?: string) {
-    return this.service.obtenerPorId(Number(id), user.id, esPropios(propios));
+  obtener(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }, @Query('propios') propios?: string) {
+    return this.service.obtenerPorId(id, user.id, esPropios(propios));
   }
 
   @Post()
@@ -87,12 +87,12 @@ export class PedidosController {
 
   @Put(':id')
   actualizar(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: { id: string },
     @Body() dto: UpdatePedidoDto,
     @Query('propios') propios?: string,
   ) {
-    return this.service.actualizar(Number(id), user.id, dto, esPropios(propios));
+    return this.service.actualizar(id, user.id, dto, esPropios(propios));
   }
 
   /** "Marcar listo para recoger" (Pedidos por recoger): permiso pedidos:entregar. */
@@ -120,7 +120,7 @@ export class PedidosController {
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles('admin')
-  eliminar(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.eliminar(Number(id), user.id);
+  eliminar(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.eliminar(id, user.id);
   }
 }

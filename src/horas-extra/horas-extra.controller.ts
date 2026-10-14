@@ -3,10 +3,11 @@ import { HorasExtraService } from './horas-extra.service';
 import { QueryHorasExtraDto } from './dto/query-horas-extra.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
+import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('horas-extra')
-@UseGuards(JwtAuthGuard, PermisosGuard)
+@UseGuards(JwtAuthGuard, PermisosGuard, RolesGuard)
 export class HorasExtraController {
   constructor(private readonly service: HorasExtraService) {}
 
@@ -19,6 +20,7 @@ export class HorasExtraController {
 
   /** Las horas extra del propio empleado autenticado. */
   @Get('mias')
+  @Roles('admin', 'estilista', 'empleado', 'becario') // solo el personal: la clienta no tiene horas extra
   async mias(@CurrentUser() user: { id: string }, @Query() query: QueryHorasExtraDto) {
     return this.service.mias(user.id, query.mes);
   }

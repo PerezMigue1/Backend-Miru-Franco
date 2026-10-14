@@ -296,11 +296,18 @@ export class DevolucionesService {
     return { success: true, data };
   }
 
-  /** Solo admin (RolesGuard en el controlador). */
+  /**
+   * Solo admin (RolesGuard en el controlador). Una aprobada no se borra: su salida de caja quedaría huérfana
+   * y su monto dejaría de contar en el tope de reembolsos del pedido.
+   */
   async eliminar(id: number) {
+    const MENSAJE_APROBADA = 'Una devolución aprobada no se puede borrar';
     const row = await this.prisma.devolucion.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Devolución no encontrada');
-    await this.prisma.devolucion.delete({ where: { id } });
+    if (row.estado === 'aprobada') throw new ConflictException(MENSAJE_APROBADA);
+    // Condicionado al estado: si la aprueban en paralelo, no se borra.
+    const { count } = await this.prisma.devolucion.deleteMany({ where: { id, estado: { not: 'aprobada' } } });
+    if (count === 0) throw new ConflictException(MENSAJE_APROBADA);
     return { success: true, message: 'Devolución eliminada' };
   }
 }

@@ -10,6 +10,7 @@ import {
   Put,
   Query,
   UseGuards,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -33,24 +34,24 @@ export class ValoracionesController {
   }
 
   @Get('producto/:productoId')
-  listarPorProducto(@Param('productoId') productoId: string) {
-    return this.service.listarPorProducto(Number(productoId));
+  listarPorProducto(@Param('productoId', ParseIntPipe) productoId: number) {
+    return this.service.listarPorProducto(productoId);
   }
 
   @Get('pedido/:pedidoId')
   @UseGuards(JwtAuthGuard)
   listarPorPedido(
-    @Param('pedidoId') pedidoId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
-    return this.service.listarPorPedido(Number(pedidoId), user.id, esPropios(propios));
+    return this.service.listarPorPedido(pedidoId, user.id, esPropios(propios));
   }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard)
-  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.obtenerPorId(Number(id), user.id);
+  obtener(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.obtenerPorId(id, user.id);
   }
 
   @Post()
@@ -66,16 +67,16 @@ export class ValoracionesController {
   @Put(':id')
   @UseGuards(JwtAuthGuard)
   actualizar(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: { id: string },
     @Body() dto: UpdateValoracionDto,
   ) {
-    return this.service.actualizar(Number(id), user.id, dto);
+    return this.service.actualizar(id, user.id, dto);
   }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard)
-  eliminar(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.eliminar(Number(id), user.id);
+  eliminar(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.eliminar(id, user.id);
   }
 }

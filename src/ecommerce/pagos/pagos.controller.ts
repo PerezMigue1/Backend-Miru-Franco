@@ -1,8 +1,10 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -18,6 +20,9 @@ import { PagosService } from './pagos.service';
 import { CreatePagoDto } from './dto/create-pago.dto';
 import { UpdatePagoDto } from './dto/update-pago.dto';
 
+/** Un id que no es número responde 400 en vez de llegar como NaN a Prisma (500). */
+const idPipe = new ParseIntPipe({ exceptionFactory: () => new BadRequestException('Id inválido') });
+
 @Controller('pagos')
 @UseGuards(JwtAuthGuard)
 export class PagosController {
@@ -30,19 +35,19 @@ export class PagosController {
   /** Con `?propios=true` (portal de clienta) el pedido ajeno responde 404 para cualquier rol. */
   @Get('pedido/:pedidoId')
   async listarPorPedido(
-    @Param('pedidoId') pedidoId: string,
+    @Param('pedidoId', idPipe) pedidoId: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
     if (esPropios(propios)) {
-      await this.access.assertPedidoLectura(user.id, Number(pedidoId), true);
+      await this.access.assertPedidoLectura(user.id, pedidoId, true);
     }
-    return this.service.listarPorPedido(Number(pedidoId), user.id);
+    return this.service.listarPorPedido(pedidoId, user.id);
   }
 
   @Get(':id')
-  obtener(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.obtenerPorId(Number(id), user.id);
+  obtener(@Param('id', idPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.obtenerPorId(id, user.id);
   }
 
   /**
@@ -62,10 +67,10 @@ export class PagosController {
   @UseGuards(PermisosGuard)
   @Permisos('caja:escritura')
   actualizar(
-    @Param('id') id: string,
+    @Param('id', idPipe) id: number,
     @Request() req: any,
     @Body() dto: UpdatePagoDto,
   ) {
-    return this.service.actualizar(Number(id), req.user.id, dto, req.rolUsuario, req.permisosUsuario);
+    return this.service.actualizar(id, req.user.id, dto, req.rolUsuario, req.permisosUsuario);
   }
 }

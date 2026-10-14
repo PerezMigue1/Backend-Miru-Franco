@@ -69,6 +69,7 @@ function montar(opts: { pedidos?: any[]; items?: any[]; pagos?: any[]; devolucio
       count: jest.fn(async () => 0),
       updateMany: jest.fn(async () => ({ count: opts.updateCount ?? 1 })),
       delete: jest.fn(async () => ({})),
+      deleteMany: jest.fn(async ({ where }: any) => ({ count: devoluciones.filter((d) => coincide(d, where)).length })),
     },
     movimientoCaja: { create: jest.fn(async ({ data }: any) => ({ id: 70, ...data })) },
   };
@@ -380,5 +381,33 @@ describe('Dinero: una sola devolución activa por artículo y nunca más que el 
     const { servicio, prisma } = montar({ devoluciones: [solicitud()], pagos: [{ id: 7, pedidoId: 9, estado: 'reembolsado' }] });
     await expect(servicio.aprobar(20, 'est-1', {})).rejects.toThrow('El pago del pedido ya se reembolsó');
     expect(prisma.devolucion.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('Borrar una devolución (admin): nunca una aprobada', () => {
+  it('una aprobada responde 409 y no se borra (su salida de caja y su monto siguen contando)', async () => {
+    const { servicio, prisma } = montar({ devoluciones: [{ id: 2, pedidoId: 9, estado: 'aprobada', tipo: 'reembolso', monto: '120.00' }] });
+    await expect(servicio.eliminar(2)).rejects.toBeInstanceOf(ConflictException);
+    await expect(servicio.eliminar(2)).rejects.toThrow('Una devolución aprobada no se puede borrar');
+    expect(prisma.devolucion.delete).not.toHaveBeenCalled();
+    expect(prisma.devolucion.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['pendiente', 'rechazada', 'cancelada'])('una %s se sigue pudiendo borrar', async (estado) => {
+    const { servicio, prisma } = montar({ devoluciones: [{ id: 2, pedidoId: 9, estado, tipo: 'reembolso', monto: '120.00' }] });
+    await expect(servicio.eliminar(2)).resolves.toMatchObject({ success: true });
+    // Borrado condicionado: si alguien la aprueba en ese instante, no se borra.
+    expect(prisma.devolucion.deleteMany).toHaveBeenCalledWith({ where: { id: 2, estado: { not: 'aprobada' } } });
+  });
+
+  it('si la aprueban justo antes de borrarla, responde 409', async () => {
+    const devoluciones = [{ id: 2, pedidoId: 9, estado: 'pendiente', tipo: 'reembolso', monto: '120.00' }];
+    const { servicio, prisma } = montar({ devoluciones });
+    prisma.devolucion.findUnique.mockImplementationOnce(async () => {
+      const leida = { ...devoluciones[0] };
+      devoluciones[0].estado = 'aprobada';
+      return leida;
+    });
+    await expect(servicio.eliminar(2)).rejects.toBeInstanceOf(ConflictException);
   });
 });

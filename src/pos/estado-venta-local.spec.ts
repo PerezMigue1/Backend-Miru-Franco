@@ -51,7 +51,7 @@ describe('EstadoVentaLocal: solo pendiente, pagada y cancelada', () => {
         if (Array.isArray(arg)) return Promise.all(arg);
         return arg({
           corteCaja: { create: jest.fn(async ({ data }: any) => (creados.push(data), { id: 1, ...data })) },
-          ventaLocal: { updateMany: jest.fn(async ({ where }: any) => vinculadas.push(...where.id.in)) },
+          ventaLocal: { updateMany: jest.fn(async ({ where }: any) => ({ count: vinculadas.push(...where.id.in) })) },
           pago: { updateMany: jest.fn(async () => ({ count: 0 })) },
         });
       }),

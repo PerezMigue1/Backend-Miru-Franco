@@ -224,3 +224,28 @@ describe('DbService importar', () => {
   });
 });
 
+describe('DbService: exportación CSV sin fórmulas', () => {
+  it('un texto que empieza con =, +, - o @ sale con comilla simple delante', async () => {
+    const prisma: any = {
+      servicio: {
+        findMany: jest.fn(async () => [
+          { id: 1, nombre: '=HYPERLINK("http://x")', descripcion: '@SUM(A1)', descripcionLarga: '-2+3', categoria: '+cabello', precio: 100, duracionMinutos: 60, activo: true },
+        ]),
+      },
+    };
+    const { buffer } = await new DbService(prisma).exportar('servicios', 'csv');
+    const fila = `,${buffer.toString('utf-8').split('\n')[1]},`;
+    for (const valor of [`"'=HYPERLINK(""http://x"")"`, "'@SUM(A1)", "'-2+3", "'+cabello", '100', '60']) {
+      expect(fila).toContain(`,${valor},`);
+    }
+    expect(fila).not.toMatch(/,[=+\-@]/);
+  });
+});
+
+describe('DbService: truncate', () => {
+  it('responde en español', async () => {
+    const prisma: any = { $queryRawUnsafe: jest.fn(async () => [{ exists: true }]), $executeRawUnsafe: jest.fn(async () => 0) };
+    const r = await new DbService(prisma).truncateTable({ tabla: 'servicios' } as any);
+    expect(r.message).toBe('Se vació la tabla servicios');
+  });
+});

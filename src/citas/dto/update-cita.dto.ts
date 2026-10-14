@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, Min, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 
 const ESTADOS_CITA = ['pendiente', 'confirmada', 'en_curso', 'completada', 'cancelada', 'reprogramada', 'no_asistio'] as const;
@@ -24,6 +24,7 @@ export class UpdateCitaDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000, { message: 'Las notas no pueden pasar de 1000 caracteres' })
   notas?: string;
 
   @IsOptional()

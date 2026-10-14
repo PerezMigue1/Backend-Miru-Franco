@@ -8,6 +8,7 @@ import {
   Post,
   Put,
   Query,
+  Request,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -17,6 +18,7 @@ import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
+import { SesionOpcionalGuard } from '../auth/sesion-opcional.guard';
 import { ActualizarAnticipoServicioDto } from './dto/actualizar-anticipo.dto';
 
 @Controller('servicios')
@@ -42,9 +44,14 @@ export class ServiciosController {
     return this.serviciosService.listar(categoria, incluirInactivos === 'true');
   }
 
+  /**
+   * Público. Con sesión opcional: el panel de edición del admin usa esta misma ruta y el personal con
+   * servicios:lectura ve también los inactivos; visitantes y clientas solo los activos.
+   */
   @Get(':id')
-  async obtenerPorId(@Param('id') id: string) {
-    return this.serviciosService.obtenerPorId(Number(id));
+  @UseGuards(SesionOpcionalGuard)
+  async obtenerPorId(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    return this.serviciosService.obtenerPorId(id, req.user?.id);
   }
 
   @Post()
@@ -66,14 +73,14 @@ export class ServiciosController {
   @Put(':id')
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async actualizar(@Param('id') id: string, @Body() dto: UpdateServicioDto) {
-    return this.serviciosService.actualizar(Number(id), dto);
+  async actualizar(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateServicioDto) {
+    return this.serviciosService.actualizar(id, dto);
   }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async eliminar(@Param('id') id: string) {
-    return this.serviciosService.eliminar(Number(id));
+  async eliminar(@Param('id', ParseIntPipe) id: number) {
+    return this.serviciosService.eliminar(id);
   }
 }

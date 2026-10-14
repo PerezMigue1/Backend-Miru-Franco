@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import { PreguntaSeguridadService } from './pregunta-seguridad.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -34,7 +35,7 @@ export class PreguntaSeguridadController {
   @UseGuards(new RateLimitGuard(3, 60000))
   async obtenerPreguntaPorEmail(@Query('email') email: string) {
     if (!email) {
-      return { success: false, message: 'email es requerido' };
+      throw new BadRequestException('El correo es obligatorio');
     }
     return this.preguntaSeguridadService.obtenerPreguntaPorEmail(email);
   }

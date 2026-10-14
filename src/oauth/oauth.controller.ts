@@ -17,6 +17,7 @@ import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { OauthService } from './oauth.service';
 import { OauthTokenDto } from './dto/oauth-token.dto';
+import { OauthCodeDto } from './dto/oauth-code.dto';
 
 /**
  * Account Linking de la Skill de Alexa (Auth Code Grant estándar OAuth2).
@@ -47,13 +48,22 @@ export class OauthController {
     res.redirect(url);
   }
 
-  /** POST /api/oauth/code — la página de login del frontend cambia el JWT de la empleada por un código de un solo uso. */
+  /**
+   * POST /api/oauth/code — la página de login del frontend cambia el JWT de la empleada por un código de un
+   * solo uso. Valida redirect_uri (y client_id si llega) antes de emitirlo y devuelve el destino validado:
+   * la página redirige solo a esa redirectUri.
+   */
   @Post('code')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async generarCodigo(@Req() req: any) {
+  async generarCodigo(@Req() req: any, @Body() dto: OauthCodeDto) {
+    if (dto.client_id !== undefined) {
+      this.oauthService.validarClienteAutorizacion(dto.client_id, dto.redirect_uri);
+    } else {
+      this.oauthService.validarRedirectUri(dto.redirect_uri);
+    }
     const codigo = await this.oauthService.generarCodigo(req.user.id, req.rawToken);
-    return { success: true, code: codigo };
+    return { success: true, code: codigo, redirectUri: dto.redirect_uri };
   }
 
   /** POST /api/oauth/token — Alexa intercambia el código por un access_token (forma OAuth2 estándar). */

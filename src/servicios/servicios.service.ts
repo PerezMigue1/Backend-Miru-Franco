@@ -58,7 +58,8 @@ export class ServiciosService {
     }
   }
 
-  async obtenerPorId(id: number) {
+  /** Un inactivo solo lo ve el personal que administra servicios (panel de edición); al resto le responde 404. */
+  async obtenerPorId(id: number, usuarioId?: string) {
     const servicio = await this.prisma.servicio.findUnique({
       where: { id },
       include: {
@@ -68,7 +69,7 @@ export class ServiciosService {
       },
     });
 
-    if (!servicio) {
+    if (!servicio || (!servicio.activo && !(await this.puedeVerInactivos(usuarioId)))) {
       throw new NotFoundException('Servicio no encontrado');
     }
 
@@ -76,6 +77,16 @@ export class ServiciosService {
       success: true,
       data: servicio,
     };
+  }
+
+  /** Claves del rol (permisos_rol): '*' o servicios:lectura/escritura, igual que GET /servicios/admin. */
+  private async puedeVerInactivos(usuarioId?: string): Promise<boolean> {
+    if (!usuarioId) return false;
+    const usuario = await this.prisma.usuario.findUnique({ where: { id: usuarioId }, select: { rol: true } });
+    if (!usuario) return false;
+    const permisoRol = await this.prisma.permisoRol.findUnique({ where: { rol: usuario.rol }, select: { claves: true } });
+    const claves = permisoRol?.claves ?? [];
+    return ['*', 'servicios:lectura', 'servicios:escritura'].some((c) => claves.includes(c));
   }
 
   async crear(dto: CreateServicioDto) {

@@ -7,7 +7,8 @@ export class ListClientesDto {
   q?: string;
 
   @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
+  // obj[key]: el valor original; con enableImplicitConversion `value` ya llega como Boolean('false') === true.
+  @Transform(({ obj, key }) => obj[key] === 'true' || obj[key] === true)
   @IsBoolean()
   incluirInactivos?: boolean = false;
 

@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { EstadoPedido } from '@prisma/client';
 import { PedidosService } from './pedidos.service';
 
@@ -11,11 +11,21 @@ jest.mock('../common/pedido-inventario.util', () => ({
 const CLIENTA = 'clienta-1';
 
 /** Un pedido y su pago en memoria; Mercado Pago simulado. */
-function montar(pedido: { estado: EstadoPedido; metodoPago: string }, opciones: { conPago?: boolean } = {}) {
+function montar(
+  pedido: { estado: EstadoPedido; metodoPago: string },
+  opciones: { conPago?: boolean; devoluciones?: { id: number; pedidoId: number; estado: string }[] } = {},
+) {
   const actual = { id: 7, usuarioId: CLIENTA, total: 350, pagadoEn: new Date('2026-10-10T17:00:00Z'), ...pedido };
   const pago = { id: 31, pedidoId: 7, estado: 'aprobado', proveedor: 'mercadopago', referenciaExterna: '987654', monto: 350 } as Record<string, unknown>;
   const pagos = opciones.conPago === false ? [] : [pago];
+  const devoluciones = opciones.devoluciones ?? [];
   const tx = {
+    $executeRaw: jest.fn(async () => 1),
+    devolucion: {
+      findFirst: jest.fn(async ({ where }: any) =>
+        devoluciones.find((d) => d.pedidoId === where.pedidoId && !where.estado.notIn.includes(d.estado)) ?? null,
+      ),
+    },
     pedidoItem: { findMany: jest.fn(async () => []) },
     pedido: {
       updateMany: jest.fn(async ({ where, data }: any) => {
@@ -54,7 +64,7 @@ function montar(pedido: { estado: EstadoPedido; metodoPago: string }, opciones: 
     obtenerPago: jest.fn(async () => ({ id: 987654, status: 'approved' })),
   };
   const servicio = new PedidosService(prisma as any, access as any, eventos as any, mercadoPago as any);
-  return { servicio, actual, pago, eventos, mercadoPago, prisma };
+  return { servicio, actual, pago, eventos, mercadoPago, prisma, tx };
 }
 
 const cancelar = (servicio: PedidosService) => servicio.actualizar(7, CLIENTA, { estado: EstadoPedido.cancelado }, true);
@@ -167,5 +177,44 @@ describe('Cancelaciones que no tocan Mercado Pago', () => {
     await expect(cancelar(servicio)).rejects.toMatchObject({ status: 409 });
     expect(mercadoPago.reembolsarPago).not.toHaveBeenCalled();
     expect(eventos.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe('Cancelar un pedido pagado que tiene devoluciones', () => {
+  it.each(['aprobada', 'pendiente'])('con una devolución %s: 409, sin reembolso por Mercado Pago y el pedido sigue pagado', async (estado) => {
+    const { servicio, actual, pago, mercadoPago, eventos, tx } = montar(
+      { estado: EstadoPedido.pagado, metodoPago: 'mercado_pago' },
+      { devoluciones: [{ id: 4, pedidoId: 7, estado }] },
+    );
+
+    await expect(cancelar(servicio)).rejects.toBeInstanceOf(ConflictException);
+    await expect(cancelar(servicio)).rejects.toThrow('Este pedido tiene una devolución en proceso: para cancelarlo comunícate con el salón.');
+    // Mismo candado que crear o aprobar devoluciones, para que no se crucen.
+    expect(tx.$executeRaw).toHaveBeenCalled();
+    expect(mercadoPago.reembolsarPago).not.toHaveBeenCalled();
+    expect(actual.estado).toBe('pagado');
+    expect(pago.estado).toBe('aprobado');
+    expect(eventos.emit).not.toHaveBeenCalled();
+  });
+
+  it.each(['rechazada', 'cancelada'])('una devolución %s no bloquea: se reembolsa como antes', async (estado) => {
+    const { servicio, actual, mercadoPago } = montar(
+      { estado: EstadoPedido.pagado, metodoPago: 'mercado_pago' },
+      { devoluciones: [{ id: 4, pedidoId: 7, estado }] },
+    );
+
+    const r = await cancelar(servicio);
+
+    expect(actual.estado).toBe('cancelado');
+    expect(mercadoPago.reembolsarPago).toHaveBeenCalledWith('987654', 'reembolso-pedido-31');
+    expect(r).toMatchObject({ reembolso: { estado: 'reembolsado', monto: 350 } });
+  });
+
+  it('sin devoluciones: se toma el candado y se reembolsa como antes', async () => {
+    const { servicio, mercadoPago, tx } = montar({ estado: EstadoPedido.pagado, metodoPago: 'mercado_pago' });
+
+    await expect(cancelar(servicio)).resolves.toMatchObject({ reembolso: { estado: 'reembolsado' } });
+    expect(tx.$executeRaw).toHaveBeenCalled();
+    expect(mercadoPago.reembolsarPago).toHaveBeenCalledTimes(1);
   });
 });

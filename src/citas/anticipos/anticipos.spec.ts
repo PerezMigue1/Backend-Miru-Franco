@@ -28,6 +28,10 @@ const CLAVES: Record<string, string[]> = {
   cliente: ['tienda:propia', 'citas:propia', 'perfil:propio'],
 };
 const yo = (rol: string) => ({ id: `${rol}-yo`, rol, claves: CLAVES[rol] });
+/** Horario real del salón: crear y reprogramar solo aceptan citas dentro de él. */
+const CONFIGURACION = {
+  obtener: async () => ({ data: { entradaLunesViernes: '09:30', salidaLunesViernes: '19:30', entradaSabado: '09:30', salidaSabado: '19:00', entradaDomingo: null, salidaDomingo: null } }),
+};
 
 // ---------- Prisma en memoria con un filtro "where" genérico ----------
 function coincide(fila: any, where: any): boolean {
@@ -58,7 +62,7 @@ function base(opciones: { citas?: any[]; pagos?: any[]; fallaCita?: number } = {
   const pagos: any[] = opciones.pagos ?? [];
   const movimientos: any[] = [];
   let sigPago = 900;
-  const conRelaciones = (c: any) => c && { ...c, servicio: { id: c.servicioId, nombre: 'Nanoplastia', precio: new Prisma.Decimal(900) }, pagos: pagos.filter((p) => p.citaId === c.id) };
+  const conRelaciones = (c: any) => c && { ...c, servicio: { id: c.servicioId, nombre: 'Nanoplastia', precio: new Prisma.Decimal(900), duracionMinutos: 60 }, pagos: pagos.filter((p) => p.citaId === c.id) };
   const prisma: any = {
     cita: {
       findUnique: jest.fn(async ({ where }: any) => conRelaciones(citas.find((c) => c.id === where.id))),
@@ -112,7 +116,7 @@ function montarCitas(anticipoMonto: number | null) {
   const creadas: any[] = [];
   const prisma: any = {
     usuario: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, rol: where.id === 'est-1' ? 'estilista' : 'cliente', activo: true })) },
-    servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, anticipoMonto: anticipoMonto === null ? null : new Prisma.Decimal(anticipoMonto) })) },
+    servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, duracionMinutos: 60, anticipoMonto: anticipoMonto === null ? null : new Prisma.Decimal(anticipoMonto) })) },
     cita: {
       findFirst: jest.fn(async () => null),
       count: jest.fn(async () => 0),
@@ -121,7 +125,7 @@ function montarCitas(anticipoMonto: number | null) {
     $executeRaw: jest.fn(async () => 1),
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
-  return { servicio: new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any), creadas, prisma };
+  return { servicio: new CitasService(prisma, {} as any, CONFIGURACION as any, { emit: jest.fn() } as any), creadas, prisma };
 }
 
 /** CitasService sobre el Prisma en memoria de `base` (cancelar, reprogramar, no asistió). */
@@ -129,7 +133,7 @@ function citasCon(cita: any, pagos: any[]) {
   const b = base({ citas: [cita], pagos });
   b.prisma.cita.findFirst = jest.fn(async () => null);
   b.prisma.$executeRaw = jest.fn(async () => 1);
-  const citasSrv = new CitasService(b.prisma, {} as any, {} as any, b.eventos as any);
+  const citasSrv = new CitasService(b.prisma, {} as any, CONFIGURACION as any, b.eventos as any);
   return { ...b, citasSrv };
 }
 
@@ -391,6 +395,9 @@ describe('POS: el anticipo pagado se descuenta y no se cobra dos veces', () => {
 
 // ---------- 7. Cancelaciones y reembolsos ----------
 describe('Cancelar, reembolsar, retener y no asistió', () => {
+  // Reloj fijo como en los demás bloques: reprogramar desde el portal exige una fecha futura.
+  beforeEach(() => jest.useFakeTimers({ now: AHORA }));
+  afterEach(() => jest.useRealTimers());
   const pagoMpAprobado = () => ({ id: 1, citaId: 7, estado: 'aprobado', proveedor: 'mercadopago', referenciaExterna: '555', monto: new Prisma.Decimal(150), metodo: 'mercado_pago' });
   const pagoSalon = () => ({ id: 2, citaId: 7, estado: 'aprobado', proveedor: null, referenciaExterna: null, monto: new Prisma.Decimal(150), metodo: 'efectivo', cobradoPorId: 'estilista-yo' });
 
@@ -457,7 +464,7 @@ describe('Cancelar, reembolsar, retener y no asistió', () => {
 
   it('reprogramar conserva el anticipo', async () => {
     const { citasSrv, citas } = citasCon(citaConAnticipo({ estado: 'confirmada', anticipoPagadoEn: minutos(-30) }), []);
-    await citasSrv.reprogramar(7, { fechaHoraInicio: '2026-10-25T16:00:00.000Z', fechaHoraFin: '2026-10-25T17:00:00.000Z' } as any, yo('cliente'), true);
+    await citasSrv.reprogramar(7, { fechaHoraInicio: '2026-10-23T16:00:00.000Z', fechaHoraFin: '2026-10-23T17:00:00.000Z' } as any, yo('cliente'), true);
     expect(Number(citas[0].anticipoRequerido)).toBe(150);
     expect(citas[0].anticipoPagadoEn).toEqual(minutos(-30));
   });
@@ -565,12 +572,12 @@ describe('ANTICIPOS_DESDE también decide si se pide anticipo', () => {
     const creadas: any[] = [];
     const prisma: any = {
       usuario: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, rol: where.id === 'est-1' ? 'estilista' : 'cliente', activo: true })) },
-      servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, anticipoMonto: new Prisma.Decimal(150) })) },
+      servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, duracionMinutos: 60, anticipoMonto: new Prisma.Decimal(150) })) },
       cita: { findFirst: jest.fn(async () => null), create: jest.fn(async ({ data }: any) => { creadas.push(data); return { id: 1, ...data, servicio: { nombre: 'x' } }; }) },
       $executeRaw: jest.fn(async () => 1),
     };
     prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
-    await new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any).crear({ clienteId: 'x', especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: '2026-10-21T16:00:00.000Z', fechaHoraFin: '2026-10-21T17:00:00.000Z' } as any, yo('cliente'), true);
+    await new CitasService(prisma, {} as any, CONFIGURACION as any, { emit: jest.fn() } as any).crear({ clienteId: 'x', especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: '2026-10-21T16:00:00.000Z', fechaHoraFin: '2026-10-21T17:00:00.000Z' } as any, yo('cliente'), true);
     expect(creadas[0].anticipoRequerido ?? null).toBeNull();
   });
 });
@@ -679,8 +686,8 @@ describe('Anticipo en línea o en el salón: plazos', () => {
 
   describe('Reprogramar', () => {
     const INICIO = new Date('2026-10-22T16:00:00.000Z');
-    const NUEVO = { fechaHoraInicio: '2026-10-25T18:00:00.000Z', fechaHoraFin: '2026-10-25T19:00:00.000Z' };
-    const PLAZO_NUEVO = new Date('2026-10-25T17:45:00.000Z');
+    const NUEVO = { fechaHoraInicio: '2026-10-23T18:00:00.000Z', fechaHoraFin: '2026-10-23T19:00:00.000Z' };
+    const PLAZO_NUEVO = new Date('2026-10-23T17:45:00.000Z');
     const PLAZO_VIEJO = new Date(INICIO.getTime() - 15 * 60_000);
     const citaSalon = (extra: Record<string, unknown> = {}) => citaConAnticipo({
       fechaHoraInicio: INICIO, fechaHoraFin: new Date(INICIO.getTime() + 3_600_000),
@@ -710,7 +717,7 @@ describe('Anticipo en línea o en el salón: plazos', () => {
     it('en el salón, si se pagó entre la lectura y la escritura, el plazo no se toca (update condicional)', async () => {
       const { citasSrv, citas, prisma } = citasCon(citaSalon(), []);
       prisma.cita.findUnique.mockImplementationOnce(async () => {
-        const fila = { ...citas[0] };
+        const fila = { ...citas[0], servicio: { duracionMinutos: 60 } };
         citas[0].anticipoPagadoEn = AHORA; // el pago llegó justo después de leer la cita
         return fila;
       });

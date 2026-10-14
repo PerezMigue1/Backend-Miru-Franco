@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   Param,
+  ParseIntPipe,
   Post,
   Put,
   Query,
@@ -16,6 +18,9 @@ import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
+
+/** Un id que no es número responde 400 (antes llegaba NaN a Prisma y daba 500). */
+const idPipe = new ParseIntPipe({ exceptionFactory: () => new BadRequestException('Id inválido') });
 
 @Controller('productos')
 export class ProductosController {
@@ -34,8 +39,8 @@ export class ProductosController {
    * Obtener producto por ID (público)
    */
   @Get(':id')
-  async obtenerPorId(@Param('id') id: string) {
-    return this.productosService.obtenerPorId(Number(id));
+  async obtenerPorId(@Param('id', idPipe) id: number) {
+    return this.productosService.obtenerPorId(id);
   }
 
   /**
@@ -57,8 +62,8 @@ export class ProductosController {
   @Put(':id')
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async actualizar(@Param('id') id: string, @Body() dto: UpdateProductoDto) {
-    return this.productosService.actualizar(Number(id), dto);
+  async actualizar(@Param('id', idPipe) id: number, @Body() dto: UpdateProductoDto) {
+    return this.productosService.actualizar(id, dto);
   }
 
   /**
@@ -68,8 +73,8 @@ export class ProductosController {
   @Delete(':id')
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async eliminar(@Param('id') id: string) {
-    return this.productosService.eliminar(Number(id));
+  async eliminar(@Param('id', idPipe) id: number) {
+    return this.productosService.eliminar(id);
   }
 }
 

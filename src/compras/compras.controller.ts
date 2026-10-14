@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Request, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Request, UseGuards, HttpCode, HttpStatus, ParseIntPipe } from '@nestjs/common';
 import { ComprasService } from './compras.service';
 import { CreateCompraDto } from './dto/create-compra.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -17,8 +17,8 @@ export class ComprasController {
 
   @Get(':id')
   @Permisos('inventario:lectura')
-  async obtenerPorId(@Param('id') id: string) {
-    return this.comprasService.obtenerPorId(Number(id));
+  async obtenerPorId(@Param('id', ParseIntPipe) id: number) {
+    return this.comprasService.obtenerPorId(id);
   }
 
   @Post()

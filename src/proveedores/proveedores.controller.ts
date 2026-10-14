@@ -9,6 +9,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { ProveedoresService } from './proveedores.service';
 import { CreateProveedorDto } from './dto/create-proveedor.dto';
@@ -29,8 +30,8 @@ export class ProveedoresController {
 
   @Get(':id')
   @Permisos('servicios:lectura')
-  async obtenerPorId(@Param('id') id: string) {
-    return this.proveedoresService.obtenerPorId(Number(id));
+  async obtenerPorId(@Param('id', ParseIntPipe) id: number) {
+    return this.proveedoresService.obtenerPorId(id);
   }
 
   @Post()
@@ -42,13 +43,13 @@ export class ProveedoresController {
 
   @Put(':id')
   @Permisos('servicios:escritura')
-  async actualizar(@Param('id') id: string, @Body() dto: UpdateProveedorDto) {
-    return this.proveedoresService.actualizar(Number(id), dto);
+  async actualizar(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateProveedorDto) {
+    return this.proveedoresService.actualizar(id, dto);
   }
 
   @Delete(':id')
   @Permisos('servicios:escritura')
-  async eliminar(@Param('id') id: string) {
-    return this.proveedoresService.eliminar(Number(id));
+  async eliminar(@Param('id', ParseIntPipe) id: number) {
+    return this.proveedoresService.eliminar(id);
   }
 }

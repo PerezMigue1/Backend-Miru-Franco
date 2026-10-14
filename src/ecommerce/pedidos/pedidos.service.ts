@@ -11,6 +11,7 @@ import { EstadoPago, EstadoPedido, Pago, Pedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
+import { bloquearReembolsosDelPedido } from '../devoluciones/devoluciones.service';
 import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
 import { PedidoItemLineDto } from './dto/pedido-item-line.dto';
@@ -228,6 +229,10 @@ export class PedidosService {
         );
       }
       const precioUnitario = precioPresentacionANumero(pres.precio);
+      // Una presentación en $0 no se vende: crearía un pedido sin nada que cobrar.
+      if (precioUnitario <= 0) {
+        throw new BadRequestException(`Este producto no tiene precio válido (${pres.producto.nombre})`);
+      }
       const subtotal = Math.round(precioUnitario * line.cantidad * 100) / 100;
       detalles.push({
         productoId,
@@ -428,8 +433,23 @@ export class PedidosService {
       !actual.pagadoEn &&
       (dto.estado === EstadoPedido.pagado ||
         (dto.estado === EstadoPedido.entregado && esPagoEnSalon(actual.metodoPago)));
+    // La clienta cancela un pedido ya pagado: más abajo se le devuelve el pago.
+    const cancelaPagadoClienta =
+      cambiaEstado && !puedeCambiarEstado && dto.estado === EstadoPedido.cancelado && estadoAnterior === EstadoPedido.pagado;
 
     const data = await this.prisma.$transaction(async (tx) => {
+      if (cancelaPagadoClienta) {
+        // Mismo candado que devoluciones: si ya hay una en proceso, el dinero no sale también por aquí.
+        await bloquearReembolsosDelPedido(tx, id);
+        const devolucion = await tx.devolucion.findFirst({
+          where: { pedidoId: id, estado: { notIn: ['rechazada', 'cancelada'] } },
+          select: { id: true },
+        });
+        if (devolucion) {
+          throw new ConflictException('Este pedido tiene una devolución en proceso: para cancelarlo comunícate con el salón.');
+        }
+      }
+
       const itemsStock = await tx.pedidoItem.findMany({
         where: { pedidoId: id },
         select: { presentacionId: true, cantidad: true },
@@ -540,7 +560,7 @@ export class PedidosService {
 
     // La clienta canceló un pedido ya pagado: se le devuelve el pago y se avisa al personal. Va después de
     // confirmar la cancelación (el cambio condicional de estado asegura que solo una llega aquí).
-    if (cambiaEstado && !puedeCambiarEstado && dto.estado === EstadoPedido.cancelado && estadoAnterior === EstadoPedido.pagado) {
+    if (cancelaPagadoClienta) {
       const monto = Number(actual.total);
       const estadoReembolso = await this.reembolsarCancelacionClienta(actual);
       this.eventEmitter.emit('pedido.cancelado_pagado', {

@@ -193,6 +193,10 @@ export class PosService {
           );
         }
         const precioUnitario = new Decimal(presentacion.precio);
+        // Una presentación en $0 (o sin precio) no se vende.
+        if (precioUnitario.lte(0)) {
+          throw new BadRequestException(`Este producto no tiene precio válido (presentación ${item.presentacionId})`);
+        }
         itemsValidados.push({
           presentacionId: item.presentacionId!,
           servicioId:     null,
@@ -434,6 +438,10 @@ export class PosService {
     if (venta.estado === 'cancelada') {
       throw new BadRequestException('La venta ya está cancelada');
     }
+    // Su efectivo ya se contó en un corte: cancelarla dejaría el corte sin cuadrar.
+    if (venta.corteId != null) {
+      throw new ConflictException('Esta venta ya entró a un corte de caja: no se puede cancelar');
+    }
 
     const motivoLimpio = sanitizeInput(dto.motivoCancelacion);
     if (containsSQLInjection(motivoLimpio)) {
@@ -442,10 +450,14 @@ export class PosService {
 
     // Cancelar y revertir inventario en una sola transacción (atómico).
     const ventaActualizada = await this.prisma.$transaction(async (tx) => {
-      await tx.ventaLocal.update({
-        where: { id },
+      // Solo si sigue pagada y fuera de un corte: de dos cancelaciones simultáneas, una sola devuelve el stock.
+      const { count } = await tx.ventaLocal.updateMany({
+        where: { id, estado: 'pagada', corteId: null },
         data: { estado: 'cancelada', motivoCancelacion: motivoLimpio },
       });
+      if (count !== 1) {
+        throw new ConflictException('La venta cambió mientras la cancelabas (ya está cancelada o en un corte). Recarga para ver su estado.');
+      }
 
       // La cita cobrada con esta venta vuelve a quedar por cobrar (el índice único de cita_id la bloquearía).
       await tx.ventaLocalItem.updateMany({ where: { ventaId: id, citaId: { not: null } }, data: { citaId: null } });
@@ -681,12 +693,16 @@ export class PosService {
         include: { cajero: { select: { id: true, nombre: true, rol: true } } },
       });
 
-      // Vincular ventas del turno a este corte
+      // Vincular ventas del turno a este corte. Solo las que siguen pagadas y sin corte: si una se
+      // canceló o entró a otro corte después de leerlas, los totales ya no cuadran y se revierte.
       if (ventas.length > 0) {
-        await tx.ventaLocal.updateMany({
-          where: { id: { in: ventas.map((v) => v.id) } },
+        const ligadas = await tx.ventaLocal.updateMany({
+          where: { id: { in: ventas.map((v) => v.id) }, estado: 'pagada', corteId: null },
           data: { corteId: nuevo.id },
         });
+        if (ligadas.count !== ventas.length) {
+          throw new ConflictException('Algunas ventas cambiaron mientras se registraba el corte. Vuelve a registrarlo.');
+        }
       }
 
       if (cobros.ids.length > 0) {

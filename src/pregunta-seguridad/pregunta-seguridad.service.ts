@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcryptjs';
-import { DATOS_NO_COINCIDEN, SIN_PREGUNTA_RECUPERACION } from '../usuarios/usuarios.service';
+import { DATOS_NO_COINCIDEN, SIN_PREGUNTA_RECUPERACION, esRespuestaPorDefinir } from '../usuarios/usuarios.service';
 
 @Injectable()
 export class PreguntaSeguridadService {
@@ -153,6 +153,10 @@ export class PreguntaSeguridadService {
 
     if (!respuestaPlano) {
       throw new BadRequestException('Respuesta vacía');
+    }
+    // "Por definir" (respuesta por defecto de la pantalla de admin) nunca vale, igual que en /api/auth.
+    if (esRespuestaPorDefinir(respuestaPlano)) {
+      throw new BadRequestException(DATOS_NO_COINCIDEN);
     }
 
     const usuario = await this.prisma.usuario.findUnique({

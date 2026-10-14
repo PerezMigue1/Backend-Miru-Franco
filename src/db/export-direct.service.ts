@@ -2,8 +2,12 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit, ServiceUnavailableEx
 import { Pool, type QueryResult, type QueryResultRow } from 'pg';
 import { MENSAJE_SERVICIO_NO_DISPONIBLE } from '../common/filters/http-exception.filter';
 import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
+import { Prisma } from '@prisma/client';
+import { neutralizarFormulaCsv } from './db.constants';
 
 const IDENT_REGEX = /^[a-zA-Z0-9_]+$/;
+/** Tablas del modelo de la app (schema.prisma, esquema public): las únicas que se listan, exportan o inspeccionan. */
+const TABLAS_DEL_MODELO = new Set(Prisma.dmmf.datamodel.models.map((m) => m.dbName ?? m.name));
 
 /** Métricas del panel de monitoreo (/admin/base-datos): caché corta y consultas acotadas. */
 const METAS_MONITOREO = new Set([
@@ -501,15 +505,19 @@ export class ExportDirectService implements OnModuleInit, OnModuleDestroy {
              AND table_type = 'BASE TABLE'
            ORDER BY table_schema, table_name`,
         );
-        const tablas = listResult.rows.map((r) =>
-          r.table_schema === 'public' ? r.table_name : `${r.table_schema}.${r.table_name}`,
-        );
+        const tablas = listResult.rows
+          .filter((r) => r.table_schema === 'public' && TABLAS_DEL_MODELO.has(r.table_name))
+          .map((r) => r.table_name);
         return { kind: 'json', status: 200, body: { tablas } };
       }
 
       const parsed = parseTabla(tablaRaw);
       if (!parsed) {
         return { kind: 'json', status: 400, body: { error: 'Nombre de tabla no válido' } };
+      }
+      // Ni catálogos de Postgres (pg_settings…) ni tablas fuera del modelo de la app.
+      if (parsed.schema !== 'public' || !TABLAS_DEL_MODELO.has(parsed.table)) {
+        return { kind: 'json', status: 400, body: { error: 'Solo se pueden exportar tablas de la aplicación' } };
       }
       const tabla = parsed.table;
       const schema = parsed.schema;
@@ -681,7 +689,7 @@ export class ExportDirectService implements OnModuleInit, OnModuleDestroy {
 
       const keys = Object.keys(rows[0] as object);
       const escape = (v: unknown): string => {
-        const s = v == null ? '' : String(v);
+        const s = neutralizarFormulaCsv(v == null ? '' : String(v));
         if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
         return s;
       };

@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsString, Min, ValidateNested, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateCompraItemDto {
@@ -29,6 +29,7 @@ export class CreateCompraDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000, { message: 'Las notas no pueden pasar de 1000 caracteres' })
   notas?: string;
 
   @IsArray()

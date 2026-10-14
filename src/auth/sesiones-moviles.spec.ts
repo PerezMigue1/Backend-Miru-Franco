@@ -264,7 +264,9 @@ describe('Sesiones móviles', () => {
       // Primera lectura: la cuenta está bien. Segunda (después de rotar): ya se revocó.
       prisma.usuario.findUnique
         .mockImplementationOnce(async () => ({ ...usuario }))
-        .mockImplementationOnce(async () => ({ ...usuario, tokensRevocadosDesde: new Date() }));
+        // Revocada después de crear la sesión (como en la prueba anterior): con new Date() caía en el
+        // mismo milisegundo que la sesión y la comparación estricta no la contaba.
+        .mockImplementationOnce(async () => ({ ...usuario, tokensRevocadosDesde: new Date(Date.now() + 1000) }));
       const r = await errorDe(servicio.renovar(inicial.refreshToken));
       expect(r.body).toMatchObject({ code: 'SESION_REVOCADA' });
       expect(filas.every((f) => f.revocadaEn)).toBe(true);

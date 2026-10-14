@@ -32,6 +32,7 @@ import { RenovarSesionMovilDto } from './dto/renovar-sesion-movil.dto';
 import { DEEP_LINK_APP, esCodeVerifier, leerStateApp } from './google-app';
 import { EnviarCodigoRecuperacionSmsDto } from '../usuarios/dto/enviar-codigo-recuperacion-sms.dto';
 import { VerificarCodigoRecuperacionSmsDto } from '../usuarios/dto/verificar-codigo-recuperacion-sms.dto';
+import { ValidarTokenRecuperacionDto } from '../usuarios/dto/validar-token-recuperacion.dto';
 import { sanitizeForLogOutput } from '../common/utils/security.util';
 
 @Controller('auth')
@@ -48,13 +49,6 @@ export class AuthController {
     // Pero lo dejamos aquí para que NestJS registre la ruta
     console.log('🔍 Google Auth endpoint llamado - esto no debería ejecutarse');
     return { message: 'Redirigiendo a Google...' };
-  }
-  
-  // Ruta de prueba SIN guard para verificar que el controller funciona
-  @Get('test')
-  testAuth() {
-    console.log('✅ Ruta de prueba /api/auth/test funcionando');
-    return { message: 'Auth controller está funcionando correctamente', path: '/api/auth/test' };
   }
 
   @Get('google/callback')
@@ -90,7 +84,9 @@ export class AuthController {
         });
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
-        return res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed&message=Usuario no autenticado`);
+        return res.redirect(
+          `${cleanFrontendUrl}/auth/callback?error=authentication_failed&message=${encodeURIComponent('Usuario no autenticado')}`,
+        );
       }
 
       const result = await this.authService.googleLogin(req.user);
@@ -103,7 +99,8 @@ export class AuthController {
       console.error('❌ Stack:', sanitizeForLogOutput(error?.stack, 4000));
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       const cleanFrontendUrl = frontendUrl.replace(/\/+$/, '');
-      res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed&message=${encodeURIComponent(error.message)}`);
+      // Sin el mensaje del error en la URL: puede traer detalles internos (se queda en el log).
+      res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed`);
     }
   }
 
@@ -250,6 +247,7 @@ export class AuthController {
 
   @Post('verificar-otp')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(5, 60000))
   async verificarOTP(@Body() verificarOtpDto: VerificarOtpDto) {
     return this.authService.verificarOTP(verificarOtpDto);
   }
@@ -300,7 +298,8 @@ export class AuthController {
 
   @Post('validar-token-recuperacion')
   @HttpCode(HttpStatus.OK)
-  async validarTokenRecuperacion(@Body() body: { email: string; token: string }) {
+  @UseGuards(new RateLimitGuard(5, 60000))
+  async validarTokenRecuperacion(@Body() body: ValidarTokenRecuperacionDto) {
     return this.authService.validarTokenRecuperacion(body.email, body.token);
   }
 

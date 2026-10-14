@@ -180,7 +180,10 @@ export class UsuariosController {
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  async eliminarUsuario(@Param('id') id: string) {
+  async eliminarUsuario(@Param('id') id: string, @Req() req: { user?: { id: string } }) {
+    if (req.user?.id === id) {
+      throw new ForbiddenException('No puedes eliminar tu propia cuenta');
+    }
     return this.usuariosService.eliminarUsuario(id);
   }
 }

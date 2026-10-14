@@ -1,4 +1,4 @@
-import { IsDateString, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ReprogramarCitaDto {
   @IsDateString()
@@ -9,5 +9,6 @@ export class ReprogramarCitaDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000, { message: 'Las notas no pueden pasar de 1000 caracteres' })
   notas?: string;
 }

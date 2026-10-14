@@ -27,6 +27,9 @@ function montar(pedido: { estado: EstadoPedido; metodoPago?: string | null; usua
   const actualizaciones: Record<string, unknown>[] = [];
   const historial: Record<string, unknown>[] = [];
   const tx = {
+    // Candado y devoluciones que revisa la cancelación de un pedido pagado (sin devoluciones aquí).
+    $executeRaw: jest.fn(async () => 1),
+    devolucion: { findFirst: jest.fn(async () => null) },
     pedidoItem: { findMany: jest.fn(async () => [{ presentacionId: 1, cantidad: 2 }]) },
     pedido: {
       // Cambio de estado condicional: solo si sigue en el estado que se leyó.
@@ -58,10 +61,21 @@ function montar(pedido: { estado: EstadoPedido; metodoPago?: string | null; usua
   };
   const eventos = { emit: jest.fn() };
   const servicio = new PedidosService(prisma as any, access as any, eventos as any, {} as any);
-  return { servicio, actualizaciones, historial, eventos, tx };
+  return { servicio, actualizaciones, historial, eventos, tx, prisma };
 }
 
 const item = [{ productoId: 3, presentacionId: 1, cantidad: 1 }];
+
+describe('Precio: no se vende una presentación sin precio', () => {
+  it.each([0, '0.00'])('precio %p: 400 con mensaje claro y no se crea el pedido (clienta y personal)', async (precio) => {
+    const { servicio, tx, prisma } = montar({ estado: EstadoPedido.borrador });
+    prisma.productoPresentacion.findUnique.mockResolvedValue({ productoId: 3, disponible: true, stock: 10, precio, tamanio: '250 ml', producto: { nombre: 'Shampoo' } } as any);
+    const clienta = servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pendiente_pago, metodoPago: 'mercado_pago' } as any);
+    await expect(clienta).rejects.toMatchObject({ status: 400, message: 'Este producto no tiene precio válido (Shampoo)' });
+    await expect(servicio.crear(STAFF, { items: item } as any)).rejects.toMatchObject({ status: 400 });
+    expect(tx.pedido.create).not.toHaveBeenCalled();
+  });
+});
 
 describe('Pedidos para recoger en el salón: sin envío', () => {
   it('crear con dirección de envío o costo de envío responde 400', async () => {

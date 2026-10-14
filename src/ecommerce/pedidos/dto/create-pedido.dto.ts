@@ -8,6 +8,7 @@ import {
   IsUUID,
   Min,
   ValidateNested,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { EstadoPedido } from '@prisma/client';
@@ -41,6 +42,7 @@ export class CreatePedidoDto {
   estado?: EstadoPedido;
 
   @IsString()
+  @MaxLength(1000, { message: 'Las notas no pueden pasar de 1000 caracteres' })
   @IsOptional()
   notasCliente?: string;
 

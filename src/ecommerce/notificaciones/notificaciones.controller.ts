@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -60,8 +61,10 @@ export class NotificacionesController {
     @Query('usuarioId') usuarioId?: string,
     @Query('leida') leida?: string,
   ) {
-    const leidaBool =
-      leida === 'true' ? true : leida === 'false' ? false : undefined;
+    if (leida !== undefined && leida !== 'true' && leida !== 'false') {
+      throw new BadRequestException('El parámetro leida debe ser true o false');
+    }
+    const leidaBool = leida === undefined ? undefined : leida === 'true';
     return this.service.listar(user.id, {
       usuarioId,
       leida: leidaBool,

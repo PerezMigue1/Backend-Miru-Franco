@@ -119,6 +119,18 @@ export class PagosService {
 
     if (dto.estado === EstadoPago.reembolsado) return this.reembolsar(pago, solicitanteId, dto);
 
+    // Lo cobrado ya cuenta en caja (y un reembolso saca ese monto): solo un pago pendiente cambia de monto.
+    // en_revision también es dinero ya capturado por la pasarela.
+    const cambiaMonto = dto.monto !== undefined && !new Prisma.Decimal(pago.monto).equals(dto.monto);
+    const yaCobrado =
+      pago.estado === EstadoPago.aprobado ||
+      pago.estado === EstadoPago.reembolsado ||
+      pago.estado === EstadoPago.en_revision ||
+      pago.corteId != null;
+    if (cambiaMonto && yaCobrado) {
+      throw new ConflictException('No se puede cambiar el monto de un pago ya cobrado, reembolsado o incluido en un corte de caja');
+    }
+
     const data = await this.prisma.pago.update({
       where: { id },
       data: {

@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   UseGuards,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -22,20 +23,20 @@ export class HistorialEstadoPedidoController {
 
   @Get('pedido/:pedidoId')
   listarPorPedido(
-    @Param('pedidoId') pedidoId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
-    return this.service.listarPorPedido(Number(pedidoId), user.id, esPropios(propios));
+    return this.service.listarPorPedido(pedidoId, user.id, esPropios(propios));
   }
 
   @Get(':id')
   obtener(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
-    return this.service.obtenerPorId(Number(id), user.id, esPropios(propios));
+    return this.service.obtenerPorId(id, user.id, esPropios(propios));
   }
 
   @Post()

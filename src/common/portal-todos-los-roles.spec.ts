@@ -46,10 +46,10 @@ function montarCitas(citas: any[]) {
   for (const r of ROLES_PERSONAL) usuarios[`${r}-yo`] = { id: `${r}-yo`, rol: r, activo: true };
   const prisma: any = {
     usuario: { findUnique: jest.fn(async ({ where }: any) => usuarios[where.id] ?? null) },
-    servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true })) },
+    servicio: { findUnique: jest.fn(async () => ({ id: 5, activo: true, duracionMinutos: 60 })) },
     cita: {
       findFirst: jest.fn(async () => null),
-      findUnique: jest.fn(async ({ where }: any) => { const c = citas.find((x) => x.id === where.id); return c ? { ...c, servicio: { nombre: 'Corte' } } : null; }),
+      findUnique: jest.fn(async ({ where }: any) => { const c = citas.find((x) => x.id === where.id); return c ? { ...c, servicio: { nombre: 'Corte', duracionMinutos: 60 } } : null; }),
       count: jest.fn(async () => 0),
       findMany: jest.fn(async () => []),
       create: jest.fn(async ({ data }: any) => { const c = { id: 900, ...data, servicio: { nombre: 'Corte' } }; creadas.push(c); return c; }),
@@ -59,12 +59,15 @@ function montarCitas(citas: any[]) {
     $transaction: jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg))),
     $executeRaw: jest.fn(async () => 1),
   };
-  const servicio = new CitasService(prisma, {} as any, {} as any, { emit: jest.fn() } as any);
+  const configuracion = {
+    obtener: async () => ({ data: { entradaLunesViernes: '09:30', salidaLunesViernes: '19:30', entradaSabado: '09:30', salidaSabado: '19:00', entradaDomingo: null, salidaDomingo: null } }),
+  };
+  const servicio = new CitasService(prisma, {} as any, configuracion as any, { emit: jest.fn() } as any);
   return { servicio, prisma, creadas };
 }
 
 const solicitante = (rol: string) => ({ id: `${rol}-yo`, rol, claves: CLAVES[rol] });
-const cuerpoCita = (extra: Record<string, unknown> = {}) => ({ especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: '2026-10-10T16:00:00.000Z', fechaHoraFin: '2026-10-10T17:00:00.000Z', ...extra });
+const cuerpoCita = (extra: Record<string, unknown> = {}) => ({ especialistaId: 'est-1', servicioId: 5, fechaHoraInicio: '2030-01-09T16:00:00.000Z', fechaHoraFin: '2030-01-09T17:00:00.000Z', ...extra });
 
 describe.each(ROLES_PERSONAL)('Citas en el portal como clienta: %s', (rol) => {
   const yo = `${rol}-yo`;
@@ -86,14 +89,14 @@ describe.each(ROLES_PERSONAL)('Citas en el portal como clienta: %s', (rol) => {
   it('ve, reprograma y cancela la suya', async () => {
     const { servicio } = montarCitas([propia]);
     await expect(servicio.obtener(1, yo, rol, true)).resolves.toMatchObject({ success: true });
-    await expect(servicio.reprogramar(1, { fechaHoraInicio: '2026-10-11T16:00:00.000Z', fechaHoraFin: '2026-10-11T17:00:00.000Z' } as any, solicitante(rol), true)).resolves.toMatchObject({ success: true });
+    await expect(servicio.reprogramar(1, { fechaHoraInicio: '2030-01-10T16:00:00.000Z', fechaHoraFin: '2030-01-10T17:00:00.000Z' } as any, solicitante(rol), true)).resolves.toMatchObject({ success: true });
     await expect(servicio.cancelar(1, { motivoCancelacion: 'No puedo ir' } as any, solicitante(rol), true)).resolves.toMatchObject({ success: true });
   });
 
   it('la de otra persona responde 404 al verla o cambiarla (aunque la atienda o tenga escritura)', async () => {
     const { servicio, prisma } = montarCitas([ajena]);
     await expect(servicio.obtener(2, yo, rol, true)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(servicio.reprogramar(2, { fechaHoraInicio: '2026-10-11T16:00:00.000Z', fechaHoraFin: '2026-10-11T17:00:00.000Z' } as any, solicitante(rol), true)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(servicio.reprogramar(2, { fechaHoraInicio: '2030-01-10T16:00:00.000Z', fechaHoraFin: '2030-01-10T17:00:00.000Z' } as any, solicitante(rol), true)).rejects.toBeInstanceOf(NotFoundException);
     await expect(servicio.cancelar(2, { motivoCancelacion: 'x' } as any, solicitante(rol), true)).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.cita.update).not.toHaveBeenCalled();
   });

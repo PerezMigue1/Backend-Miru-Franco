@@ -1,28 +1,11 @@
 import './tracing';
 import { NestFactory } from '@nestjs/core';
-import { BadRequestException, ValidationPipe, VersioningType } from '@nestjs/common';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { crearErrorDeValidacion } from './common/filters/errores-validacion';
 import { crearCorsOptions, crearRechazoPreflight } from './config/cors.config';
-import type { ValidationError } from 'class-validator';
 const cookieParser = require('cookie-parser');
-
-function flattenValidationErrors(
-  validationErrors: ValidationError[],
-  parentPath = '',
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const err of validationErrors) {
-    const path = parentPath ? `${parentPath}.${err.property}` : err.property;
-    if (err.constraints && Object.keys(err.constraints).length > 0) {
-      out[path] = Object.values(err.constraints)[0] ?? 'Campo inválido';
-    }
-    if (err.children?.length) {
-      Object.assign(out, flattenValidationErrors(err.children, path));
-    }
-  }
-  return out;
-}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -110,15 +93,7 @@ async function bootstrap() {
       transform: true,
       transformOptions: { enableImplicitConversion: true },
       disableErrorMessages: process.env.NODE_ENV === 'production',
-      exceptionFactory: (validationErrors: ValidationError[]) => {
-        const errors = flattenValidationErrors(validationErrors);
-        return new BadRequestException({
-          success: false,
-          error: 'Errores de validación',
-          message: 'Revisa los campos del formulario',
-          errors,
-        });
-      },
+      exceptionFactory: crearErrorDeValidacion,
     }),
   );
 
@@ -129,7 +104,6 @@ async function bootstrap() {
   console.log(`📝 API disponible en http://localhost:${port}/api`);
   console.log(`✅ Módulos cargados correctamente`);
   console.log(`🔍 Prueba estas rutas:`);
-  console.log(`   - GET /api/auth/test (debería funcionar)`);
   console.log(`   - GET /api/auth/google (OAuth)`);
 }
 

@@ -10,6 +10,7 @@ import {
   Put,
   Query,
   UseGuards,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
@@ -28,20 +29,20 @@ export class EnviosController {
 
   @Get('pedido/:pedidoId')
   listarPorPedido(
-    @Param('pedidoId') pedidoId: string,
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
-    return this.service.listarPorPedido(Number(pedidoId), user.id, esPropios(propios));
+    return this.service.listarPorPedido(pedidoId, user.id, esPropios(propios));
   }
 
   @Get(':id')
   obtener(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: { id: string },
     @Query('propios') propios?: string,
   ) {
-    return this.service.obtenerPorId(Number(id), user.id, esPropios(propios));
+    return this.service.obtenerPorId(id, user.id, esPropios(propios));
   }
 
   @Post()
@@ -56,17 +57,17 @@ export class EnviosController {
   @UseGuards(RolesGuard)
   @Roles('admin')
   actualizar(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: { id: string },
     @Body() dto: UpdateEnvioDto,
   ) {
-    return this.service.actualizar(Number(id), user.id, dto);
+    return this.service.actualizar(id, user.id, dto);
   }
 
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles('admin')
-  eliminar(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.service.eliminar(Number(id), user.id);
+  eliminar(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }) {
+    return this.service.eliminar(id, user.id);
   }
 }
