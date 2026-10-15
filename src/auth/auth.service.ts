@@ -29,7 +29,23 @@ export type OrigenRegistroGoogle = 'web' | 'app';
 const ORIGENES_REGISTRO_GOOGLE: readonly OrigenRegistroGoogle[] = ['web', 'app'];
 
 type DatosRegistroGoogle = Omit<RegistroGooglePendiente, 'registroGooglePendiente'>;
-type TokenRegistroGoogle = DatosRegistroGoogle & { origen: OrigenRegistroGoogle };
+/** huellaVinculo: SHA-256 del valor de la cookie mf_registro_google del navegador que empezó el alta (null si no tiene). */
+type TokenRegistroGoogle = DatosRegistroGoogle & { origen: OrigenRegistroGoogle; huellaVinculo: string | null };
+
+/** Valor aleatorio de la cookie que liga el alta web con su navegador (32 bytes en base64url). */
+export function nuevoVinculoRegistroGoogle(): string {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+const huellaDeVinculo = (vinculo: string) => crypto.createHash('sha256').update(vinculo).digest('hex');
+
+/** true si la cookie del navegador corresponde a la huella del token (comparación de tiempo constante). */
+function vinculoCoincide(huella: string | null, vinculo: string | null | undefined): boolean {
+  if (!huella || typeof vinculo !== 'string' || !vinculo) return false;
+  const a = Buffer.from(huellaDeVinculo(vinculo), 'hex');
+  const b = Buffer.from(huella, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 /**
  * Llave derivada del secreto de sesión, nunca el secreto mismo (mismo criterio que el state de la app en
@@ -39,10 +55,11 @@ function llaveRegistroGoogle(): string {
   return crypto.createHmac('sha256', jwtSecretObligatorio(process.env.JWT_SECRET)).update('registro-google:v1').digest('hex');
 }
 
-export function firmarTokenRegistroGoogle(datos: DatosRegistroGoogle, origen: OrigenRegistroGoogle): string {
+/** `vinculo`: valor de la cookie del navegador; el token guarda solo su huella. */
+export function firmarTokenRegistroGoogle(datos: DatosRegistroGoogle, origen: OrigenRegistroGoogle, vinculo?: string): string {
   const { googleId, email, nombre, foto } = datos;
   return new JwtService({ secret: llaveRegistroGoogle() }).sign(
-    { proposito: PROPOSITO_REGISTRO_GOOGLE, origen, googleId, email, nombre, foto },
+    { proposito: PROPOSITO_REGISTRO_GOOGLE, origen, googleId, email, nombre, foto, ...(vinculo ? { vinculo: huellaDeVinculo(vinculo) } : {}) },
     { expiresIn: JWT_TTL_REGISTRO_GOOGLE_SEGUNDOS },
   );
 }
@@ -60,6 +77,7 @@ export function leerTokenRegistroGoogle(token: unknown): TokenRegistroGoogle | n
       nombre: typeof p.nombre === 'string' ? p.nombre : '',
       foto: typeof p.foto === 'string' ? p.foto : null,
       origen: p.origen,
+      huellaVinculo: typeof p.vinculo === 'string' && /^[0-9a-f]{64}$/.test(p.vinculo) ? p.vinculo : null,
     };
   } catch {
     return null;
@@ -146,28 +164,38 @@ export class AuthService {
   /**
    * Callback de Google con una persona sin cuenta (web o app): no se crea nada. Va a la página de la web que pide
    * aceptar términos y aviso, con un token firmado de 15 minutos (googleId, correo, nombre, foto y origen). El token
-   * va en el fragmento (#token=): el navegador no lo manda al servidor web, así no queda en sus logs.
+   * va en el fragmento (#token=): el navegador no lo manda al servidor web, así no queda en sus logs. En la web
+   * devuelve también el `vinculo` que el controller pone en la cookie mf_registro_google (login CSRF).
    */
-  iniciarRegistroGoogle(pendiente: RegistroGooglePendiente, origen: OrigenRegistroGoogle): { redirect: string } {
+  iniciarRegistroGoogle(pendiente: RegistroGooglePendiente, origen: OrigenRegistroGoogle): { redirect: string; vinculo?: string } {
     const frontendUrl = (this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000').replace(/\/+$/, '');
-    const token = firmarTokenRegistroGoogle(pendiente, origen);
-    return { redirect: `${frontendUrl}${RUTA_COMPLETAR_REGISTRO}#token=${encodeURIComponent(token)}` };
+    const vinculo = origen === 'web' ? nuevoVinculoRegistroGoogle() : undefined;
+    const token = firmarTokenRegistroGoogle(pendiente, origen, vinculo);
+    return { redirect: `${frontendUrl}${RUTA_COMPLETAR_REGISTRO}#token=${encodeURIComponent(token)}`, ...(vinculo ? { vinculo } : {}) };
   }
 
   /**
    * POST /auth/google/completar: valida casillas y token, crea la cuenta y sus consentimientos en una sola
    * transacción. Origen web: entrega la sesión igual que el canje web ({ success, token }; el controller la pone en
    * cookie). Origen app: { success, data: { origen: 'app' } } sin sesión; la app vuelve a entrar con Google (PKCE).
+   * Origen web exige además `vinculo` (la cookie mf_registro_google) igual a la huella del token: un enlace con el
+   * token de otra persona, abierto en otro navegador, no inicia sesión en su cuenta (login CSRF).
    */
   async completarRegistroGoogle(
     dto: CompletarRegistroGoogleDto,
     contexto: ContextoPeticion,
+    vinculo?: string | null,
   ): Promise<{ success: true; token: string } | { success: true; data: { origen: 'app' } }> {
     if (dto.aceptaTerminos !== true) throw new BadRequestException('Debes aceptar los términos y condiciones');
     if (dto.aceptaAvisoPrivacidad !== true) throw new BadRequestException('Debes aceptar el aviso de privacidad');
     const datos = leerTokenRegistroGoogle(dto.token);
     if (!datos) {
       throw new UnauthorizedException('El enlace para completar tu registro no es válido o ya venció. Vuelve a entrar con Google.');
+    }
+    if (datos.origen === 'web' && !vinculoCoincide(datos.huellaVinculo, vinculo)) {
+      throw new UnauthorizedException(
+        'Para completar tu registro abre el enlace en el mismo navegador donde entraste con Google. Vuelve a entrar con Google desde aquí.',
+      );
     }
     const documentos = await documentosDeRegistro(this.prisma, dto.documentos);
     const existente = await this.prisma.usuario.findFirst({

@@ -13,7 +13,7 @@ export class CambioCorreoController {
 
   /**
    * Paso 1: con la contraseña actual (si la cuenta tiene), envía un código de 6 dígitos al correo nuevo
-   * (vence en 15 minutos).
+   * (vence en 15 minutos). Sin contraseña (solo Google), envía además otro código al correo actual.
    */
   @Post('me/correo/solicitar')
   @UseGuards(JwtAuthGuard, new RateLimitGuard(3, 60000))
@@ -30,6 +30,6 @@ export class CambioCorreoController {
   @UseGuards(JwtAuthGuard, new RateLimitGuard(5, 60000))
   @HttpCode(HttpStatus.OK)
   confirmar(@CurrentUser() user: { id: string }, @Body() dto: ConfirmarCambioCorreoDto) {
-    return this.cambioCorreo.confirmar(user.id, dto.codigo);
+    return this.cambioCorreo.confirmar(user.id, dto.codigo, dto.codigoActual);
   }
 }

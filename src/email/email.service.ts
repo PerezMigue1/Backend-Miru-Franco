@@ -173,6 +173,29 @@ export class EmailService {
     );
   }
 
+  /**
+   * Cuenta sin contraseña (solo Google): código al correo ACTUAL para confirmar que la titular pide el cambio. Dice
+   * a qué correo se quiere cambiar, para que lo reconozca o lo ignore.
+   */
+  async sendCodigoCorreoActualEmail(correoActual: string, codigo: string, correoNuevo: string, vigenciaMinutos: number): Promise<void> {
+    await this.enviarCorreoCuenta(
+      correoActual,
+      'Confirma el cambio de tu correo - Miru Franco',
+      `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #710014;">Confirma el cambio de tu correo</h2>
+            <p>Pidieron cambiar el correo de tu cuenta de Miru Franco a <strong>${escaparHtml(correoNuevo)}</strong>. Si fuiste tú, ingresa este código junto con el que llegó a tu nuevo correo:</p>
+            <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
+              <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${escaparHtml(codigo)}</h1>
+            </div>
+            <p style="color: #666; font-size: 12px;">Este código vence en ${vigenciaMinutos} minutos y solo sirve una vez.</p>
+            <p style="color: #666; font-size: 12px;">Si no fuiste tú, no compartas este código con nadie: sin él tu correo no cambia. Te recomendamos cerrar sesión en los dispositivos que no reconozcas.</p>
+          </div>
+        `,
+      'código de cambio de correo al correo actual',
+    );
+  }
+
   /** Aviso después de cambiar la contraseña: fecha y hora, y cómo recuperar la cuenta. Sin datos sensibles. */
   async sendAvisoPasswordCambiadaEmail(correo: string, fechaHora: string): Promise<void> {
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://miru-franco.vercel.app';

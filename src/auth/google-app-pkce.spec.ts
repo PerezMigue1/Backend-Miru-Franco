@@ -360,7 +360,7 @@ describe('Google desde la app (PKCE)', () => {
       // En el fragmento: el navegador no lo manda al servidor web
       expect(url.search).toBe('');
       const token = new URLSearchParams(url.hash.slice(1)).get('token');
-      expect(leerTokenRegistroGoogle(token)).toEqual({ googleId: 'google-9', email: 'nueva@example.com', nombre: 'Nueva', foto: null, origen: 'app' });
+      expect(leerTokenRegistroGoogle(token)).toEqual({ googleId: 'google-9', email: 'nueva@example.com', nombre: 'Nueva', foto: null, origen: 'app', huellaVinculo: null });
       const salida = [...logEspia.mock.calls, ...errorEspia.mock.calls].map((a) => a.map(String).join(' ')).join('\n');
       expect(salida).not.toContain(token);
     });

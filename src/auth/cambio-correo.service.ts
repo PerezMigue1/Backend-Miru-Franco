@@ -24,6 +24,11 @@ const passwordActualRequerida = () =>
 const passwordActualIncorrecta = () =>
   new BadRequestException({ message: 'La contraseña actual no es correcta.', code: 'PASSWORD_ACTUAL_INCORRECTA' });
 
+const generarCodigo = () => crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+
+/** Lo que se hashea: el código del correo nuevo y, si la cuenta no tiene contraseña, también el del actual. */
+const materialCodigo = (codigo: string, codigoActual?: string) => (codigoActual ? `${codigo}:${codigoActual}` : codigo);
+
 const correoEnUso = () =>
   new ConflictException({ message: 'Ese correo ya está registrado en otra cuenta.', code: 'CORREO_EN_USO' });
 const codigoInvalido = () =>
@@ -34,7 +39,9 @@ const codigoInvalido = () =>
  * (tabla solicitudes_cambio_correo). Solo se guarda el hash bcrypt del código: el código no viaja
  * en la respuesta ni se escribe en los logs. El correo es el factor de recuperación: pedirlo exige la
  * contraseña actual (si la cuenta tiene) y confirmarlo avisa al correo anterior y anula la recuperación
- * de contraseña y los códigos pendientes.
+ * de contraseña y los códigos pendientes. Una cuenta solo de Google no tiene contraseña: en su lugar se
+ * le manda otro código al correo actual y hacen falta los dos (una sesión robada no basta para quedarse
+ * con la cuenta cambiando el correo y recuperando la contraseña con el nuevo).
  */
 @Injectable()
 export class CambioCorreoService {
@@ -48,7 +55,7 @@ export class CambioCorreoService {
   /**
    * POST /auth/me/correo/solicitar. Con contraseña en la cuenta, `passwordActual` es obligatoria y se revisa
    * antes que el correo nuevo (así una sesión ajena no averigua qué correos tienen cuenta). Las cuentas solo de
-   * Google no tienen contraseña y no se les pide.
+   * Google no tienen contraseña: reciben un segundo código en el correo actual (`codigoAlCorreoActual`).
    */
   async solicitar(usuarioId: string, correoNuevoCrudo: string, passwordActual?: string) {
     const correoNuevo = sanitizeEmail(correoNuevoCrudo);
@@ -69,8 +76,10 @@ export class CambioCorreoService {
     }
     await this.verificarDisponible(correoNuevo, usuarioId);
 
-    const codigo = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
-    const codigoHash = await bcrypt.hash(codigo, 10);
+    const codigo = generarCodigo();
+    // Sin contraseña: el código del correo actual hace de reautenticación. Se guarda un solo hash de los dos.
+    const codigoActual = usuario.password ? null : generarCodigo();
+    const codigoHash = await bcrypt.hash(materialCodigo(codigo, codigoActual ?? undefined), 10);
     const ahora = new Date();
     // Una solicitud nueva deja vencidas las pendientes: solo vale el último código.
     const solicitud = await this.prisma.$transaction(async (tx) => {
@@ -91,6 +100,9 @@ export class CambioCorreoService {
 
     try {
       await this.emailService.sendCodigoCambioCorreoEmail(correoNuevo, codigo, VIGENCIA_CODIGO_CORREO_MINUTOS);
+      if (codigoActual) {
+        await this.emailService.sendCodigoCorreoActualEmail(usuario.email, codigoActual, correoNuevo, VIGENCIA_CODIGO_CORREO_MINUTOS);
+      }
     } catch {
       // Sin correo el código no le llegó a nadie: la solicitud queda vencida y sin intentos.
       try {
@@ -110,13 +122,16 @@ export class CambioCorreoService {
 
     return {
       success: true,
-      message: `Te enviamos un código a tu nuevo correo. Vence en ${VIGENCIA_CODIGO_CORREO_MINUTOS} minutos.`,
+      message: codigoActual
+        ? `Te enviamos un código a tu nuevo correo y otro a tu correo actual. Vencen en ${VIGENCIA_CODIGO_CORREO_MINUTOS} minutos.`
+        : `Te enviamos un código a tu nuevo correo. Vence en ${VIGENCIA_CODIGO_CORREO_MINUTOS} minutos.`,
       vigenciaMinutos: VIGENCIA_CODIGO_CORREO_MINUTOS,
+      codigoAlCorreoActual: codigoActual !== null,
     };
   }
 
-  /** POST /auth/me/correo/confirmar */
-  async confirmar(usuarioId: string, codigo: string) {
+  /** POST /auth/me/correo/confirmar. `codigoActual`: el del correo actual, en las cuentas sin contraseña. */
+  async confirmar(usuarioId: string, codigo: string, codigoActual?: string) {
     const solicitud = await this.prisma.solicitudCambioCorreo.findFirst({
       where: { usuarioId, usadoEn: null },
       orderBy: [{ creadoEn: 'desc' }, { id: 'desc' }],
@@ -145,7 +160,7 @@ export class CambioCorreoService {
     });
     if (reserva.count === 0) throw codigoInvalido();
 
-    if (!(await bcrypt.compare(codigo, solicitud.codigoHash))) {
+    if (!(await bcrypt.compare(materialCodigo(codigo, codigoActual), solicitud.codigoHash))) {
       const restantes = MAX_INTENTOS_CODIGO_CORREO - (solicitud.intentos + 1);
       throw new BadRequestException({
         message:

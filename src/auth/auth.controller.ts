@@ -14,7 +14,15 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
-import { clearAuthCookie, entregarSesion, pideSesionEnCookie } from './auth-cookie';
+import {
+  clearAuthCookie,
+  clearVinculoRegistroGoogle,
+  entregarSesion,
+  leerVinculoRegistroGoogle,
+  pideSesionEnCookie,
+  setVinculoRegistroGoogle,
+} from './auth-cookie';
+import { JWT_TTL_REGISTRO_GOOGLE_SEGUNDOS } from './jwt-ttl';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { GoogleAuthGuard } from '../common/guards/google-auth.guard';
@@ -98,10 +106,13 @@ export class AuthController {
         );
       }
 
-      // Web, persona sin cuenta: no se crea; va a aceptar términos y aviso con un token de 15 minutos.
+      // Web, persona sin cuenta: no se crea; va a aceptar términos y aviso con un token de 15 minutos, ligado a este
+      // navegador por la cookie mf_registro_google (login CSRF).
       if (esRegistroGooglePendiente(req.user)) {
         console.log('🔍 Redirigiendo al frontend para completar el registro con Google');
-        return res.redirect(this.authService.iniciarRegistroGoogle(req.user, 'web').redirect);
+        const { redirect, vinculo } = this.authService.iniciarRegistroGoogle(req.user, 'web');
+        if (vinculo) setVinculoRegistroGoogle(res, vinculo, JWT_TTL_REGISTRO_GOOGLE_SEGUNDOS * 1000);
+        return res.redirect(redirect);
       }
 
       const result = await this.authService.googleLogin(req.user);
@@ -121,8 +132,9 @@ export class AuthController {
 
   /**
    * Alta con Google: con el token de /auth/completar-registro#token= y las casillas marcadas crea la cuenta y
-   * registra sus consentimientos. Token de origen web: entrega la sesión como exchange-code (cookie mf_session con
-   * X-Auth-Mode: cookie). Token de origen app: { success, data: { origen: 'app' } } sin sesión ni cookie.
+   * registra sus consentimientos. Token de origen web: exige la cookie mf_registro_google del navegador que empezó el
+   * alta y entrega la sesión como exchange-code (cookie mf_session con X-Auth-Mode: cookie). Token de origen app:
+   * { success, data: { origen: 'app' } } sin sesión ni cookie.
    */
   @Post('google/completar')
   @HttpCode(HttpStatus.OK)
@@ -133,10 +145,14 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const enCookie = pideSesionEnCookie(req);
-    const resultado = await this.authService.completarRegistroGoogle(dto, contextoDeRequest(req));
+    const vinculo = leerVinculoRegistroGoogle(req);
+    const resultado = await this.authService.completarRegistroGoogle(dto, contextoDeRequest(req), vinculo);
     // Origen app: sin sesión ni cookie, la respuesta va tal cual
     if (!('token' in resultado)) return resultado;
-    return entregarSesion(res, resultado, enCookie);
+    const sesion = entregarSesion(res, resultado, enCookie);
+    // El vínculo ya se usó: se borra para que no quede en el navegador
+    if (vinculo !== undefined) clearVinculoRegistroGoogle(res);
+    return sesion;
   }
 
   /**

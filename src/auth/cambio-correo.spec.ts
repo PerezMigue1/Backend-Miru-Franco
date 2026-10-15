@@ -119,20 +119,26 @@ function baseEnMemoria() {
   return prisma;
 }
 
-function preparar(opciones: { correoFalla?: boolean; avisoFalla?: boolean } = {}) {
+function preparar(opciones: { correoFalla?: boolean; avisoFalla?: boolean; correoActualFalla?: boolean } = {}) {
   const prisma = baseEnMemoria();
   const enviados: { correo: string; codigo: string; minutos: number }[] = [];
+  // Códigos que van al correo ACTUAL (cuentas sin contraseña)
+  const alActual: { correo: string; codigo: string; correoNuevo: string; minutos: number }[] = [];
   const email = {
     sendCodigoCambioCorreoEmail: jest.fn(async (correo: string, codigo: string, minutos: number) => {
       enviados.push({ correo, codigo, minutos });
       if (opciones.correoFalla) throw new Error('No se pudo enviar el correo (código de cambio de correo)');
+    }),
+    sendCodigoCorreoActualEmail: jest.fn(async (correo: string, codigo: string, correoNuevo: string, minutos: number) => {
+      alActual.push({ correo, codigo, correoNuevo, minutos });
+      if (opciones.correoActualFalla) throw new Error('No se pudo enviar el correo (código al correo actual)');
     }),
     sendAvisoCorreoCambiadoEmail: jest.fn(async () => {
       if (opciones.avisoFalla) throw new Error('No se pudo enviar el correo (aviso de cambio de correo)');
     }),
   };
   const servicio = new CambioCorreoService(prisma, email as any);
-  return { prisma, email, enviados, servicio };
+  return { prisma, email, enviados, alActual, servicio };
 }
 
 describe('CambioCorreoService', () => {
@@ -292,10 +298,61 @@ describe('CambioCorreoService', () => {
       expect(salidas.join('\n')).not.toContain(PASSWORD);
     });
 
-    it('cuenta solo de Google (sin contraseña): no se pide y el código llega al correo nuevo', async () => {
-      const { enviados, servicio } = preparar();
-      await expect(servicio.solicitar('u-3', 'nuevo.google@example.com')).resolves.toMatchObject({ success: true });
+    it('con contraseña no se manda nada al correo actual y la respuesta no pide ese código', async () => {
+      const { alActual, servicio } = preparar();
+      await expect(servicio.solicitar('u-1', 'nuevo@example.com', PASSWORD)).resolves.toMatchObject({ codigoAlCorreoActual: false });
+      expect(alActual).toEqual([]);
+    });
+  });
+
+  describe('cuentas solo de Google (sin contraseña): el código del correo actual sustituye a la contraseña', () => {
+    it('no se pide contraseña; un código va al correo nuevo y otro, distinto, al correo ACTUAL, y la respuesta lo dice', async () => {
+      const { prisma, enviados, alActual, servicio } = preparar();
+      const r = await servicio.solicitar('u-3', 'nuevo.google@example.com');
+      expect(r).toMatchObject({ success: true, codigoAlCorreoActual: true });
+      expect(r.message).toContain('correo actual');
       expect(enviados.map((e) => e.correo)).toEqual(['nuevo.google@example.com']);
+      expect(alActual).toHaveLength(1);
+      expect(alActual[0]).toMatchObject({ correo: 'solo.google@example.com', correoNuevo: 'nuevo.google@example.com', minutos: 15 });
+      expect(alActual[0].codigo).toMatch(/^[0-9]{6}$/);
+      // Solo se guarda un hash: ninguno de los dos códigos queda en claro
+      const guardada = JSON.stringify(prisma.solicitudes[0]);
+      expect(guardada).not.toContain(enviados[0].codigo);
+      expect(guardada).not.toContain(alActual[0].codigo);
+    });
+
+    it('con solo el código del correo nuevo NO cambia el correo (una sesión robada no basta) y gasta un intento', async () => {
+      const { prisma, enviados, servicio } = preparar();
+      await servicio.solicitar('u-3', 'nuevo.google@example.com');
+      await expect(servicio.confirmar('u-3', enviados[0].codigo)).rejects.toMatchObject({ response: { code: 'CODIGO_INCORRECTO' } });
+      expect(prisma.usuarios[2].email).toBe('solo.google@example.com');
+      expect(prisma.solicitudes[0].intentos).toBe(1);
+    });
+
+    it('con el código del correo actual equivocado tampoco cambia', async () => {
+      const { prisma, enviados, alActual, servicio } = preparar();
+      await servicio.solicitar('u-3', 'nuevo.google@example.com');
+      const otro = alActual[0].codigo === '000000' ? '111111' : '000000';
+      await expect(servicio.confirmar('u-3', enviados[0].codigo, otro)).rejects.toMatchObject({ response: { code: 'CODIGO_INCORRECTO' } });
+      expect(prisma.usuarios[2].email).toBe('solo.google@example.com');
+    });
+
+    it('con los dos códigos correctos cambia el correo y avisa al anterior', async () => {
+      const { prisma, email, enviados, alActual, servicio } = preparar();
+      await servicio.solicitar('u-3', 'nuevo.google@example.com');
+      await expect(servicio.confirmar('u-3', enviados[0].codigo, alActual[0].codigo)).resolves.toMatchObject({
+        data: { email: 'nuevo.google@example.com' },
+      });
+      expect(prisma.usuarios[2].email).toBe('nuevo.google@example.com');
+      expect((email.sendAvisoCorreoCambiadoEmail.mock.calls[0] as unknown as [string])[0]).toBe('solo.google@example.com');
+    });
+
+    it('si falla el envío al correo actual: 502 en español y la solicitud no queda usable', async () => {
+      const { prisma, enviados, servicio } = preparar({ correoActualFalla: true });
+      await expect(servicio.solicitar('u-3', 'nuevo.google@example.com')).rejects.toBeInstanceOf(BadGatewayException);
+      expect(prisma.solicitudes[0].intentos).toBe(5);
+      await expect(servicio.confirmar('u-3', enviados[0].codigo)).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.usuarios[2].email).toBe('solo.google@example.com');
     });
   });
 
@@ -474,6 +531,15 @@ describe('Rutas /auth/me/correo', () => {
     const bueno = await post('confirmar', { codigo: '123456' });
     expect(bueno.status).toBe(200);
     expect(await bueno.json()).toMatchObject({ data: { email: 'nuevo@example.com' } });
-    expect(cambioCorreo.confirmar).toHaveBeenCalledWith('u-1', '123456');
+    expect(cambioCorreo.confirmar).toHaveBeenCalledWith('u-1', '123456', undefined);
+  });
+
+  it('confirmar acepta codigoActual (cuentas sin contraseña) y lo pasa al servicio; con otro formato, 400 en español', async () => {
+    const malo = await post('confirmar', { codigo: '123456', codigoActual: '12' });
+    expect(malo.status).toBe(400);
+    expect(JSON.stringify(await malo.json())).toContain('El código de tu correo actual tiene 6 dígitos.');
+    const bueno = await post('confirmar', { codigo: '123456', codigoActual: '654321' });
+    expect(bueno.status).toBe(200);
+    expect(cambioCorreo.confirmar).toHaveBeenCalledWith('u-1', '123456', '654321');
   });
 });

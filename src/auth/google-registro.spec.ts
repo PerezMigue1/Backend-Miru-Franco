@@ -2,7 +2,8 @@ import { BadRequestException, CanActivate, ConflictException, INestApplication, 
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import type { AddressInfo } from 'node:net';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
+import cookieParser from 'cookie-parser';
 import { HttpExceptionFilter } from '../common/filters/http-exception.filter';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -45,6 +46,9 @@ const PERFIL_GOOGLE = {
 };
 const DATOS_TOKEN = { googleId: 'google-123', email: 'ana.nueva@example.com', nombre: 'Ana Nueva', foto: 'https://lh3.googleusercontent.com/foto-falsa' };
 const CONTEXTO = { ip: '201.140.10.5', userAgent: 'Navegador de prueba' };
+/** Valor de la cookie mf_registro_google del navegador que empezó el alta, y su huella (la que lleva el token). */
+const VINCULO = 'vinculo-falso-del-navegador-de-prueba';
+const HUELLA = createHash('sha256').update(VINCULO).digest('hex');
 
 const envOriginal = { JWT_SECRET: process.env.JWT_SECRET, FRONTEND_URL: process.env.FRONTEND_URL };
 function restaurarEnv(nombre: keyof typeof envOriginal) {
@@ -128,7 +132,7 @@ function firmarEnElPasado(msAtras: number) {
   const ahoraReal = Date.now.bind(Date);
   const espia = jest.spyOn(Date, 'now').mockImplementation(() => ahoraReal() - msAtras);
   try {
-    return firmarTokenRegistroGoogle(DATOS_TOKEN, 'web');
+    return firmarTokenRegistroGoogle(DATOS_TOKEN, 'web', VINCULO);
   } finally {
     espia.mockRestore();
   }
@@ -152,7 +156,7 @@ function tokenDeRedireccionAlta(redireccion: string): string {
 const errorUnico = () => Object.assign(new Error('Unique'), { code: 'P2002' });
 
 const cuerpoCompletar = (extra: Record<string, unknown> = {}) => ({
-  token: firmarTokenRegistroGoogle(DATOS_TOKEN, 'web'),
+  token: firmarTokenRegistroGoogle(DATOS_TOKEN, 'web', VINCULO),
   aceptaTerminos: true,
   aceptaAvisoPrivacidad: true,
   recibePromociones: false,
@@ -205,20 +209,31 @@ describe('Alta con Google en la web', () => {
     it('usuaria nueva: no se crea la cuenta y redirige a /auth/completar-registro con un token de 15 minutos (origen web) en el fragmento', async () => {
       const { auth, prisma } = servicio();
       const controller = new AuthController(auth);
-      const res = { redirect: jest.fn() };
+      const res = { redirect: jest.fn(), cookie: jest.fn() };
       await controller.googleAuthRedirect({ query: {}, user: { registroGooglePendiente: true, ...DATOS_TOKEN } }, res);
 
       esperaNadaCreado(prisma);
       expect(prisma.codigoOAuth.create).not.toHaveBeenCalled();
       const token = tokenDeRedireccionAlta(res.redirect.mock.calls[0][0]);
-      expect(leerTokenRegistroGoogle(token)).toEqual({ ...DATOS_TOKEN, origen: 'web' });
+      // Vínculo con este navegador: cookie httpOnly con un valor aleatorio; el token lleva solo su huella SHA-256
+      expect(res.cookie).toHaveBeenCalledTimes(1);
+      const [nombre, valor, opciones] = res.cookie.mock.calls[0];
+      expect(nombre).toBe('mf_registro_google');
+      expect(valor).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(opciones).toMatchObject({ httpOnly: true, sameSite: 'strict', path: '/api/auth/google', maxAge: 15 * 60 * 1000 });
+      expect(token).not.toContain(valor);
+      expect(leerTokenRegistroGoogle(token)).toEqual({
+        ...DATOS_TOKEN,
+        origen: 'web',
+        huellaVinculo: createHash('sha256').update(valor).digest('hex'),
+      });
       const payload: any = new JwtService({}).decode(token);
       expect(payload).toMatchObject({ proposito: 'registro_google', origen: 'web', ...DATOS_TOKEN });
       expect(payload.exp - payload.iat).toBe(15 * 60);
     });
 
     it('el token de registro no sirve como sesión (otra llave): verificarlo con JWT_SECRET falla', () => {
-      expect(() => new JwtService({ secret: SECRETO }).verify(firmarTokenRegistroGoogle(DATOS_TOKEN, 'web'))).toThrow();
+      expect(() => new JwtService({ secret: SECRETO }).verify(firmarTokenRegistroGoogle(DATOS_TOKEN, 'web', VINCULO))).toThrow();
       expect(() => new JwtService({ secret: SECRETO }).verify(firmarTokenRegistroGoogle(DATOS_TOKEN, 'app'))).toThrow();
     });
 
@@ -244,7 +259,7 @@ describe('Alta con Google en la web', () => {
       const redireccion: string = res.redirect.mock.calls[0][0];
       expect(redireccion.startsWith(DEEP_LINK_APP)).toBe(false);
       const token = tokenDeRedireccionAlta(redireccion);
-      expect(leerTokenRegistroGoogle(token)).toEqual({ ...DATOS_TOKEN, origen: 'app' });
+      expect(leerTokenRegistroGoogle(token)).toEqual({ ...DATOS_TOKEN, origen: 'app', huellaVinculo: null });
       const payload: any = new JwtService({}).decode(token);
       expect(payload).toMatchObject({ proposito: 'registro_google', origen: 'app', ...DATOS_TOKEN });
       expect(payload.exp - payload.iat).toBe(15 * 60);
@@ -256,7 +271,7 @@ describe('Alta con Google en la web', () => {
   describe('AuthService.completarRegistroGoogle', () => {
     it('éxito: crea la cuenta y sus consentimientos en la misma transacción y entrega la sesión', async () => {
       const { auth, prisma, jwt, security } = servicio();
-      const r = await auth.completarRegistroGoogle(cuerpoCompletar({ recibePromociones: true }), CONTEXTO);
+      const r = await auth.completarRegistroGoogle(cuerpoCompletar({ recibePromociones: true }), CONTEXTO, VINCULO);
       // Cuenta y consentimientos con el cliente de la transacción (tx), nunca con this.prisma
       expect(prisma.orden).toEqual(['inicio', 'tx.usuario.create', 'tx.consentimiento.createMany', 'fin']);
       expect(prisma.usuario.create).not.toHaveBeenCalled();
@@ -326,7 +341,7 @@ describe('Alta con Google en la web', () => {
       const { auth, prisma } = servicio();
       prisma.tx.usuario.create.mockRejectedValueOnce(errorUnico());
       const error = await auth
-        .completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, origen) }), CONTEXTO)
+        .completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, origen, VINCULO) }), CONTEXTO, VINCULO)
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ConflictException);
       expect((error as ConflictException).message).toBe('Ya existe una cuenta con este correo. Entra con Google para iniciar sesión.');
@@ -335,14 +350,14 @@ describe('Alta con Google en la web', () => {
 
     it('sin promociones: solo terminos y aviso_privacidad', async () => {
       const { auth, prisma } = servicio();
-      await auth.completarRegistroGoogle(cuerpoCompletar(), CONTEXTO);
+      await auth.completarRegistroGoogle(cuerpoCompletar(), CONTEXTO, VINCULO);
       expect(prisma.tx.consentimiento.createMany.mock.calls[0][0].data.map((f: any) => f.tipo)).toEqual(['terminos', 'aviso_privacidad']);
       expect(prisma.tx.usuario.create.mock.calls[0][0].data.recibePromociones).toBe(false);
     });
 
     it('sin documentos en el cuerpo registra la versión vigente (con su hash) de términos y aviso', async () => {
       const { auth, prisma } = servicio();
-      await auth.completarRegistroGoogle(cuerpoCompletar({ documentos: undefined }), CONTEXTO);
+      await auth.completarRegistroGoogle(cuerpoCompletar({ documentos: undefined }), CONTEXTO, VINCULO);
       const filas = prisma.tx.consentimiento.createMany.mock.calls[0][0].data;
       expect(filas.map((f: any) => [f.tipo, f.documentoSlug, f.documentoVersion, f.documentoHash])).toEqual([
         ['terminos', 'terminos', '2.0', HASH_TERMINOS],
@@ -352,13 +367,13 @@ describe('Alta con Google en la web', () => {
 
     it.each([
       ['inválido', () => 'no-es-un-token'],
-      ['alterado', () => firmarTokenRegistroGoogle(DATOS_TOKEN, 'web').slice(0, -3) + 'AAA'],
+      ['alterado', () => firmarTokenRegistroGoogle(DATOS_TOKEN, 'web', VINCULO).slice(0, -3) + 'AAA'],
       ['vencido (más de 15 minutos)', () => firmarEnElPasado(16 * 60 * 1000)],
       ['firmado con JWT_SECRET (token de sesión)', () => new JwtService({ secret: SECRETO }).sign({ proposito: 'registro_google', ...DATOS_TOKEN })],
       ['state de la app (otro propósito)', () => firmarStateApp(CHALLENGE)],
     ])('token %s: 401 y no se crea nada', async (_caso, token) => {
       const { auth, prisma } = servicio();
-      await expect(auth.completarRegistroGoogle(cuerpoCompletar({ token: token() }), CONTEXTO)).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(auth.completarRegistroGoogle(cuerpoCompletar({ token: token() }), CONTEXTO, VINCULO)).rejects.toBeInstanceOf(UnauthorizedException);
       esperaNadaCreado(prisma);
     });
 
@@ -367,22 +382,53 @@ describe('Alta con Google en la web', () => {
       const llave = createHmac('sha256', SECRETO).update('registro-google:v1').digest('hex');
       const firmar = (payload: object) => new JwtService({ secret: llave }).sign(payload, { expiresIn: 600 });
       // Control: con esa llave, el propósito y un origen válidos el token sí vale, así el rechazo de abajo no viene de la firma
-      expect(leerTokenRegistroGoogle(firmar({ proposito: 'registro_google', origen: 'web', ...DATOS_TOKEN }))).toEqual({ ...DATOS_TOKEN, origen: 'web' });
-      expect(leerTokenRegistroGoogle(firmar({ proposito: 'registro_google', origen: 'app', ...DATOS_TOKEN }))).toEqual({ ...DATOS_TOKEN, origen: 'app' });
+      expect(leerTokenRegistroGoogle(firmar({ proposito: 'registro_google', origen: 'web', ...DATOS_TOKEN, vinculo: HUELLA }))).toEqual({ ...DATOS_TOKEN, origen: 'web', huellaVinculo: HUELLA });
+      expect(leerTokenRegistroGoogle(firmar({ proposito: 'registro_google', origen: 'app', ...DATOS_TOKEN }))).toEqual({ ...DATOS_TOKEN, origen: 'app', huellaVinculo: null });
       // Cada payload tiene un solo defecto (el resto es válido): así cada caso prueba una condición
       for (const payload of [
-        { proposito: 'otro', origen: 'web', ...DATOS_TOKEN },
-        { origen: 'web', ...DATOS_TOKEN },
+        { proposito: 'otro', origen: 'web', ...DATOS_TOKEN, vinculo: HUELLA },
+        { origen: 'web', ...DATOS_TOKEN, vinculo: HUELLA },
         // Sin correo (mutante P3f)
-        { proposito: 'registro_google', origen: 'web', googleId: 'google-123' },
+        { proposito: 'registro_google', origen: 'web', googleId: 'google-123', vinculo: HUELLA },
         // Sin origen, o con uno que no es web ni app
-        { proposito: 'registro_google', ...DATOS_TOKEN },
-        { proposito: 'registro_google', origen: 'otro', ...DATOS_TOKEN },
+        { proposito: 'registro_google', ...DATOS_TOKEN, vinculo: HUELLA },
+        { proposito: 'registro_google', origen: 'otro', ...DATOS_TOKEN, vinculo: HUELLA },
       ]) {
         const { auth, prisma } = servicio();
-        await expect(auth.completarRegistroGoogle(cuerpoCompletar({ token: firmar(payload) }), CONTEXTO)).rejects.toBeInstanceOf(UnauthorizedException);
+        await expect(auth.completarRegistroGoogle(cuerpoCompletar({ token: firmar(payload) }), CONTEXTO, VINCULO)).rejects.toBeInstanceOf(UnauthorizedException);
         esperaNadaCreado(prisma);
       }
+    });
+
+    describe('vínculo con el navegador que empezó el alta (login CSRF)', () => {
+      it.each([
+        ['sin la cookie (enlace abierto en otro navegador)', undefined],
+        ['con la cookie de otro navegador', 'otro-vinculo-de-otro-navegador'],
+        ['con la cookie vacía', ''],
+      ])('origen web %s: 401 y no se crea nada ni se entrega sesión', async (_caso, cookie) => {
+        const { auth, prisma, jwt } = servicio();
+        jest.spyOn(jwt, 'sign');
+        const error = await auth.completarRegistroGoogle(cuerpoCompletar(), CONTEXTO, cookie).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(UnauthorizedException);
+        expect((error as UnauthorizedException).message).toContain('mismo navegador');
+        esperaNadaCreado(prisma);
+        expect(jwt.sign).not.toHaveBeenCalled();
+      });
+
+      it('token web sin huella (firmado sin vínculo): 401 aunque traiga una cookie', async () => {
+        const { auth, prisma } = servicio();
+        await expect(
+          auth.completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, 'web') }), CONTEXTO, VINCULO),
+        ).rejects.toBeInstanceOf(UnauthorizedException);
+        esperaNadaCreado(prisma);
+      });
+
+      it('origen app no exige la cookie: no entrega sesión en el navegador', async () => {
+        const { auth } = servicio();
+        await expect(
+          auth.completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, 'app') }), CONTEXTO, undefined),
+        ).resolves.toEqual({ success: true, data: { origen: 'app' } });
+      });
     });
 
     it.each([
@@ -393,7 +439,7 @@ describe('Alta con Google en la web', () => {
     ])('%s (origen %s): 400 y no se crea nada', async (_caso, origen, extra) => {
       const { auth, prisma } = servicio();
       await expect(
-        auth.completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, origen), ...extra }), CONTEXTO),
+        auth.completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, origen, VINCULO), ...extra }), CONTEXTO, VINCULO),
       ).rejects.toBeInstanceOf(BadRequestException);
       esperaNadaCreado(prisma);
     });
@@ -401,7 +447,7 @@ describe('Alta con Google en la web', () => {
     it('origen app con una cuenta que ya existe: 409 y no se crea nada', async () => {
       const { auth, prisma } = servicio(prismaFalso({ existente: { id: 'u-1' } }));
       await expect(
-        auth.completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, 'app') }), CONTEXTO),
+        auth.completarRegistroGoogle(cuerpoCompletar({ token: firmarTokenRegistroGoogle(DATOS_TOKEN, 'app') }), CONTEXTO, VINCULO),
       ).rejects.toBeInstanceOf(ConflictException);
       esperaNadaCreado(prisma);
     });
@@ -409,14 +455,14 @@ describe('Alta con Google en la web', () => {
     it('versión de documento desconocida: 400', async () => {
       const { auth, prisma } = servicio();
       await expect(
-        auth.completarRegistroGoogle(cuerpoCompletar({ documentos: [{ slug: 'terminos', version: '9.9', hash: HASH_TERMINOS }] }), CONTEXTO),
+        auth.completarRegistroGoogle(cuerpoCompletar({ documentos: [{ slug: 'terminos', version: '9.9', hash: HASH_TERMINOS }] }), CONTEXTO, VINCULO),
       ).rejects.toBeInstanceOf(BadRequestException);
       esperaNadaCreado(prisma);
     });
 
     it('si mientras tanto ya existe una cuenta con ese correo o googleId: 409', async () => {
       const { auth, prisma } = servicio(prismaFalso({ existente: { id: 'u-1' } }));
-      await expect(auth.completarRegistroGoogle(cuerpoCompletar(), CONTEXTO)).rejects.toBeInstanceOf(ConflictException);
+      await expect(auth.completarRegistroGoogle(cuerpoCompletar(), CONTEXTO, VINCULO)).rejects.toBeInstanceOf(ConflictException);
       esperaNadaCreado(prisma);
     });
   });
@@ -439,6 +485,7 @@ describe('Alta con Google en la web', () => {
         .useValue(nadie)
         .compile();
       app = modulo.createNestApplication({ logger: false });
+      app.use(cookieParser());
       app.setGlobalPrefix('api');
       app.useGlobalFilters(new HttpExceptionFilter());
       app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
@@ -479,10 +526,20 @@ describe('Alta con Google en la web', () => {
       expect(cuerpo).toMatchObject({ success: true });
       expect(typeof cuerpo.renovarEnSegundos).toBe('number');
       // ip: req.ip (la de la conexión, como el límite de peticiones); el x-forwarded-for de quien pide no cuenta
-      expect(authService.completarRegistroGoogle).toHaveBeenCalledWith(expect.objectContaining({ aceptaTerminos: true }), {
-        ip: '127.0.0.1',
-        userAgent: 'Navegador de prueba',
-      });
+      expect(authService.completarRegistroGoogle).toHaveBeenCalledWith(
+        expect.objectContaining({ aceptaTerminos: true }),
+        { ip: '127.0.0.1', userAgent: 'Navegador de prueba' },
+        undefined,
+      );
+    });
+
+    it('pasa al servicio la cookie mf_registro_google y, tras el alta web, la borra', async () => {
+      const r = await pedir(cuerpoCompletar(), { 'X-Auth-Mode': 'cookie', Cookie: `mf_registro_google=${VINCULO}` });
+      expect(r.status).toBe(200);
+      expect(authService.completarRegistroGoogle.mock.calls[0][2]).toBe(VINCULO);
+      const cookies = r.headers.getSetCookie();
+      expect(cookies.some((c) => c.startsWith('mf_session='))).toBe(true);
+      expect(cookies.some((c) => /^mf_registro_google=;/.test(c) && c.includes('Path=/api/auth/google'))).toBe(true);
     });
 
     it('sin la cabecera: el token va en el cuerpo (Bearer)', async () => {

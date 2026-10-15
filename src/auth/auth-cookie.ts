@@ -75,6 +75,31 @@ export function leerTokenDeCookie(req: Request): string | null {
   return typeof valor === 'string' && valor.length > 0 ? valor : null;
 }
 
+/**
+ * Alta con Google en la web: liga el token de /auth/completar-registro con el navegador que empezó el login. El
+ * callback pone esta cookie con un valor aleatorio y el token lleva solo su huella; POST /auth/google/completar
+ * exige las dos. Así un enlace con el token de otra persona, abierto en otro navegador, no inicia sesión en esa
+ * cuenta (login CSRF). Mismas opciones que la sesión, limitada a las rutas de Google y a la vigencia del token.
+ */
+export const REGISTRO_GOOGLE_COOKIE_NAME = 'mf_registro_google';
+
+function opcionesVinculoRegistroGoogle(): CookieOptions {
+  return { ...opcionesBase(), path: '/api/auth/google' };
+}
+
+export function setVinculoRegistroGoogle(res: Response, valor: string, maxAgeMs: number): void {
+  res.cookie(REGISTRO_GOOGLE_COOKIE_NAME, valor, { ...opcionesVinculoRegistroGoogle(), maxAge: maxAgeMs });
+}
+
+export function clearVinculoRegistroGoogle(res: Response): void {
+  res.clearCookie(REGISTRO_GOOGLE_COOKIE_NAME, opcionesVinculoRegistroGoogle());
+}
+
+export function leerVinculoRegistroGoogle(req: Request): string | undefined {
+  const valor = (req as Request & { cookies?: Record<string, unknown> }).cookies?.[REGISTRO_GOOGLE_COOKIE_NAME];
+  return typeof valor === 'string' ? valor : undefined;
+}
+
 /** true si el cliente pidió la sesión solo como cookie (frontend web). */
 export function pideSesionEnCookie(req: Request): boolean {
   return String(req.headers[AUTH_MODE_HEADER] ?? '').trim().toLowerCase() === 'cookie';
