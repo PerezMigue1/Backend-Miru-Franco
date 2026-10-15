@@ -205,6 +205,16 @@ export class CitasController {
     return this.citasService.cancelar(id, dto, solicitanteDe(req), esPropios(propios));
   }
 
+  /**
+   * PATCH /api/citas/:id/anticipo-en-salon: la clienta cambia a pago en el salón el anticipo que apartó en línea
+   * (solo la dueña; mismas reglas que al agendar).
+   */
+  @Patch(':id/anticipo-en-salon')
+  @Permisos('citas:propias', 'citas:propia')
+  pagarAnticipoEnSalon(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    return this.citasService.pagarAnticipoEnSalon(id, solicitanteDe(req));
+  }
+
   /** POST /api/citas/:id/materiales */
   @Post(':id/materiales')
   @Permisos('citas:escritura', 'citas:asignadas', 'citas:propias')

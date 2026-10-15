@@ -306,5 +306,17 @@
   {"metodo":"POST","ruta":"/devoluciones/:id/recibir-revocacion","rol":"estilista","panel":"/operacion","observado":[]},
   {"metodo":"POST","ruta":"/devoluciones/:id/recibir-revocacion","rol":"empleado","panel":"/operacion","observado":[],"esperado":"denegado","motivo":"Recibir el producto de una revocación reintegra dinero: exige devoluciones:gestionar y el empleado no tiene esa clave"},
   {"metodo":"POST","ruta":"/devoluciones/:id/recibir-revocacion","rol":"becario","panel":"/operacion","observado":[],"esperado":"denegado","motivo":"Recibir el producto de una revocación reintegra dinero: exige devoluciones:gestionar y el becario no tiene esa clave"},
-  {"metodo":"POST","ruta":"/devoluciones/:id/recibir-revocacion","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"La clienta revoca con POST /pedidos/:id/revocar; recibir el producto y reembolsar es del personal (devoluciones:gestionar)"}
+  {"metodo":"POST","ruta":"/devoluciones/:id/recibir-revocacion","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"La clienta revoca con POST /pedidos/:id/revocar; recibir el producto y reembolsar es del personal (devoluciones:gestionar)"},
+  {"metodo":"GET","ruta":"/configuracion-sitio","rol":"admin","panel":"/admin","observado":[200]},
+  {"metodo":"GET","ruta":"/configuracion-sitio/historial","rol":"admin","panel":"/admin","observado":[200]},
+  {"metodo":"GET","ruta":"/configuracion-sitio/permisos","rol":"admin","panel":"/admin","observado":[200]},
+  {"metodo":"GET","ruta":"/reembolsos-pendientes","rol":"admin","panel":"/admin","observado":[200]},
+  {"metodo":"POST","ruta":"/reembolsos-pendientes/:id/reintentar","rol":"admin","panel":"/admin","observado":[200]},
+  {"metodo":"POST","ruta":"/reembolsos-pendientes/:id/marcar-manual","rol":"admin","panel":"/admin","observado":[200]},
+  {"metodo":"GET","ruta":"/configuracion-sitio","rol":"estilista","panel":"/operacion","observado":[],"esperado":"denegado","motivo":"La configuración del sitio es solo del admin (configuracion:editar)"},
+  {"metodo":"GET","ruta":"/configuracion-sitio","rol":"becario","panel":"/operacion","observado":[],"esperado":"denegado","motivo":"La configuración del sitio es solo del admin (configuracion:editar)"},
+  {"metodo":"GET","ruta":"/reembolsos-pendientes","rol":"empleado","panel":"/operacion","observado":[],"esperado":"denegado","motivo":"Reembolsar dinero exige reembolsos:gestionar (solo admin por omisión)"},
+  {"metodo":"GET","ruta":"/reembolsos-pendientes","rol":"cliente","panel":"/cliente","observado":[],"esperado":"denegado","motivo":"La clienta no gestiona reembolsos"},
+  {"metodo":"GET","ruta":"/seguimientos/mios","rol":"cliente","panel":"/cliente","observado":[200]},
+  {"metodo":"PATCH","ruta":"/citas/:id/anticipo-en-salon","rol":"cliente","panel":"/cliente","observado":[200]}
 ]

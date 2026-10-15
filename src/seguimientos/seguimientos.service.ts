@@ -56,6 +56,20 @@ export class SeguimientosService {
     return { success: true, data: seg };
   }
 
+  /** GET /seguimientos/mios: los seguimientos de la propia usuaria (por el id del token). */
+  /** Sin las notas: son apuntes internos del personal sobre la llamada, no un mensaje para la clienta. */
+  async listarMios(usuarioId: string) {
+    const segs = await this.prisma.seguimientoPostServicio.findMany({
+      where: { usuarioId },
+      orderBy: { fechaContacto: 'desc' },
+      select: { id: true, fechaContacto: true, satisfaccion: true, cita: { select: { servicio: { select: { nombre: true } } } } },
+    });
+    return {
+      success: true,
+      data: segs.map((s) => ({ id: s.id, servicio: s.cita?.servicio?.nombre ?? null, fechaContacto: s.fechaContacto, satisfaccion: s.satisfaccion })),
+    };
+  }
+
   async listarPorCliente(clienteId: string) {
     const segs = await this.prisma.seguimientoPostServicio.findMany({
       where: { usuarioId: clienteId },

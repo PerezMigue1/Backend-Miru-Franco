@@ -21,6 +21,7 @@ import {
 } from './documentos-legales';
 import { ItemConsentimientoDto, RegistrarConsentimientosDto } from './dto/registrar-consentimientos.dto';
 import { TX_HOLGADA } from '../pos/salidas-caja';
+import { ocultarFotosDeTitular } from '../galeria/ocultar-fotos';
 
 /** Columnas del CSV de evidencia: todas las de la tabla, con su nombre en la base. */
 const COLUMNAS_CSV: ReadonlyArray<[string, string]> = [
@@ -98,6 +99,8 @@ export class ConsentimientosService {
       if (usuarioId && Object.keys(cambios).length > 0) {
         await tx.usuario.update({ where: { id: usuarioId }, data: cambios });
       }
+      // Revocó la autorización de fotos del resultado: sus fotos dejan de verse en la galería.
+      if (usuarioId && this.revocaFotos(dto.items)) await ocultarFotosDeTitular(tx, usuarioId);
       return resultado;
     }, TX_HOLGADA);
 
@@ -224,6 +227,12 @@ export class ConsentimientosService {
     const documento = { slug: item.documentoSlug, version: item.version, hash: item.hash };
     await validarDocumento(this.prisma, documento);
     return documento;
+  }
+
+  /** true si el último elemento de fotos_resultado del lote es una revocación. */
+  private revocaFotos(items: ItemConsentimientoDto[]): boolean {
+    const fotos = items.filter((item) => item.tipo === 'fotos_resultado');
+    return fotos.length > 0 && fotos[fotos.length - 1].accion === 'revocado';
   }
 
   /** Efecto en la cuenta del último elemento de cada tipo: promociones (en ambos sentidos) y revocar datos de salud. */

@@ -28,7 +28,10 @@ export class ConfiguracionService {
       create: { id: ID_CONFIG, ...CONFIGURACION_POR_DEFECTO },
     });
 
-    return { success: true, data: config };
+    // Horario de atención por día (Configuración del sitio): la agenda lo usa si existe.
+    const horario = await this.prisma.configuracionSitio.findUnique({ where: { clave: 'horario' }, select: { valor: true } });
+    const horarioPorDia = (horario?.valor as { dias?: unknown } | null)?.dias;
+    return { success: true, data: horarioPorDia ? { ...config, horarioPorDia } : config };
   }
 
   async actualizar(dto: ActualizarConfiguracionDto) {

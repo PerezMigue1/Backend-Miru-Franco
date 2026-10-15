@@ -15,6 +15,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ProductosService } from './productos.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -62,8 +63,8 @@ export class ProductosController {
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async crear(@Body() dto: CreateProductoDto) {
-    return this.productosService.crear(dto);
+  async crear(@Body() dto: CreateProductoDto, @CurrentUser() usuario: { id: string }) {
+    return this.productosService.crear(dto, usuario?.id);
   }
 
   /**
@@ -73,8 +74,8 @@ export class ProductosController {
   @Put(':id')
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async actualizar(@Param('id', idPipe) id: number, @Body() dto: UpdateProductoDto) {
-    return this.productosService.actualizar(id, dto);
+  async actualizar(@Param('id', idPipe) id: number, @Body() dto: UpdateProductoDto, @CurrentUser() usuario: { id: string }) {
+    return this.productosService.actualizar(id, dto, usuario?.id);
   }
 
   /**

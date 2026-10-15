@@ -40,7 +40,7 @@ function coincide(fila: any, where: any): boolean {
 /** Cede el turno para que dos operaciones simultáneas se intercalen como en la base real. */
 const ceder = () => new Promise((r) => setImmediate(r));
 
-function montar(iniciales: Partial<CitaMem>[] = []) {
+function montar(iniciales: Partial<CitaMem>[] = [], horarioPorDia?: unknown) {
   const citas: CitaMem[] = iniciales.map((c, i) => ({
     id: i + 1, clienteId: 'cli-1', especialistaId: 'est-1', servicioId: 5, estado: 'pendiente', notas: null,
     fechaHoraInicio: hora('10:00'), fechaHoraFin: hora('11:00'), horaCheckOut: null, ventaItem: null, ...c,
@@ -88,7 +88,7 @@ function montar(iniciales: Partial<CitaMem>[] = []) {
   });
   const config = {
     obtener: jest.fn(async () => ({
-      data: { entradaLunesViernes: '09:00', salidaLunesViernes: '19:00', entradaSabado: '09:00', salidaSabado: '19:00', entradaDomingo: null, salidaDomingo: null },
+      data: { entradaLunesViernes: '09:00', salidaLunesViernes: '19:00', entradaSabado: '09:00', salidaSabado: '19:00', entradaDomingo: null, salidaDomingo: null, ...(horarioPorDia ? { horarioPorDia } : {}) },
     })),
   };
   const eventos = { emit: jest.fn() };
@@ -361,5 +361,38 @@ describe('Crear y reprogramar solo dentro del horario del salón (hora de Méxic
       await servicio.crear(nueva(DIA, '10:00', '10:05'), ADMIN);
       expect(citas).toHaveLength(1);
     });
+  });
+});
+
+describe('Horario por día de Configuración del sitio (la agenda lo usa si existe)', () => {
+  const dias = (miercoles: Record<string, unknown>) =>
+    ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'].map((dia) =>
+      dia === 'miercoles' ? { dia, ...miercoles } : { dia, cerrado: false, abre: '09:00', cierra: '19:00' },
+    );
+  const disponibles = async (horarioPorDia: unknown) => {
+    jest.useFakeTimers({ now: new Date(`${DIA}T06:00:00.000-06:00`), doNotFake: ['setImmediate'] });
+    try {
+      const { servicio } = montar([], horarioPorDia);
+      const r = await servicio.disponibilidad({ especialistaId: 'est-1', fecha: DIA, servicioId: 5 } as any);
+      return r.slots.map((s: { inicio: string }) => s.inicio);
+    } finally {
+      jest.useRealTimers();
+    }
+  };
+
+  it('miércoles con horario propio (12:00 a 14:00): solo ofrece esas horas, no las de lunes a viernes', async () => {
+    const inicios = await disponibles(dias({ cerrado: false, abre: '12:00', cierra: '14:00' }));
+    expect(inicios[0]).toBe(hora('12:00').toISOString());
+    expect(inicios).not.toContain(hora('10:00').toISOString());
+    expect(inicios).not.toContain(hora('14:00').toISOString());
+  });
+
+  it('miércoles cerrado: no ofrece ningún horario', async () => {
+    expect(await disponibles(dias({ cerrado: true, abre: '', cierra: '' }))).toEqual([]);
+  });
+
+  it('sin horario por día (configuración anterior): sigue usando el de lunes a viernes', async () => {
+    const inicios = await disponibles(undefined);
+    expect(inicios[0]).toBe(hora('09:00').toISOString());
   });
 });

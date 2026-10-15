@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Prisma } from '@prisma/client';
 import { createHmac } from 'node:crypto';
@@ -97,6 +97,7 @@ function base(opciones: { citas?: any[]; pagos?: any[]; fallaCita?: number } = {
     },
     movimientoCaja: { create: jest.fn(async ({ data }: any) => { const m = { id: movimientos.length + 1, corteId: null, ...data }; movimientos.push(m); return m; }) },
   };
+  prisma.$executeRaw = jest.fn(async () => 1);
   prisma.$transaction = jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)));
   const eventos = { emit: jest.fn() };
   const mp = {
@@ -178,7 +179,7 @@ describe('Preferencia del anticipo', () => {
     const r = await anticipos.crearPreferencia(7, 'cliente-yo', AHORA);
     expect(r.initPoint).toBe('https://mp.test/pagar');
     const cuerpo = mp.crearPreferencia.mock.calls[0][0] as any;
-    expect(cuerpo.external_reference).toBe('cita-7');
+    expect(cuerpo.external_reference).toBe('dev-cita-7');
     expect(cuerpo.items).toEqual([expect.objectContaining({ quantity: 1, unit_price: 150, currency_id: 'MXN' })]);
     expect(cuerpo.payment_methods.excluded_payment_types).toEqual([{ id: 'ticket' }, { id: 'atm' }]);
     expect(cuerpo.expires).toBe(true);
@@ -198,9 +199,11 @@ describe('Preferencia del anticipo', () => {
     await expect(base({ citas: [citaConAnticipo({ estado: 'cancelada' })] }).anticipos.crearPreferencia(7, 'cliente-yo', AHORA)).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('referencias: cita-<id> se distingue de un pedido', () => {
-    expect(referenciaCita(7)).toBe('cita-7');
+  it('referencias: <entorno>-cita-<id> se distingue de un pedido; la antigua cita-<id> sigue valiendo y la de otro entorno no', () => {
+    expect(referenciaCita(7)).toBe('dev-cita-7');
+    expect(citaDeReferencia('dev-cita-7')).toBe(7);
     expect(citaDeReferencia('cita-7')).toBe(7);
+    expect(citaDeReferencia('prod-cita-7')).toBeNull();
     expect([citaDeReferencia('7'), citaDeReferencia('cita-x'), citaDeReferencia(undefined)]).toEqual([null, null, null]);
   });
 });
@@ -274,7 +277,7 @@ describe('Webhook de anticipos', () => {
     mp.buscarUltimoPago.mockResolvedValue(pagoMp() as any);
     mp.obtenerPago.mockResolvedValue(pagoMp());
     const r = await anticipos.consultarEstado(7, yo('cliente'), AHORA);
-    expect(mp.buscarUltimoPago).toHaveBeenCalledWith('cita-7');
+    expect(mp.buscarUltimoPago).toHaveBeenCalledWith('dev-cita-7');
     expect(r.estado).toBe('aprobado');
   });
 });
@@ -1073,7 +1076,7 @@ describe('Barrida: antes de liberar una cita consulta su pago en Mercado Pago', 
 
     await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [], pagadas: [7] });
 
-    expect(mp.buscarUltimoPago).toHaveBeenCalledWith('cita-7');
+    expect(mp.buscarUltimoPago).toHaveBeenCalledWith('dev-cita-7');
     expect(mp.obtenerPago).toHaveBeenCalledWith('555');
     expect(citas[0]).toMatchObject({ estado: 'confirmada', anticipoPagadoEn: new Date(pagoMp().date_approved) });
     expect(citas[0].motivoCancelacion).toBeUndefined();
@@ -1099,7 +1102,8 @@ describe('Barrida: antes de liberar una cita consulta su pago en Mercado Pago', 
 
     await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [8, 9, 10], pagadas: [7] });
 
-    expect(mp.buscarUltimoPago.mock.calls.map((c: any) => c[0])).toEqual(['cita-7', 'cita-8', 'cita-9', 'cita-10']);
+    // La 8 no tiene pago con la referencia nueva: se busca también la antigua sin prefijo.
+    expect(mp.buscarUltimoPago.mock.calls.map((c: any) => c[0])).toEqual(['dev-cita-7', 'dev-cita-8', 'cita-8', 'dev-cita-9', 'dev-cita-10']);
     expect(mp.obtenerPago.mock.calls).toEqual([['5007']]); // solo se pide el detalle del aprobado
     expect(cita(citas, 7).estado).toBe('confirmada');
     for (const id of [8, 9, 10]) expect(cita(citas, id)).toMatchObject({ estado: 'cancelada', motivoCancelacion: 'anticipo_no_pagado', anticipoPagadoEn: null });
@@ -1202,7 +1206,7 @@ describe('Barrida: antes de liberar una cita consulta su pago en Mercado Pago', 
     pagosEnMp(mp, { 7: pagoDe(7), 8: pagoDe(8), 9: pagoDe(9) });
 
     await expect(barrida.barrer(AHORA)).resolves.toEqual({ canceladas: [7, 9], pagadas: [8] });
-    expect(mp.buscarUltimoPago.mock.calls).toEqual([['cita-8']]);
+    expect(mp.buscarUltimoPago.mock.calls).toEqual([['dev-cita-8']]);
     expect([cita(citas, 7).estado, cita(citas, 8).estado, cita(citas, 9).estado]).toEqual(['cancelada', 'confirmada', 'cancelada']);
 
     // El pago tardío de la 7 llega por webhook: queda en revisión, la cita sigue cancelada.
@@ -1236,5 +1240,46 @@ describe('Barrida: antes de liberar una cita consulta su pago en Mercado Pago', 
     expect(citas[0].motivoCancelacion).toBeUndefined();
     expect(pagos).toHaveLength(1);
     expect(eventos.emit).not.toHaveBeenCalledWith('cita.cancelada', expect.anything());
+  });
+});
+
+// ---------- Separación de entornos (prefijo dev- / prod- en la referencia) ----------
+describe('Anticipos: separación de entornos', () => {
+  const ENV = { ...process.env };
+  beforeEach(() => {
+    process.env.MP_ENTORNO = 'dev';
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    process.env = { ...ENV };
+    jest.restoreAllMocks();
+  });
+  function conWebhook(citas: any[]) {
+    const b = base({ citas });
+    b.prisma.$executeRaw = jest.fn(async () => 1);
+    const pagosEnLinea = new PagosEnLineaService({ pedido: { findUnique: jest.fn() } } as any, {} as any, b.mp as any, b.eventos as any, b.anticipos);
+    return { ...b, pagosEnLinea };
+  }
+
+  it('con el prefijo de su entorno (dev-cita-7): marca el anticipo con candado por pago', async () => {
+    const { pagosEnLinea, mp, citas, prisma } = conWebhook([citaConAnticipo({ creadoEn: minutos(-30) })]);
+    mp.obtenerPago.mockResolvedValue(pagoMp({ external_reference: 'dev-cita-7', date_created: minutos(-10).toISOString() }));
+    await expect(pagosEnLinea.procesarPago('555')).resolves.toBe('pagado');
+    expect(citas[0].anticipoPagadoEn).toBeInstanceOf(Date);
+    expect(prisma.$executeRaw.mock.calls.some((c: unknown[]) => c[1] === 'mercadopago:555')).toBe(true);
+  });
+
+  it('referencia antigua (cita-7) de un pago anterior a la cita: es de otra base y se ignora', async () => {
+    const { pagosEnLinea, mp, citas, pagos } = conWebhook([citaConAnticipo({ creadoEn: minutos(-30) })]);
+    mp.obtenerPago.mockResolvedValue(pagoMp({ external_reference: 'cita-7', date_created: minutos(-600).toISOString() }));
+    await expect(pagosEnLinea.procesarPago('555')).resolves.toBe('ignorado');
+    expect(citas[0].anticipoPagadoEn ?? null).toBeNull();
+    expect(pagos).toHaveLength(0);
+  });
+
+  it('referencia antigua (cita-7) de un pago posterior a la cita: sigue valiendo', async () => {
+    const { pagosEnLinea, mp } = conWebhook([citaConAnticipo({ creadoEn: minutos(-30) })]);
+    mp.obtenerPago.mockResolvedValue(pagoMp({ external_reference: 'cita-7', date_created: minutos(-10).toISOString() }));
+    await expect(pagosEnLinea.procesarPago('555')).resolves.toBe('pagado');
   });
 });

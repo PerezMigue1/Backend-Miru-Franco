@@ -108,8 +108,11 @@ describe('CreateUsuarioDto: términos obligatorios y minimización', () => {
     expect(await mensajes(REGISTRO)).toEqual([]);
   });
 
+  it('sin aceptaTerminos (la app móvil actual no lo manda): pasa; los términos quedan pendientes (compatibilidad temporal)', async () => {
+    expect(await mensajes((({ aceptaTerminos: _t, ...resto }) => resto)(REGISTRO))).toEqual([]);
+  });
+
   it.each([
-    ['sin aceptaTerminos', (({ aceptaTerminos: _t, ...resto }) => resto)(REGISTRO)],
     ['aceptaTerminos false', { ...REGISTRO, aceptaTerminos: false }],
     ['aceptaTerminos "true" (texto)', { ...REGISTRO, aceptaTerminos: 'true' }],
   ])('%s: 400 "Debes aceptar los términos y condiciones"', async (_caso, cuerpo) => {
@@ -178,6 +181,23 @@ describe('UsuariosService.crearUsuario: consentimientos en la misma transacción
       expect(fila).toMatchObject({ ip: CONTEXTO.ip, userAgent: CONTEXTO.userAgent, formulario: 'registro', metodo: 'casilla_marcada' });
       expect(fila).not.toHaveProperty('creadoEn');
     }
+  });
+
+  it('sin aceptaTerminos (app móvil actual): crea la cuenta con aviso_privacidad y SIN fila de terminos, que queda pendiente para su siguiente inicio de sesión', async () => {
+    const { servicio, tx } = escenario();
+    const { aceptaTerminos: _t, ...sinTerminos } = REGISTRO;
+    await servicio.crearUsuario({ ...sinTerminos, documentos: DOCUMENTOS } as any, { contexto: CONTEXTO });
+    const tipos = tx.consentimiento.createMany.mock.calls[0][0].data.map((f: any) => f.tipo);
+    expect(tipos).toEqual(['aviso_privacidad']);
+  });
+
+  it('el alta del admin sigue exigiendo aceptaTerminos: sin el campo responde 400 y no crea nada', async () => {
+    const { servicio, tx } = escenario();
+    const { aceptaTerminos: _t, ...sinTerminos } = REGISTRO;
+    await expect(servicio.crearUsuario(sinTerminos as any, { permitirConfirmado: true, registradoPorId: 'admin-1', contexto: CONTEXTO })).rejects.toThrow(
+      'Debes aceptar los términos y condiciones',
+    );
+    expect(tx.usuario.create).not.toHaveBeenCalled();
   });
 
   it('promociones solo si recibePromociones es true; datos_salud solo con alergias y consentimiento expreso', async () => {

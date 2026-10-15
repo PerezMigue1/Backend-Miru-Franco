@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoCita, EstadoPedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
@@ -14,6 +15,8 @@ import {
   OposicionArcoDto,
 } from './dto/arco.dto';
 import { TX_HOLGADA } from '../pos/salidas-caja';
+import { EVENTO_ARCO_RESPONDIDA, EVENTO_ARCO_SOLICITUD_CREADA } from '../notificaciones/eventos';
+import { ocultarFotosDeTitular } from '../galeria/ocultar-fotos';
 
 /** Plazos de la Ley Federal de Protección de Datos Personales en Posesión de los Particulares (días hábiles). */
 export const DIAS_HABILES_RESPUESTA = 20;
@@ -309,6 +312,8 @@ export class ArcoService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
+    // Avisos en vivo (campana y navegador). Opcional para que las pruebas que no lo usan sigan igual.
+    @Optional() private readonly eventos?: EventEmitter2,
   ) {}
 
   /** POST /arco/solicitudes: el folio lo genera la base. Una sola cancelación abierta por persona. */
@@ -336,6 +341,8 @@ export class ArcoService {
       },
       select: SELECT_SOLICITUD_PROPIA,
     });
+    // Aviso en vivo a los admin: solo folio y tipo, sin la descripción de la titular.
+    this.eventos?.emit(EVENTO_ARCO_SOLICITUD_CREADA, { solicitudId: solicitud.id, folio: solicitud.folio, tipo: dto.tipo });
     return { success: true, data: solicitud };
   }
 
@@ -601,6 +608,8 @@ export class ArcoService {
     const solicitud = { ...actual, ...data } as typeof actual;
 
     if (!ESTADOS_CON_AVISO.includes(dto.estado)) return { success: true, data: solicitud };
+    // Aviso en vivo a la titular: folio y estado, nunca el texto de la respuesta (va en el correo y en su perfil).
+    this.eventos?.emit(EVENTO_ARCO_RESPONDIDA, { solicitudId: solicitud.id, usuarioId: solicitud.usuarioId, folio: solicitud.folio, estado: dto.estado });
     const correoEnviado = await this.avisarRespuesta(solicitud);
     return { success: true, data: solicitud, correoEnviado };
   }
@@ -689,6 +698,8 @@ export class ArcoService {
         },
       });
       await tx.metodoPagoUsuario.deleteMany({ where: { usuarioId } });
+      // Sus fotos autorizadas dejan de verse en la galería (la liga queda como evidencia)
+      await ocultarFotosDeTitular(tx, usuarioId);
       await tx.carritoItem.deleteMany({ where: { usuarioId } });
       await tx.direccionUsuario.updateMany({ where: { usuarioId }, data: DIRECCION_ANONIMA });
       // Sin obligación de conservarse: tokens push y sesiones de la app, preferencias de notificación, cambios de correo
@@ -742,6 +753,8 @@ export class ArcoService {
     }
     const cambios = efectosDeRevocar(tipos);
     if (Object.keys(cambios).length > 0) await tx.usuario.update({ where: { id: usuarioId }, data: cambios });
+    // Revocó las fotos del resultado: sus fotos de la galería dejan de verse
+    if (tipos.includes('fotos_resultado')) await ocultarFotosDeTitular(tx, usuarioId);
   }
 
   /** Correo a la titular con folio, estado y respuesta. true si salió; si falla, se registra sin datos personales. */

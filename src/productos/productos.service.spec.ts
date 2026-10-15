@@ -40,13 +40,15 @@ describe('ProductosService: los datos se guardan tal cual', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('una URL de Cloudinary de una presentación se lee idéntica a como se guardó', async () => {
-    const servicio = new ProductosService(prismaEnMemoria() as any);
+    // La imagen llega como subida propia de productos/ y el servidor la cambia por su URL de Cloudinary.
+    const subidas = { resolverImagenes: jest.fn(async () => [URL_CLOUDINARY]) };
+    const servicio = new ProductosService(prismaEnMemoria() as any, subidas as any);
 
     const { data: creado } = await servicio.crear({
       nombre: 'Fluido Di Goji',
       marca: 'AVYNA',
-      presentaciones: [{ tamanio: '100 ml', imagenes: [URL_CLOUDINARY], precio: 535, stock: 10 }],
-    } as any);
+      presentaciones: [{ tamanio: '100 ml', imagenes: ['productos/panel_' + '0'.repeat(32)], precio: 535, stock: 10 }],
+    } as any, 'u-1');
     const { data: leido } = await servicio.obtenerPorId(creado.id);
 
     expect(leido.presentaciones[0].imagenes).toEqual([URL_CLOUDINARY]);

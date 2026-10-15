@@ -93,6 +93,7 @@ function prismaFalso(opciones: { versionesExtra?: any[] } = {}) {
       deleteMany: jest.fn(soloInsercion),
     },
     usuario: { update: jest.fn(async ({ where, data }: any) => ({ id: where.id, ...data })) },
+    galeriaFoto: { updateMany: jest.fn(async () => ({ count: 0 })) },
     $transaction: jest.fn(async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg))),
   };
   return prisma;
@@ -277,6 +278,24 @@ describe('ConsentimientosService.registrar', () => {
     const { servicio, prisma } = montar();
     await servicio.registrar({ items: [{ tipo: 'promociones', accion: 'revocado' }], formulario: 'banner', visitanteId: 'visitante-123456' }, { usuarioId: null }, CONTEXTO);
     expect(prisma.usuario.update).not.toHaveBeenCalled();
+  });
+
+  it('revocar fotos_resultado oculta en la galería las fotos ligadas a sus autorizaciones, en la misma transacción', async () => {
+    const { servicio, prisma } = montar();
+    await servicio.registrar({ items: [{ tipo: 'fotos_resultado', accion: 'revocado' }], formulario: 'perfil' }, { usuarioId: 'u-1' }, CONTEXTO);
+    expect(prisma.galeriaFoto.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.galeriaFoto.updateMany).toHaveBeenCalledWith({
+      where: { visible: true, consentimiento: { is: { usuarioId: 'u-1' } } },
+      data: { visible: false },
+    });
+  });
+
+  it('aceptar fotos_resultado, revocar otra finalidad o revocar como visitante no tocan la galería', async () => {
+    const { servicio, prisma } = montar();
+    await servicio.registrar({ items: [{ tipo: 'fotos_resultado', accion: 'aceptado' }], formulario: 'perfil' }, { usuarioId: 'u-1' }, CONTEXTO);
+    await servicio.registrar({ items: [{ tipo: 'promociones', accion: 'revocado' }], formulario: 'perfil' }, { usuarioId: 'u-1' }, CONTEXTO);
+    await servicio.registrar({ items: [{ tipo: 'fotos_resultado', accion: 'revocado' }], formulario: 'banner', visitanteId: 'visitante-123456' }, { usuarioId: null }, CONTEXTO);
+    expect(prisma.galeriaFoto.updateMany).not.toHaveBeenCalled();
   });
 });
 

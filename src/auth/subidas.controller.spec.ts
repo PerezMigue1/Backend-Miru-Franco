@@ -2,7 +2,6 @@ import { CanActivate, ExecutionContext, INestApplication, UnauthorizedException,
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import type { AddressInfo } from 'node:net';
-import { firmarParametrosCloudinary } from './firma-cloudinary';
 import { HttpExceptionFilter } from '../common/filters/http-exception.filter';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
@@ -108,26 +107,23 @@ describe('POST /api/subidas/firma', () => {
   });
 
   it('sin sesión: 401', async () => {
-    expect((await pedir({ uso: 'galeria' }, null)).status).toBe(401);
+    expect((await pedir({ uso: 'factura' }, null)).status).toBe(401);
   });
 
-  it('clienta pidiendo galería: 403', async () => {
-    expect((await pedir({ uso: 'galeria' }, 'cliente')).status).toBe(403);
+  it('clienta pidiendo factura: 403', async () => {
+    expect((await pedir({ uso: 'factura' }, 'cliente')).status).toBe(403);
   });
 
   it.each(['estilista', 'empleado', 'becario'])('%s pidiendo factura: 403', async (rol) => {
     expect((await pedir({ uso: 'factura' }, rol)).status).toBe(403);
   });
 
-  it.each(['admin', 'estilista', 'empleado', 'becario'])('%s pidiendo galería: firma de la carpeta galeria', async (rol) => {
-    const res = await pedir({ uso: 'galeria' }, rol);
-    const texto = await res.text();
-    expect(res.status).toBe(200);
-    expect(texto).not.toContain(SECRETO);
-    const { data } = JSON.parse(texto);
-    expect(data.params.folder).toBe('galeria');
-    expect(data.params.public_id).toBeUndefined();
-    expect(data.signature).toBe(firmarParametrosCloudinary(data.params, SECRETO));
+  it.each(['admin', 'estilista', 'empleado', 'becario'])('%s pidiendo galería aquí: 400 (las imágenes van por la subida segura con public_id del servidor)', async (rol) => {
+    for (const cuerpo of [{ uso: 'galeria' }, { uso: 'galeria', ilustrativa: true }]) {
+      const res = await pedir(cuerpo, rol);
+      expect(res.status).toBe(400);
+      expect((await res.json()).message).toMatch(/Subir foto|subida/i);
+    }
   });
 
   it('admin pidiendo factura: firma de la carpeta facturas solo para PDF', async () => {
@@ -146,7 +142,7 @@ describe('POST /api/subidas/firma', () => {
 
   it('a la solicitud 31 dentro de un minuto responde 429', async () => {
     const estados: number[] = [];
-    for (let i = 0; i < 31; i++) estados.push((await pedir({ uso: 'galeria' }, 'admin')).status);
+    for (let i = 0; i < 31; i++) estados.push((await pedir({ uso: 'factura' }, 'admin')).status);
     expect(estados).toEqual([...Array(30).fill(200), 429]);
   });
 });

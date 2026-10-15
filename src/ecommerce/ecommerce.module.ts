@@ -25,6 +25,9 @@ import { NotificacionesController } from './notificaciones/notificaciones.contro
 import { NotificacionesService } from './notificaciones/notificaciones.service';
 import { PagosEnLineaController, RetornoAppPedidoController } from './mercadopago/pagos-en-linea.controller';
 import { PagosEnLineaService } from './mercadopago/pagos-en-linea.service';
+import { VerificacionPagosService } from './mercadopago/verificacion-pagos.service';
+import { ReembolsosPendientesController } from './reembolsos/reembolsos-pendientes.controller';
+import { ReembolsosPendientesService } from './reembolsos/reembolsos-pendientes.service';
 import { MercadoPagoClient } from './mercadopago/mercadopago.client';
 import { ApartadosService } from './pedidos/apartados.service';
 import { AnticiposModule } from '../citas/anticipos/anticipos.module';
@@ -32,6 +35,7 @@ import { AnticiposModule } from '../citas/anticipos/anticipos.module';
 @Module({
   imports: [NotificacionesModule, AnticiposModule],
   controllers: [
+    ReembolsosPendientesController,
     DireccionesUsuarioController,
     PedidoItemsController,
     PedidosController,
@@ -60,6 +64,8 @@ import { AnticiposModule } from '../citas/anticipos/anticipos.module';
     DevolucionesService,
     NotificacionesService,
     PagosEnLineaService,
+    VerificacionPagosService,
+    ReembolsosPendientesService,
     MercadoPagoClient,
     ApartadosService,
   ],

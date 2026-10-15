@@ -130,6 +130,8 @@ export function filasConsentimientoAlta(datos: {
   contexto: ContextoPeticion;
   /** Alta hecha por el admin: su id en cada fila. */
   registradoPorId?: string | null;
+  /** La app móvil actual no manda aceptaTerminos: sin fila de términos, queda pendiente (compatibilidad temporal). */
+  sinTerminos?: boolean;
 }) {
   const comun = {
     usuarioId: datos.usuarioId,
@@ -141,7 +143,7 @@ export function filasConsentimientoAlta(datos: {
   };
   const aviso = datos.documentos['aviso-privacidad'];
   return [
-    filaConsentimiento({ ...comun, tipo: 'terminos', documento: datos.documentos.terminos }),
+    ...(datos.sinTerminos ? [] : [filaConsentimiento({ ...comun, tipo: 'terminos', documento: datos.documentos.terminos })]),
     filaConsentimiento({ ...comun, tipo: 'aviso_privacidad', documento: aviso }),
     ...(datos.recibePromociones ? [filaConsentimiento({ ...comun, tipo: 'promociones', documento: aviso })] : []),
     ...(datos.datosSalud ? [filaConsentimiento({ ...comun, tipo: 'datos_salud', documento: aviso })] : []),

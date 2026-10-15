@@ -26,6 +26,7 @@ function montar(pedidoInicial: Partial<{ estado: EstadoPedido; metodoPago: strin
   const pagos: Record<string, unknown>[] = [];
   const historial: Record<string, unknown>[] = [];
   const tx = {
+    $executeRaw: jest.fn(async () => 1),
     pedido: {
       updateMany: jest.fn(async ({ where, data }: { where: { id: number; estado: EstadoPedido }; data: Record<string, unknown> }) => {
         if (where.id !== pedido.id || pedido.estado !== where.estado) return { count: 0 };
@@ -157,7 +158,7 @@ describe('Pago en línea: crear la preferencia de Mercado Pago', () => {
       { id: '7', title: 'Shampoo 250 ml', quantity: 2, unit_price: 150, currency_id: 'MXN' },
       { id: '9', title: 'Mascarilla', quantity: 1, unit_price: 200, currency_id: 'MXN' },
     ]);
-    expect(cuerpo.external_reference).toBe('42');
+    expect(cuerpo.external_reference).toBe('dev-42');
     expect(cuerpo.back_urls).toEqual({
       success: 'https://mirufranco.test/cliente/tienda-online/confirmacion?pedidoId=42',
       failure: 'https://mirufranco.test/cliente/tienda-online/confirmacion?pedidoId=42',

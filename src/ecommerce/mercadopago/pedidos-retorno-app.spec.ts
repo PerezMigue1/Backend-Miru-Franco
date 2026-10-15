@@ -121,7 +121,7 @@ describe('Pedido: regreso a la app después de pagar', () => {
       const cuerpo = await preferencia('?origen=app');
       expect(cuerpo.back_urls).toEqual({ success: RETORNO, failure: RETORNO, pending: RETORNO });
       expect(cuerpo.auto_return).toBe('approved');
-      expect(cuerpo.external_reference).toBe('42');
+      expect(cuerpo.external_reference).toBe('dev-42');
     });
   });
 

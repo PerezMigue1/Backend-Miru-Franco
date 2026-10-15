@@ -3,13 +3,17 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventarioService } from '../inventario/inventario.service';
 import { ConfiguracionService } from '../configuracion/configuracion.service';
+import { horarioDeDiaSemana } from '../configuracion-sitio/horario.util';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
 import { normalizarRangoFechas } from '../common/utils/fecha-rango.util';
 import { diaEnMexico, rangoDiaMexico } from '../common/utils/zona-mexico';
@@ -22,6 +26,7 @@ import { MaterialesCitaDto } from './dto/materiales-cita.dto';
 import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
 import { PorCobrarDto } from './dto/por-cobrar.dto';
+import { AnticiposCitasService } from './anticipos/anticipos-citas.service';
 import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante } from '../common/utils/permisos-citas.util';
 import {
   ANTES_PAGO_SALON_MS,
@@ -57,11 +62,14 @@ const OFFSET_MEXICO = '-06:00';
 
 @Injectable()
 export class CitasService {
+  private readonly logger = new Logger(CitasService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventarioService: InventarioService,
     private readonly configuracionService: ConfiguracionService,
     private readonly eventEmitter: EventEmitter2,
+    @Optional() private readonly anticipos?: AnticiposCitasService,
   ) {}
 
   // ─── helpers ────────────────────────────────────────────────────────────────
@@ -141,7 +149,12 @@ export class CitasService {
 
     let entrada: string | null;
     let salida: string | null;
-    if (diaSemana === 0) {
+    // Horario por día de Configuración del sitio (fuente del sitio y de la agenda); sin él, el de configuracion_salon.
+    const porDia = horarioDeDiaSemana((config as { horarioPorDia?: unknown }).horarioPorDia, diaSemana);
+    if (porDia !== undefined) {
+      entrada = porDia?.entrada ?? null;
+      salida = porDia?.salida ?? null;
+    } else if (diaSemana === 0) {
       entrada = config.entradaDomingo;
       salida = config.salidaDomingo;
     } else if (diaSemana === 6) {
@@ -821,6 +834,77 @@ export class CitasService {
     });
 
     return { success: true, data: actualizada };
+  }
+
+  /**
+   * La clienta elige pagar en el salón el anticipo de una cita que apartó para pagar en línea (confirmación o
+   * detalle). Mismas reglas que al agendar con "pagar en el salón": a más tardar 15 min antes del inicio, sin faltas
+   * en los últimos 6 meses y una sola cita por pagar en el salón. El plazo pasa a 15 min antes del inicio.
+   */
+  async pagarAnticipoEnSalon(id: number, solicitante: Solicitante) {
+    const cita = await this.prisma.cita.findUnique({ where: { id } });
+    // Solo la dueña; la ajena responde 404 para no revelar que existe.
+    if (!cita || cita.clienteId !== solicitante.id) throw new NotFoundException(`Cita ${id} no encontrada`);
+    const ahora = new Date();
+    if (
+      !requiereAnticipo(cita) ||
+      cita.anticipoPagadoEn ||
+      cita.anticipoEnSalon ||
+      !(ESTADOS_CITA_VIGENTE as readonly string[]).includes(cita.estado) ||
+      !cita.anticipoVenceEn ||
+      cita.anticipoVenceEn <= ahora
+    ) {
+      throw new ConflictException('El anticipo de esta cita ya no se puede cambiar a pago en el salón.');
+    }
+    const limiteSalon = new Date(cita.fechaHoraInicio.getTime() - ANTES_PAGO_SALON_MS);
+    if (limiteSalon.getTime() - ahora.getTime() < MARGEN_MINIMO_ANTICIPO_MS) {
+      throw new BadRequestException('Ya no da tiempo de pagar en el salón. Paga el anticipo en línea.');
+    }
+    const desde = new Date(ahora);
+    desde.setMonth(desde.getMonth() - MESES_FALTAS_SIN_SALON);
+    const faltas = await this.prisma.cita.count({
+      where: {
+        clienteId: cita.clienteId,
+        fechaHoraInicio: { gte: desde },
+        OR: [{ estado: 'no_asistio' }, { estado: 'cancelada', motivoCancelacion: MOTIVO_ANTICIPO_NO_PAGADO, anticipoEnSalon: true }],
+      },
+    });
+    if (faltas > 0) throw new BadRequestException('Para esta cita, el anticipo se paga en línea.');
+    await this.revisarPagoEnLineaAntesDelSalon(id);
+    return this.prisma.$transaction(async (tx) => {
+      // Mismo candado por clienta que al agendar: dos solicitudes a la vez no dejan dos citas por pagar en el salón.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cita-cli:${cita.clienteId}`}))`;
+      const porPagar = await tx.cita.count({
+        where: { clienteId: cita.clienteId, id: { not: id }, anticipoEnSalon: true, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 }, estado: { in: [...ESTADOS_CITA_VIGENTE] } },
+      });
+      if (porPagar > 0) throw new BadRequestException('Ya tienes una cita por pagar en el salón. Paga su anticipo o paga esta en línea.');
+      const cambiada = await tx.cita.updateMany({
+        where: { id, anticipoPagadoEn: null, anticipoEnSalon: false },
+        data: { anticipoEnSalon: true, anticipoVenceEn: limiteSalon },
+      });
+      if (cambiada.count !== 1) throw new ConflictException('El anticipo de esta cita ya no se puede cambiar a pago en el salón.');
+      return { success: true, citaId: id, anticipoEnSalon: true, anticipoVenceEn: limiteSalon };
+    }, OPCIONES_TX_HORARIO);
+  }
+
+  /**
+   * La clienta pudo pagar en Mercado Pago sin que el aviso llegara: si el pago está aprobado se aplica y no se
+   * cambia (no paga dos veces); si está en proceso, tampoco. Sin respuesta de Mercado Pago no se cambia: no se
+   * puede confirmar que no pagó. Sin Mercado Pago configurado no hay pagos en línea que revisar.
+   */
+  private async revisarPagoEnLineaAntesDelSalon(id: number) {
+    if (!this.anticipos || !process.env.MP_ACCESS_TOKEN) return;
+    let enLinea: Awaited<ReturnType<AnticiposCitasService['revisarPagoEnLinea']>>;
+    try {
+      enLinea = await this.anticipos.revisarPagoEnLinea(id);
+    } catch (e) {
+      this.logger.warn(`No se pudo revisar en Mercado Pago el anticipo de la cita ${id}: ${e instanceof Error ? e.message : e}`);
+      throw new ServiceUnavailableException('No pudimos confirmar con Mercado Pago si ya pagaste el anticipo. Intenta de nuevo en unos minutos.');
+    }
+    if (enLinea === 'pagado') throw new ConflictException('Tu anticipo ya se pagó en línea: no tienes que pagarlo en el salón.');
+    if (enLinea === 'en_proceso') {
+      throw new ConflictException('Tienes un pago en línea en proceso para este anticipo. Espera su confirmación antes de cambiar a pago en el salón.');
+    }
   }
 
   async cancelar(id: number, dto: CancelarCitaDto, solicitante: Solicitante, propios = false) {

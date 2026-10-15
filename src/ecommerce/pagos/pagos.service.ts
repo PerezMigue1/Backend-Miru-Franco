@@ -1,4 +1,5 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPago, Pago, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
@@ -7,12 +8,15 @@ import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
 import { bloquearReembolsosDelPedido } from '../devoluciones/devoluciones.service';
 import { CreatePagoDto } from './dto/create-pago.dto';
 import { UpdatePagoDto } from './dto/update-pago.dto';
+import { EVENTO_REEMBOLSO_REALIZADO } from '../../notificaciones/eventos';
 
 @Injectable()
 export class PagosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: EcommerceAccessService,
+    // Aviso en vivo del reembolso a la clienta. Opcional para que las pruebas que no lo usan sigan igual.
+    @Optional() private readonly eventos?: EventEmitter2,
   ) {}
 
   /**
@@ -154,6 +158,23 @@ export class PagosService {
     return { success: true, data };
   }
 
+  /** Aviso en vivo a la dueña del pedido (campana y navegador). Nunca lanza: el reembolso ya quedó guardado. */
+  private async avisarReembolso(pago: Pago): Promise<void> {
+    if (!this.eventos || pago.pedidoId === null) return;
+    try {
+      const pedido = await this.prisma.pedido.findUnique({ where: { id: pago.pedidoId }, select: { usuarioId: true } });
+      this.eventos.emit(EVENTO_REEMBOLSO_REALIZADO, {
+        usuarioId: pedido?.usuarioId ?? null,
+        entidadTipo: 'pedido',
+        entidadId: pago.pedidoId,
+        monto: Number(pago.monto),
+        referencia: `pago-${pago.id}`,
+      });
+    } catch {
+      // Sin aviso en vivo; el reembolso sigue hecho y la clienta lo ve en su pedido.
+    }
+  }
+
   /**
    * Reembolso de un cobro: solo desde aprobado o en revisión, una sola vez. En la misma transacción se guarda
    * cuándo y, si el cobro entró en efectivo a la caja del salón, la salida de caja de quien reembolsa (se
@@ -198,6 +219,7 @@ export class PagosService {
         }
         return tx.pago.findUnique({ where: { id: pago.id } });
       }, TX_HOLGADA);
+      await this.avisarReembolso(pago);
       return { success: true, data };
     } catch (e) {
       // Dos reembolsos simultáneos: la llave única de la salida (pago_id) rechaza el segundo.

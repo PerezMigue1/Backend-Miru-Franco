@@ -7,7 +7,9 @@ import {
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPago, EstadoPedido, Prisma } from '@prisma/client';
+import { EVENTO_REEMBOLSO_REALIZADO } from '../../notificaciones/eventos';
 import { PrismaService } from '../../prisma/prisma.service';
 import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
 import { incrementarStockPorLineas } from '../common/pedido-inventario.util';
@@ -117,7 +119,25 @@ export class DevolucionesService {
     private readonly prisma: PrismaService,
     // Opcional como en AnticiposBarridaService: solo lo usan las revocaciones de compra pagadas en línea.
     @Optional() private readonly mercadoPago?: MercadoPagoClient,
+    // Aviso en vivo del reembolso a la clienta (campana y navegador). Opcional como el anterior.
+    @Optional() private readonly eventos?: EventEmitter2,
   ) {}
+
+  /** Aviso en vivo a la clienta de un reembolso ya aprobado. Nunca lanza: el reembolso ya quedó guardado. */
+  private avisarReembolso(devolucion: { id: number; monto: Prisma.Decimal | null; pedido: { id: number; usuarioId: string | null } | null } | null) {
+    if (!this.eventos || !devolucion?.pedido) return;
+    try {
+      this.eventos.emit(EVENTO_REEMBOLSO_REALIZADO, {
+        usuarioId: devolucion.pedido.usuarioId,
+        entidadTipo: 'pedido',
+        entidadId: devolucion.pedido.id,
+        monto: Number(devolucion.monto ?? 0),
+        referencia: `devolucion-${devolucion.id}`,
+      });
+    } catch {
+      // Sin aviso en vivo; la clienta lo ve en sus devoluciones.
+    }
+  }
 
   /** Claves del rol en permisos_rol; el admin siempre tiene todo. */
   private async puedeGestionar(usuarioId: string): Promise<boolean> {
@@ -311,7 +331,7 @@ export class DevolucionesService {
    * transacción la salida de caja de quien aprueba, que se descuenta en su siguiente corte.
    */
   async aprobar(id: number, resueltoPorId: string, dto: AprobarDevolucionDto) {
-    return this.prisma.$transaction(async (tx) => {
+    const resultado = await this.prisma.$transaction(async (tx) => {
       const row = await tx.devolucion.findUnique({ where: { id }, select: { id: true, tipo: true, monto: true, pedidoId: true, origen: true } });
       if (!row) throw new NotFoundException('Devolución no encontrada');
       // Aprobarla aquí no regresaría el stock ni reembolsaría por Mercado Pago.
@@ -346,6 +366,8 @@ export class DevolucionesService {
       const data = await tx.devolucion.findUnique({ where: { id }, include: INCLUDE_LISTA });
       return { success: true, data };
     }, TX_HOLGADA);
+    if (resultado.data?.tipo === 'reembolso') this.avisarReembolso(resultado.data);
+    return resultado;
   }
 
   /**
@@ -394,8 +416,9 @@ export class DevolucionesService {
    * Pago falla responde 503 y nada cambia, así que se puede reintentar.
    */
   async recibirRevocacion(id: number, quienId: string, dto: RecibirRevocacionDto) {
-    const { reembolso } = await this.completarRevocacion(id, quienId, { nota: dto.nota });
+    const { reembolso, aplicada } = await this.completarRevocacion(id, quienId, { nota: dto.nota });
     const data = await this.prisma.devolucion.findUnique({ where: { id }, include: INCLUDE_LISTA });
+    if (aplicada) this.avisarReembolso(data);
     return { success: true, data, reembolso };
   }
 

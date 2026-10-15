@@ -97,6 +97,15 @@ export class NotificacionesService {
     return { success: true, data };
   }
 
+  /** Marca en bloque las no leídas del usuario y guarda cuándo se leyeron. */
+  async marcarTodasLeidas(usuarioId: string) {
+    const { count } = await this.prisma.notificacion.updateMany({
+      where: { usuarioId, leida: false },
+      data: { leida: true, leidaEn: new Date() },
+    });
+    return { success: true, count };
+  }
+
   async eliminar(id: string, solicitanteId: string) {
     const row = await this.prisma.notificacion.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Notificación no encontrada');

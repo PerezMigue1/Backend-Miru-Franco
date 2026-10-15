@@ -1,5 +1,6 @@
 import { diasHabilesEntre, sumarDiasHabiles } from '../../common/utils/dias-habiles.util';
 import { esDiaValido, inicioDiaMexico } from '../../common/utils/zona-mexico';
+import { leerReferencia, referenciaCitaPago } from '../../ecommerce/mercadopago/referencia-pago';
 
 /**
  * Anticipo de citas: al agendar en línea un servicio con anticipo_monto > 0, la cita guarda la foto del
@@ -19,8 +20,11 @@ export const ANTES_PAGO_SALON_MS = MINUTOS_ANTES_PAGO_SALON * 60 * 1000;
 export const PAGOS_ANTICIPO = ['linea', 'salon'] as const;
 export type PagoAnticipo = (typeof PAGOS_ANTICIPO)[number];
 
-/** external_reference de Mercado Pago: los pedidos usan su id; las citas, "cita-<id>". */
-export const referenciaCita = (citaId: number) => `cita-${citaId}`;
+/**
+ * external_reference de Mercado Pago de un anticipo: "<entorno>-cita-<id>" (ver referencia-pago.ts). Las antiguas
+ * "cita-<id>" sin prefijo se siguen aceptando.
+ */
+export const referenciaCita = (citaId: number) => referenciaCitaPago(citaId);
 /**
  * Anticipo pagado desde la app móvil: Mercado Pago regresa a RUTA_RETORNO_APP (pública, bajo /api) y
  * esta redirige al deep link fijo con solo el id de la cita, igual que DEEP_LINK_APP en el login con Google.
@@ -33,10 +37,10 @@ export const RUTA_RETORNO_APP_PEDIDO = 'pagos-en-linea/mercadopago/retorno-app';
 export const DEEP_LINK_PEDIDO_APP = 'appmirufranco://pedido';
 export const deepLinkPedidoApp = (pedidoId: number) => `${DEEP_LINK_PEDIDO_APP}/${pedidoId}?retorno=mp`;
 
+/** Id de la cita de una referencia de este entorno o antigua sin prefijo; null si no es de una cita de aquí. */
 export function citaDeReferencia(referencia: string | null | undefined): number | null {
-  const m = /^cita-(\d+)$/.exec(String(referencia ?? ''));
-  const id = m ? Number(m[1]) : NaN;
-  return Number.isInteger(id) && id > 0 ? id : null;
+  const ref = leerReferencia(referencia);
+  return ref && ref.tipo === 'cita' && ref.origen !== 'otro_entorno' ? ref.id : null;
 }
 
 /** La cita sigue apartando su horario: se le puede aplicar el anticipo. */
@@ -56,13 +60,22 @@ export const METODO_PAGO_DE_ANTICIPO: Record<MetodoAnticipoSalon, string> = {
 
 export const centavos = (monto: unknown) => Math.round(Number(monto) * 100);
 
+/** Fecha guardada en Configuración del sitio (reglas.anticiposDesde); null o undefined: se usa la variable. */
+let anticiposDesdeConfiguracion: string | null | undefined;
+
+/** La pone ConfiguracionSitioService al arrancar, cada minuto y al guardar la sección de reglas. */
+export function establecerAnticiposDesdeConfiguracion(valor: string | null | undefined): void {
+  anticiposDesdeConfiguracion = valor;
+}
+
 /**
- * ANTICIPOS_DESDE: 'YYYY-MM-DD' (inicio de ese día en México) o fecha ISO completa, igual que APARTADOS_DESDE.
- * Sin esta variable la barrida no libera citas, así que tampoco se pide anticipo al agendar (si no, la
- * cita quedaría apartada para siempre).
+ * Inicio de los anticipos: la fecha de Configuración del sitio y, si no hay, ANTICIPOS_DESDE (respaldo).
+ * 'YYYY-MM-DD' (inicio de ese día en México) o fecha ISO completa, igual que APARTADOS_DESDE. Sin ninguna
+ * de las dos la barrida no libera citas, así que tampoco se pide anticipo al agendar (si no, la cita
+ * quedaría apartada para siempre).
  */
 export function anticiposDesde(): Date | null {
-  const valor = (process.env.ANTICIPOS_DESDE ?? '').trim();
+  const valor = (anticiposDesdeConfiguracion || process.env.ANTICIPOS_DESDE || '').trim();
   if (!valor) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) return esDiaValido(valor) ? inicioDiaMexico(valor) : null;
   const fecha = new Date(valor);

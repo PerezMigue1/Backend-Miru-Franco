@@ -53,7 +53,7 @@ describe('Correo del código de cambio de correo', () => {
       expect(send).toHaveBeenCalledTimes(1);
       const [{ to, subject, html }] = send.mock.calls[0];
       expect(to).toBe(CORREO_ANTERIOR);
-      expect(subject).toBe('Tu correo cambió - Miru Franco');
+      expect(subject).toBe('Tu correo cambió - Mirú Franco Salón Beauty');
       expect(html).toContain(FECHA);
       expect(html).toContain('hora del centro de México');
       expect(html).toMatch(/Si no fuiste tú/);

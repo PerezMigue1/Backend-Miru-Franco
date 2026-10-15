@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsuariosController } from './usuarios.controller';
 import { UsuariosService } from './usuarios.service';
 import { EmailModule } from '../email/email.module';
+import { SubidasModule } from '../subidas/subidas.module';
 import { SecurityModule } from '../common/services/security.module';
 import { JWT_TTL_SEGUNDOS } from '../auth/jwt-ttl';
 import { jwtSecretObligatorio } from '../auth/jwt-secret';
@@ -11,6 +12,7 @@ import { jwtSecretObligatorio } from '../auth/jwt-secret';
 @Module({
   imports: [
     EmailModule,
+    SubidasModule,
     SecurityModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -116,34 +116,39 @@ model Usuario {
   perfilEmpleado               PerfilEmpleado?
   quejas                       Queja[]
   seguimientos                 SeguimientoPostServicio[]
-  citasComoCliente             Cita[]                    @relation("CitasComoCliente")
-  citasComoEspecialista        Cita[]                    @relation("CitasComoEspecialista")
-  ventasComoCajero             VentaLocal[]              @relation("VentasComoCajero")
-  ventasComoCliente            VentaLocal[]              @relation("VentasComoCliente")
-  cortesCaja                   CorteCaja[]               @relation("CortesComoCajero")
-  pagosCobrados                Pago[]                    @relation("PagosCobrados")
-  itemsComoEspecialista        VentaLocalItem[]          @relation("ItemsComoEspecialista")
+  citasComoCliente             Cita[]                        @relation("CitasComoCliente")
+  citasComoEspecialista        Cita[]                        @relation("CitasComoEspecialista")
+  ventasComoCajero             VentaLocal[]                  @relation("VentasComoCajero")
+  ventasComoCliente            VentaLocal[]                  @relation("VentasComoCliente")
+  cortesCaja                   CorteCaja[]                   @relation("CortesComoCajero")
+  pagosCobrados                Pago[]                        @relation("PagosCobrados")
+  itemsComoEspecialista        VentaLocalItem[]              @relation("ItemsComoEspecialista")
   participacionesEnVentas      VentaItemParticipante[]
-  comisionesActualizadas       ComisionServicio[]        @relation("ComisionesActualizadas")
+  comisionesActualizadas       ComisionServicio[]            @relation("ComisionesActualizadas")
   comprasRegistradas           Compra[]
   cotizaciones                 Cotizacion[]
   facturasCreadas              Factura[]
-  solicitudesPermiso           SolicitudPermiso[]        @relation("SolicitudesComoSolicitante")
-  solicitudesResueltas         SolicitudPermiso[]        @relation("SolicitudesComoResolutor")
-  asistencias                  RegistroAsistencia[]      @relation("AsistenciaComoEmpleado")
-  asistenciasCorregidas        RegistroAsistencia[]      @relation("AsistenciaComoCorrector")
+  solicitudesPermiso           SolicitudPermiso[]            @relation("SolicitudesComoSolicitante")
+  solicitudesResueltas         SolicitudPermiso[]            @relation("SolicitudesComoResolutor")
+  asistencias                  RegistroAsistencia[]          @relation("AsistenciaComoEmpleado")
+  asistenciasCorregidas        RegistroAsistencia[]          @relation("AsistenciaComoCorrector")
   preferenciasNotificacion     PreferenciaNotificacion[]
   dispositivosPush             DispositivoPush[]
   sesionesMoviles              SesionMovil[]
-  movimientosCajaRegistrados   MovimientoCaja[]          @relation("MovimientosCajaRegistrados")
-  devolucionesResueltas        Devolucion[]              @relation("DevolucionesResueltas")
-  consentimientos              Consentimiento[]          @relation("ConsentimientosDelTitular")
-  consentimientosRegistrados   Consentimiento[]          @relation("ConsentimientosRegistradosPor")
-  solicitudesArco              SolicitudArco[]           @relation("SolicitudesArcoTitular")
-  solicitudesArcoAtendidas     SolicitudArco[]           @relation("SolicitudesArcoAtendidas")
-  observacionesRecibidas       ObservacionCliente[]      @relation("ObservacionesDelCliente")
-  observacionesEscritas        ObservacionCliente[]      @relation("ObservacionesDelAutor")
+  movimientosCajaRegistrados   MovimientoCaja[]              @relation("MovimientosCajaRegistrados")
+  devolucionesResueltas        Devolucion[]                  @relation("DevolucionesResueltas")
+  consentimientos              Consentimiento[]              @relation("ConsentimientosDelTitular")
+  consentimientosRegistrados   Consentimiento[]              @relation("ConsentimientosRegistradosPor")
+  solicitudesArco              SolicitudArco[]               @relation("SolicitudesArcoTitular")
+  solicitudesArcoAtendidas     SolicitudArco[]               @relation("SolicitudesArcoAtendidas")
+  observacionesRecibidas       ObservacionCliente[]          @relation("ObservacionesDelCliente")
+  observacionesEscritas        ObservacionCliente[]          @relation("ObservacionesDelAutor")
   solicitudesCambioCorreo      SolicitudCambioCorreo[]
+  reembolsosRegistrados        HistorialReembolso[]          @relation("HistorialReembolsosUsuario")
+  configuracionActualizada     ConfiguracionSitio[]          @relation("ConfiguracionSitioActualizadaPor")
+  historialConfiguracion       HistorialConfiguracionSitio[] @relation("HistorialConfiguracionSitioUsuario")
+  fotosGaleriaSubidas          GaleriaFoto[]                 @relation("GaleriaFotosSubidas")
+  firmasSubida                 FirmaSubida[]
 
   @@index([activo])
   @@index([email])
@@ -305,13 +310,15 @@ model Pago {
   actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
 
   /// Un pago es de un pedido o del anticipo de una cita (CHECK en la base: exactamente uno de los dos).
-  pedido       Pedido?         @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
-  pedidoId     Int?            @map("pedido_id")
-  cita         Cita?           @relation(fields: [citaId], references: [id], onDelete: Restrict)
-  citaId       Int?            @map("cita_id")
-  devoluciones Devolucion[]
+  pedido              Pedido?              @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  pedidoId            Int?                 @map("pedido_id")
+  cita                Cita?                @relation(fields: [citaId], references: [id], onDelete: Restrict)
+  citaId              Int?                 @map("cita_id")
+  devoluciones        Devolucion[]
   /// Salida de efectivo que registró su reembolso en caja (solo cobros en efectivo del salón).
-  salidaCaja   MovimientoCaja?
+  salidaCaja          MovimientoCaja?
+  /// Reintentos y reembolsos manuales hechos desde Admin > Reembolsos pendientes (solo inserción).
+  historialReembolsos HistorialReembolso[]
 
   // Quién cobró en el salón y en qué corte de caja entró (cobros de pedidos para recoger).
   cobradoPor   Usuario?   @relation("PagosCobrados", fields: [cobradoPorId], references: [id], onDelete: SetNull)
@@ -695,6 +702,7 @@ model Servicio {
   citas              Cita[]
   ventasLocalItems   VentaLocalItem[]
   comision           ComisionServicio?
+  fotosGaleria       GaleriaFoto[]
 
   @@index([categoria])
   @@index([activo])
@@ -741,6 +749,11 @@ model PerfilEmpleado {
   comisionPorcentaje Decimal?  @map("comision_porcentaje") @db.Decimal(5, 2)
   /// Gana el monto fijo de comisiones_servicio en los servicios en que participa (auxiliar).
   recibeComisiones   Boolean   @default(false) @map("recibe_comisiones")
+  /// Sección "Nuestro equipo" del sitio (Admin > Contenido > Equipo). Por omisión no se muestra.
+  mostrarEnSitio     Boolean   @default(false) @map("mostrar_en_sitio")
+  fotoPublica        String?   @map("foto_publica")
+  bioPublica         String?   @map("bio_publica") @db.Text
+  ordenPublico       Int       @default(0) @map("orden_publico")
   activo             Boolean   @default(true)
   creadoEn           DateTime  @default(now()) @map("creado_en")
   actualizadoEn      DateTime  @updatedAt @map("actualizado_en")
@@ -1246,6 +1259,9 @@ model Consentimiento {
   /// Sin acciones que modifiquen filas: la tabla es de solo inserción y su trigger rechaza UPDATE.
   registradoPor Usuario? @relation("ConsentimientosRegistradosPor", fields: [registradoPorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  /// Fotos de la galería publicadas con esta autorización (tipo fotos_resultado).
+  fotosGaleria GaleriaFoto[]
+
   @@index([usuarioId])
   @@index([registradoPorId])
   @@index([visitanteId])
@@ -1330,4 +1346,134 @@ model SolicitudCambioCorreo {
 
   @@index([usuarioId])
   @@map("solicitudes_cambio_correo")
+}
+
+/// Reintentos y reembolsos manuales de pagos en revisión (Admin > Reembolsos pendientes). Solo inserción (trigger).
+model HistorialReembolso {
+  id         Int      @id @default(autoincrement())
+  /// reintento | reintento_fallido | manual
+  accion     String
+  /// Referencia del reembolso (id de Mercado Pago o la que anota el admin en un reembolso manual).
+  referencia String?
+  nota       String?  @db.Text
+  creadoEn   DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  pago      Pago     @relation(fields: [pagoId], references: [id], onDelete: Restrict)
+  pagoId    Int      @map("pago_id")
+  usuario   Usuario? @relation("HistorialReembolsosUsuario", fields: [usuarioId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  usuarioId String?  @map("usuario_id")
+
+  @@index([pagoId])
+  @@map("historial_reembolsos")
+}
+
+/// Configuración del sitio que edita la dueña (Admin > Configuración del sitio): una fila por sección.
+model ConfiguracionSitio {
+  clave            String   @id
+  valor            Json
+  /// Qué guarda la sección (salon, redes, horario, contenido, reglas).
+  tipo             String
+  actualizadoEn    DateTime @default(now()) @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+  actualizadoPor   Usuario? @relation("ConfiguracionSitioActualizadaPor", fields: [actualizadoPorId], references: [id], onDelete: SetNull)
+  actualizadoPorId String?  @map("actualizado_por_id")
+
+  @@map("configuracion_sitio")
+}
+
+/// Cada cambio de la configuración del sitio y de los permisos por rol: valor anterior, nuevo, quién y cuándo. Solo inserción.
+model HistorialConfiguracionSitio {
+  id               Int      @id @default(autoincrement())
+  clave            String
+  valorAnterior    Json?    @map("valor_anterior")
+  valorNuevo       Json     @map("valor_nuevo")
+  creadoEn         DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+  actualizadoPor   Usuario? @relation("HistorialConfiguracionSitioUsuario", fields: [actualizadoPorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actualizadoPorId String?  @map("actualizado_por_id")
+
+  @@index([clave, creadoEn])
+  @@map("historial_configuracion_sitio")
+}
+
+/// Galería pública del sitio (Operaciones > Galería).
+model GaleriaFoto {
+  id                        Int      @id @default(autoincrement())
+  url                       String
+  /// public_id de Cloudinary de una foto subida desde el panel (null en las sembradas desde los servicios).
+  publicId                  String?  @unique @map("public_id")
+  alt                       String
+  orden                     Int      @default(0)
+  visible                   Boolean  @default(false)
+  ilustrativa               Boolean  @default(false)
+  /// true: quien la publica declara que no aparece ninguna persona identificable. null: foto anterior sin revisar.
+  sinPersonasIdentificables Boolean? @map("sin_personas_identificables")
+  creadoEn                  DateTime @default(now()) @map("creado_en")
+  actualizadoEn             DateTime @updatedAt @map("actualizado_en")
+
+  servicio         Servicio?       @relation(fields: [servicioId], references: [id], onDelete: SetNull)
+  servicioId       Int?            @map("servicio_id")
+  /// Autorización de la clienta que aparece (consentimiento fotos_resultado aceptado).
+  consentimiento   Consentimiento? @relation(fields: [consentimientoId], references: [id], onDelete: Restrict)
+  consentimientoId BigInt?         @map("consentimiento_id")
+  subidoPor        Usuario?        @relation("GaleriaFotosSubidas", fields: [subidoPorId], references: [id], onDelete: SetNull)
+  subidoPorId      String?         @map("subido_por_id")
+
+  @@index([visible, orden])
+  @@index([servicioId])
+  @@index([consentimientoId])
+  @@map("galeria_fotos")
+}
+
+/// Firma de una subida de imagen (galería y formularios). El servidor genera el public_id dentro de la carpeta del
+/// uso (galeria/, servicios/, productos/, equipo/, promociones/ o sitio/); la imagen solo se registra con una firma
+/// propia, vigente y sin usar. Las vencidas sin usar se limpian cada hora.
+model FirmaSubida {
+  id          Int       @id @default(autoincrement())
+  uso         String
+  publicId    String    @unique @map("public_id")
+  ilustrativa Boolean   @default(false)
+  creadoEn    DateTime  @default(now()) @map("creado_en")
+  venceEn     DateTime  @map("vence_en")
+  usadaEn     DateTime? @map("usada_en")
+
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String  @map("usuario_id")
+
+  @@index([usuarioId])
+  @@index([usadaEn, venceEn])
+  @@map("firmas_subida")
+}
+
+/// Promociones y banners del sitio (Admin > Contenido > Promociones).
+model Promocion {
+  id            Int       @id @default(autoincrement())
+  titulo        String
+  descripcion   String    @db.Text
+  imagenUrl     String?   @map("imagen_url")
+  /// Ruta interna a la que lleva ("/cliente/servicios-citas", por ejemplo).
+  enlace        String?
+  vigenteDesde  DateTime? @map("vigente_desde")
+  vigenteHasta  DateTime? @map("vigente_hasta")
+  activa        Boolean   @default(false)
+  /// Se muestra como banner en el inicio.
+  destacada     Boolean   @default(false)
+  orden         Int       @default(0)
+  creadoEn      DateTime  @default(now()) @map("creado_en")
+  actualizadoEn DateTime  @updatedAt @map("actualizado_en")
+
+  @@index([activa, orden])
+  @@map("promociones")
+}
+
+/// Preguntas frecuentes del sitio (Admin > Contenido > Preguntas frecuentes).
+model PreguntaFrecuente {
+  id            Int      @id @default(autoincrement())
+  pregunta      String
+  respuesta     String   @db.Text
+  orden         Int      @default(0)
+  visible       Boolean  @default(true)
+  creadoEn      DateTime @default(now()) @map("creado_en")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  @@index([visible, orden])
+  @@map("preguntas_frecuentes")
 }

@@ -120,7 +120,7 @@ describe('Anticipo: regreso a la app después de pagar', () => {
       const cuerpo = await preferencia('?origen=app');
       expect(cuerpo.back_urls).toEqual({ success: RETORNO, failure: RETORNO, pending: RETORNO });
       expect(cuerpo.auto_return).toBe('approved');
-      expect(cuerpo.external_reference).toBe('cita-7');
+      expect(cuerpo.external_reference).toBe('dev-cita-7');
     });
   });
 

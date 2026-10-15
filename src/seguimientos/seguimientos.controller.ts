@@ -7,6 +7,7 @@ import {
   Post,
   Put,
   Query,
+  Request,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -25,6 +26,12 @@ export class SeguimientosController {
   @Permisos('seguimientos:lectura')
   listar(@Query() query: ListSeguimientosDto) {
     return this.seguimientosService.listar(query);
+  }
+
+  /** GET /api/seguimientos/mios: cualquier sesión (la clienta en su portal); solo los suyos, por el id del token. */
+  @Get('mios')
+  listarMios(@Request() req: any) {
+    return this.seguimientosService.listarMios(req.user.id);
   }
 
   @Get('cliente/:clienteId')

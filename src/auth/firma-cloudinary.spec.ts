@@ -242,7 +242,6 @@ describe('crearFirma por uso', () => {
  * trabajo del salón o una imagen ilustrativa; las ilustrativas van a una carpeta con /ilustrativas/ en la URL.
  */
 describe('POST /api/subidas/firma con la bandera ilustrativa', () => {
-  const ahora = Date.UTC(2026, 9, 7, 12, 0, 0);
 
   it('usoDeFirma: galería con ilustrativa=true firma la carpeta de ilustrativas; sin la bandera, galería', () => {
     expect(usoDeFirma({ uso: 'galeria', ilustrativa: true })).toBe('ilustrativa');
@@ -264,19 +263,10 @@ describe('POST /api/subidas/firma con la bandera ilustrativa', () => {
     expect(Object.values(errores[0].constraints ?? {})).toEqual(['ilustrativa debe ser verdadero o falso']);
   });
 
-  it('el controlador firma la carpeta de ilustrativas para el personal de galería', () => {
+  it('el controlador ya no firma carpetas de galería: las imágenes van por la subida segura (400 en español)', () => {
     ponerVariables(completas);
-    jest.useFakeTimers({ now: ahora });
-    try {
-      const controller = new SubidasController();
-      const r = controller.firma({ id: 'estilista-1', rol: 'estilista' }, { uso: 'galeria', ilustrativa: true });
-      expect(r.success).toBe(true);
-      expect(r.data.params.folder).toBe('galeria/ilustrativas');
-      expect(r.data.signature).toBe(firmarParametrosCloudinary(r.data.params, SECRETO));
-      const real = controller.firma({ id: 'estilista-1', rol: 'estilista' }, { uso: 'galeria' });
-      expect(real.data.params.folder).toBe('galeria');
-    } finally {
-      jest.useRealTimers();
-    }
+    const controller = new SubidasController();
+    expect(() => controller.firma({ id: 'estilista-1', rol: 'estilista' }, { uso: 'galeria', ilustrativa: true })).toThrow(BadRequestException);
+    expect(() => controller.firma({ id: 'admin-1', rol: 'admin' }, { uso: 'galeria' })).toThrow(/Subir foto/);
   });
 });

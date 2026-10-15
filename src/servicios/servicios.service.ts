@@ -1,9 +1,13 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
 import { sanitizeInput, containsSQLInjection, sanitizeForLogging } from '../common/utils/security.util';
 import { anticipoAplica } from '../citas/anticipos/anticipos.util';
+import { ImagenesSubidasService } from '../subidas/imagenes-subidas.service';
+
+/** URLs guardadas en servicios.imagen (JSON): solo los textos. */
+const imagenesGuardadas = (valor: unknown): string[] => (Array.isArray(valor) ? valor.filter((u): u is string => typeof u === 'string') : []);
 
 /**
  * `anticipoAplica`: si hoy se pide anticipo al agendar este servicio en línea (misma regla que la creación de
@@ -13,7 +17,16 @@ const conAnticipoAplica = <T extends { anticipoMonto?: unknown }>(servicio: T) =
 
 @Injectable()
 export class ServiciosService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly subidas?: ImagenesSubidasService,
+  ) {}
+
+  /** Imágenes del formulario: solo las que ya tenía o subidas propias (nunca una URL escrita a mano). */
+  private imagenes(): ImagenesSubidasService {
+    if (!this.subidas) throw new ServiceUnavailableException('La subida de imágenes no está disponible por ahora.');
+    return this.subidas;
+  }
 
   /**
    * @param incluirInactivos Solo debe ser true desde la ruta admin protegida
@@ -43,7 +56,7 @@ export class ServiciosService {
         especialistas: {
           include: {
             usuario: {
-              select: { id: true, nombre: true, email: true },
+              select: { id: true, nombre: true },
             },
           },
         },
@@ -90,7 +103,7 @@ export class ServiciosService {
     return ['*', 'servicios:lectura', 'servicios:escritura'].some((c) => claves.includes(c));
   }
 
-  async crear(dto: CreateServicioDto) {
+  async crear(dto: CreateServicioDto, usuarioId?: string) {
     const nombreSanitizado = sanitizeInput(dto.nombre);
     const categoriaSanitizada = sanitizeInput(dto.categoria);
     const descripcionSanitizada = dto.descripcion ? sanitizeInput(dto.descripcion) : null;
@@ -106,7 +119,8 @@ export class ServiciosService {
       throw new BadRequestException('Datos inválidos.');
     }
 
-    const imagen = Array.isArray(dto.imagen) ? dto.imagen : [];
+    // Imágenes nuevas: solo subidas propias de servicios/ (el botón "Subir foto"); una URL escrita a mano es 400.
+    const imagen = Array.isArray(dto.imagen) && dto.imagen.length ? await this.imagenes().resolverImagenes(usuarioId ?? '', 'servicios', dto.imagen) : [];
     const incluye = Array.isArray(dto.incluye) ? dto.incluye : [];
     const recomendaciones = Array.isArray(dto.recomendaciones) ? dto.recomendaciones : [];
 
@@ -142,7 +156,7 @@ export class ServiciosService {
       include: {
         productosAsociados: { include: { producto: true } },
         especialistas: {
-          include: { usuario: { select: { id: true, nombre: true, email: true } } },
+          include: { usuario: { select: { id: true, nombre: true } } },
         },
       },
     });
@@ -154,7 +168,7 @@ export class ServiciosService {
     };
   }
 
-  async actualizar(id: number, dto: UpdateServicioDto) {
+  async actualizar(id: number, dto: UpdateServicioDto, usuarioId?: string) {
     const existe = await this.prisma.servicio.findUnique({ where: { id } });
     if (!existe) {
       throw new NotFoundException('Servicio no encontrado');
@@ -183,7 +197,14 @@ export class ServiciosService {
       data.categoria = v;
     }
     if (dto.requiereEvaluacion !== undefined) data.requiereEvaluacion = dto.requiereEvaluacion;
-    if (dto.imagen !== undefined) data.imagen = dto.imagen;
+    // Las imágenes que ya tenía se conservan igual; las nuevas solo como subidas propias de servicios/.
+    if (dto.imagen !== undefined) {
+      const actuales = imagenesGuardadas(existe.imagen);
+      const pedidas = Array.isArray(dto.imagen) ? dto.imagen : [];
+      data.imagen = pedidas.every((u) => actuales.includes(u))
+        ? pedidas
+        : await this.imagenes().resolverImagenes(usuarioId ?? '', 'servicios', pedidas, actuales);
+    }
     if (dto.incluye !== undefined) data.incluye = dto.incluye;
     if (dto.recomendaciones !== undefined) data.recomendaciones = dto.recomendaciones;
     if (dto.activo !== undefined) data.activo = dto.activo;
@@ -214,7 +235,7 @@ export class ServiciosService {
       include: {
         productosAsociados: { include: { producto: true } },
         especialistas: {
-          include: { usuario: { select: { id: true, nombre: true, email: true } } },
+          include: { usuario: { select: { id: true, nombre: true } } },
         },
       },
     });

@@ -9,6 +9,7 @@ import {
   MessageEvent,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -85,6 +86,12 @@ export class NotificacionesController {
   @Roles('admin')
   crearAdmin(@Body() dto: CreateNotificacionDto) {
     return this.service.crearAdmin(dto);
+  }
+
+  /** Campana: marca como leídas todas las no leídas de quien tiene la sesión (solo las propias). */
+  @Patch('leidas')
+  marcarTodasLeidas(@CurrentUser() user: { id: string }) {
+    return this.service.marcarTodasLeidas(user.id);
   }
 
   @Put(':id')

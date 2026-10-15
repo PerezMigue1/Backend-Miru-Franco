@@ -9,6 +9,8 @@ export interface PagoMercadoPago {
   currency_id: string;
   external_reference: string | null;
   date_approved: string | null;
+  /** Cuándo se creó el pago; con una referencia antigua sin prefijo, debe ser posterior al pedido o la cita. */
+  date_created?: string | null;
 }
 
 const API = 'https://api.mercadopago.com';

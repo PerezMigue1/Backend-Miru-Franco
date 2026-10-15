@@ -48,6 +48,7 @@ const AHORA = new Date('2026-10-14T18:00:00.000Z');
 const ESCRITURAS_TX: Record<string, string[]> = {
   usuario: ['update'],
   consentimiento: ['create'],
+  galeriaFoto: ['updateMany'],
   solicitudArco: ['create', 'update', 'updateMany'],
   metodoPagoUsuario: ['deleteMany'],
   carritoItem: ['deleteMany'],
@@ -720,6 +721,11 @@ describe('ArcoService: bandeja del admin', () => {
       await servicio(prisma).actualizarAdmin(4, { estado: 'atendida', revocar: ['fotos_resultado'] }, 'admin-1', CONTEXTO_ADMIN, AHORA);
       expect(prisma.tx.consentimiento.create).toHaveBeenCalledTimes(1);
       expect(prisma.tx.usuario.update).not.toHaveBeenCalled();
+      // Sus fotos de la galería ligadas a la autorización dejan de verse, en la misma transacción
+      expect(prisma.tx.galeriaFoto.updateMany).toHaveBeenCalledWith({
+        where: { visible: true, consentimiento: { is: { usuarioId: 'u-1' } } },
+        data: { visible: false },
+      });
     });
 
     it('oposición atendida: aplica la oposición a promociones igual que POST /arco/oposicion, por tx', async () => {
@@ -843,6 +849,8 @@ describe('ArcoService.ejecutarCancelacion: anonimiza y conserva lo fiscal y lega
     const { tx } = prisma;
     const esperadas: Array<[string, string, unknown]> = [
       ['metodoPagoUsuario', 'deleteMany', { where: { usuarioId: 'u-1' } }],
+      // Cuenta cancelada: sus fotos autorizadas dejan de verse en la galería
+      ['galeriaFoto', 'updateMany', { where: { visible: true, consentimiento: { is: { usuarioId: 'u-1' } } }, data: { visible: false } }],
       ['carritoItem', 'deleteMany', { where: { usuarioId: 'u-1' } }],
       ['dispositivoPush', 'deleteMany', { where: { usuarioId: 'u-1' } }],
       ['solicitudCambioCorreo', 'deleteMany', { where: { usuarioId: 'u-1' } }],

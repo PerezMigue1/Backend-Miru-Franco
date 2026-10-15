@@ -1,9 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import { UsuariosService } from './usuarios.service';
+import { MENSAJE_URL_A_MANO, esPublicIdDe } from '../subidas/imagenes-subidas';
 
 // Rutas que guardan usuarios.foto desde el cliente:
 // PATCH /api/auth/me y PUT /api/usuarios/:id/perfil → actualizarPerfilUsuario
-// PUT /api/usuarios/:id (admin) → actualizarUsuario
+// PUT /api/usuarios/:id (admin) → actualizarUsuario: solo la foto que ya tenía, quitarla o una subida propia de
+// usuarios/ con "Subir foto" (la regla completa de la subida se prueba en src/subidas).
 const NUBE = 'nube-de-prueba';
 const PROPIA = `https://res.cloudinary.com/${NUBE}/image/upload/v1/avatares/usuario_u-1.jpg`;
 const GOOGLE = 'https://lh3.googleusercontent.com/a/foto-de-google=s96-c';
@@ -33,14 +35,20 @@ function servicioCon(fotoGuardada: string | null) {
   };
   // El guardado va en una transacción (consentimientos-edicion.spec.ts): aquí la transacción usa el mismo cliente
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
-  const servicio = new UsuariosService(prisma as any, {} as any, {} as any, {} as any);
-  return { servicio, prisma };
+  // Subida segura simulada: un public_id propio de su carpeta se cambia por su URL; cualquier otra cosa es 400.
+  const subidas = {
+    resolverImagen: jest.fn(async (_quien: string, uso: any, valor: string) => {
+      if (esPublicIdDe(uso, valor)) return `https://res.cloudinary.com/${NUBE}/image/upload/v1/${valor}.jpg`;
+      throw new BadRequestException(MENSAJE_URL_A_MANO);
+    }),
+  };
+  const servicio = new UsuariosService(prisma as any, {} as any, {} as any, {} as any, subidas as any);
+  return { servicio, prisma, subidas };
 }
 
 describe.each([
   ['actualizarPerfilUsuario', (s: UsuariosService, foto: unknown) => s.actualizarPerfilUsuario('u-1', { foto })],
-  ['actualizarUsuario (admin)', (s: UsuariosService, foto: unknown) => s.actualizarUsuario('u-1', { foto }, ADMIN)],
-])('Validación de foto en %s', (_nombre, actualizar) => {
+])('Validación de foto en %s (perfil propio, igual que antes)', (_nombre, actualizar) => {
   it('rechaza con 400 una URL ajena y no guarda nada', async () => {
     const { servicio, prisma } = servicioCon(GOOGLE);
     const intento = actualizar(servicio, AJENA);
@@ -83,6 +91,49 @@ describe.each([
   });
 });
 
+describe('Validación de foto en actualizarUsuario (admin): solo subidas propias', () => {
+  const actualizar = (s: UsuariosService, foto: unknown) => s.actualizarUsuario('u-1', { foto }, ADMIN);
+
+  it.each([
+    ['una URL ajena', AJENA],
+    ['una imagen de Cloudinary escrita a mano', PROPIA],
+  ])('rechaza con 400 %s y no guarda nada', async (_caso, foto) => {
+    const { servicio, prisma } = servicioCon(GOOGLE);
+    const intento = actualizar(servicio, foto);
+    await expect(intento).rejects.toBeInstanceOf(BadRequestException);
+    await expect(intento).rejects.toThrow(MENSAJE_URL_A_MANO);
+    expect(prisma.usuario.update).not.toHaveBeenCalled();
+  });
+
+  it('una subida propia de usuarios/ se guarda con la URL que arma el servidor', async () => {
+    const { servicio, prisma, subidas } = servicioCon(GOOGLE);
+    const publicId = 'usuarios/panel_' + '0'.repeat(32);
+    await actualizar(servicio, publicId);
+    expect(subidas.resolverImagen).toHaveBeenCalledWith('admin-1', 'usuarios', publicId, GOOGLE);
+    expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBe(`https://res.cloudinary.com/${NUBE}/image/upload/v1/${publicId}.jpg`);
+  });
+
+  it('acepta reenviar la foto que ya tiene guardada', async () => {
+    const { servicio, prisma } = servicioCon(GOOGLE);
+    await actualizar(servicio, GOOGLE);
+    expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBe(GOOGLE);
+  });
+
+  it('null quita la foto sin consultar la foto guardada', async () => {
+    const { servicio, prisma } = servicioCon(GOOGLE);
+    await actualizar(servicio, null);
+    expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBeNull();
+    expect(prisma.usuario.findUnique).not.toHaveBeenCalledWith(CONSULTA_FOTO);
+  });
+
+  it('sin foto en el cuerpo no consulta ni valida', async () => {
+    const { servicio, prisma } = servicioCon(GOOGLE);
+    await actualizar(servicio, undefined);
+    expect(prisma.usuario.findUnique).not.toHaveBeenCalledWith(CONSULTA_FOTO);
+    expect(prisma.usuario.update).toHaveBeenCalled();
+  });
+});
+
 describe('Cadena vacía', () => {
   it('en el perfil se guarda como null (como antes)', async () => {
     const { servicio, prisma } = servicioCon(GOOGLE);
@@ -90,9 +141,9 @@ describe('Cadena vacía', () => {
     expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBeNull();
   });
 
-  it('en el admin se guarda tal cual (como antes)', async () => {
+  it('en el admin quita la foto (se guarda null, igual que en el perfil)', async () => {
     const { servicio, prisma } = servicioCon(GOOGLE);
     await servicio.actualizarUsuario('u-1', { foto: '' }, ADMIN);
-    expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBe('');
+    expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBeNull();
   });
 });

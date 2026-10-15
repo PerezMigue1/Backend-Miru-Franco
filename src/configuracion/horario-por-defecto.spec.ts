@@ -16,6 +16,7 @@ function prismaConUpsert() {
   const config = { id: 1, ...HORARIO_REAL, entradaDomingo: null, salidaDomingo: null, tarifaHoraExtra: 0, margenGraciaMinutos: 15 };
   return {
     configuracionSalon: { upsert: jest.fn().mockResolvedValue(config) },
+    configuracionSitio: { findUnique: jest.fn().mockResolvedValue(null) },
     registroAsistencia: { findMany: jest.fn().mockResolvedValue([]) },
     usuario: { findMany: jest.fn().mockResolvedValue([]) },
   };

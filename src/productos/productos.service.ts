@@ -1,14 +1,41 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { CreatePresentacionDto } from './dto/presentacion.dto';
 import { sanitizeInput, containsSQLInjection, sanitizeForLogging } from '../common/utils/security.util';
+import { ImagenesSubidasService } from '../subidas/imagenes-subidas.service';
 
 @Injectable()
 export class ProductosService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly subidas?: ImagenesSubidasService,
+  ) {}
+
+  /** Imágenes del formulario: solo las que ya tenía o subidas propias (nunca una URL escrita a mano). */
+  private imagenes(): ImagenesSubidasService {
+    if (!this.subidas) throw new ServiceUnavailableException('La subida de imágenes no está disponible por ahora.');
+    return this.subidas;
+  }
+
+  /**
+   * Imágenes de cada presentación: las que ya tenía el producto se conservan igual (también al pasar una a otra
+   * presentación); las nuevas solo como subidas propias de productos/. Una URL escrita a mano es 400.
+   */
+  private async resolverImagenesPresentaciones<T extends { imagenes?: string[] }>(items: T[], usuarioId: string, actuales: string[]): Promise<T[]> {
+    const resueltas: T[] = [];
+    for (const p of items) {
+      const pedidas = Array.isArray(p.imagenes) ? p.imagenes : [];
+      if (pedidas.every((u) => actuales.includes(u))) {
+        resueltas.push(p);
+      } else {
+        resueltas.push({ ...p, imagenes: await this.imagenes().resolverImagenes(usuarioId, 'productos', pedidas, actuales) });
+      }
+    }
+    return resueltas;
+  }
 
   /**
    * Elimina bytes nulos en cualquier string del payload (incluye objetos/arreglos anidados).
@@ -232,7 +259,7 @@ export class ProductosService {
     return ['*', 'servicios:escritura'].some((c) => claves.includes(c));
   }
 
-  async crear(dto: CreateProductoDto) {
+  async crear(dto: CreateProductoDto, usuarioId?: string) {
     // Sanitizar datos de entrada
     const nombreSanitizado = sanitizeInput(dto.nombre);
     const marcaSanitizada = sanitizeInput(dto.marca);
@@ -263,7 +290,9 @@ export class ProductosService {
       ? dto.caracteristicas.map(c => sanitizeInput(c))
       : [];
 
-    const { presentaciones } = dto;
+    const presentaciones = dto.presentaciones?.length
+      ? await this.resolverImagenesPresentaciones(dto.presentaciones, usuarioId ?? '', [])
+      : dto.presentaciones;
 
     const producto = await this.prisma.producto.create({
       data: {
@@ -305,7 +334,7 @@ export class ProductosService {
     };
   }
 
-  async actualizar(id: number, dto: UpdateProductoDto) {
+  async actualizar(id: number, dto: UpdateProductoDto, usuarioId?: string) {
     dto = this.sanitizeNullBytesDeep(dto);
 
     const existe = await this.prisma.producto.findUnique({ where: { id } });
@@ -365,7 +394,11 @@ export class ProductosService {
     if (dto.crueltyFree !== undefined) dataActualizada.crueltyFree = dto.crueltyFree;
     if (dto.activo !== undefined) dataActualizada.activo = dto.activo;
 
-    const presentacionesInput = dto.presentaciones;
+    let presentacionesInput = dto.presentaciones;
+    if (presentacionesInput?.length) {
+      const guardadas = await this.prisma.productoPresentacion.findMany({ where: { productoId: id }, select: { imagenes: true } });
+      presentacionesInput = await this.resolverImagenesPresentaciones(presentacionesInput, usuarioId ?? '', guardadas.flatMap((g) => g.imagenes ?? []));
+    }
 
     const prismaData = { ...dataActualizada };
     const prismaDataSanitizada = this.sanitizeNullBytesDeep(prismaData);

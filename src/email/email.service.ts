@@ -1,7 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 import { escaparHtml } from '../common/utils/security.util';
+import { ConfiguracionSitioService } from '../configuracion-sitio/configuracion-sitio.service';
+
+/** Nombre registrado del salón (Términos y Aviso): se usa si la configuración no responde. */
+const NOMBRE_SALON_REGISTRADO = 'Mirú Franco Salón Beauty';
+const MARCADOR_SALON = '{{salon}}';
+/** El nombre en el remitente ("Nombre <correo>"): sin signos de dirección ni saltos de línea, nunca otra dirección. */
+const nombreParaRemitente = (nombre: string) => nombre.replace(/[<>"@,;\\\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim() || NOMBRE_SALON_REGISTRADO;
+
+type ParametrosCorreo = { to: string; from: string; subject: string; html: string };
 
 @Injectable()
 export class EmailService {
@@ -9,7 +18,10 @@ export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private resend: Resend | null = null;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    @Optional() private readonly configuracionSitio?: ConfiguracionSitioService,
+  ) {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     if (apiKey) {
       this.resend = new Resend(apiKey);
@@ -21,20 +33,20 @@ export class EmailService {
   async sendOTPEmail(correo: string, codigoOTP: string): Promise<void> {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
 
     if (!apiKey || !fromEmail || !this.resend) {
       throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
     }
 
     try {
-      const { error } = await this.resend.emails.send({
+      const { error } = await this.enviarConMarca({
         to: correo,
         from: `${fromName} <${fromEmail}>`,
-        subject: 'Código de activación - Miru Franco',
+        subject: 'Código de activación - {{salon}}',
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Bienvenido a Miru Franco Salón Beauty</h2>
+            <h2 style="color: #710014;">Bienvenido a {{salon}}</h2>
             <p>Tu código de verificación es:</p>
             <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
               <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${codigoOTP}</h1>
@@ -57,21 +69,21 @@ export class EmailService {
   async sendPasswordResetEmail(correo: string, resetLink: string, expiresInMinutes: number = 10): Promise<void> {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
 
     if (!apiKey || !fromEmail || !this.resend) {
       throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
     }
 
     try {
-      const { error } = await this.resend.emails.send({
+      const { error } = await this.enviarConMarca({
         to: correo,
         from: `${fromName} <${fromEmail}>`,
-        subject: 'Recuperar Contraseña - Miru Franco',
+        subject: 'Recuperar Contraseña - {{salon}}',
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: center; margin-bottom: 30px;">
-              <h2 style="color: #710014; margin: 0;">Miru Franco Salón Beauty</h2>
+              <h2 style="color: #710014; margin: 0;">{{salon}}</h2>
             </div>
             
             <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
@@ -134,11 +146,11 @@ export class EmailService {
   async sendCodigoCambioPasswordEmail(correo: string, codigo: string, vigenciaMinutos: number): Promise<void> {
     await this.enviarCorreoCuenta(
       correo,
-      'Código para cambiar tu contraseña - Miru Franco',
+      'Código para cambiar tu contraseña - {{salon}}',
       `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #710014;">Cambio de contraseña</h2>
-            <p>Para cambiar la contraseña de tu cuenta de Miru Franco, ingresa este código:</p>
+            <p>Para cambiar la contraseña de tu cuenta de {{salon}}, ingresa este código:</p>
             <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
               <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${codigo}</h1>
             </div>
@@ -157,11 +169,11 @@ export class EmailService {
   async sendCodigoCambioCorreoEmail(correoNuevo: string, codigo: string, vigenciaMinutos: number): Promise<void> {
     await this.enviarCorreoCuenta(
       correoNuevo,
-      'Código para cambiar tu correo - Miru Franco',
+      'Código para cambiar tu correo - {{salon}}',
       `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #710014;">Cambio de correo</h2>
-            <p>Para usar este correo en tu cuenta de Miru Franco, ingresa este código:</p>
+            <p>Para usar este correo en tu cuenta de {{salon}}, ingresa este código:</p>
             <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
               <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${escaparHtml(codigo)}</h1>
             </div>
@@ -180,11 +192,11 @@ export class EmailService {
   async sendCodigoCorreoActualEmail(correoActual: string, codigo: string, correoNuevo: string, vigenciaMinutos: number): Promise<void> {
     await this.enviarCorreoCuenta(
       correoActual,
-      'Confirma el cambio de tu correo - Miru Franco',
+      'Confirma el cambio de tu correo - {{salon}}',
       `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #710014;">Confirma el cambio de tu correo</h2>
-            <p>Pidieron cambiar el correo de tu cuenta de Miru Franco a <strong>${escaparHtml(correoNuevo)}</strong>. Si fuiste tú, ingresa este código junto con el que llegó a tu nuevo correo:</p>
+            <p>Pidieron cambiar el correo de tu cuenta de {{salon}} a <strong>${escaparHtml(correoNuevo)}</strong>. Si fuiste tú, ingresa este código junto con el que llegó a tu nuevo correo:</p>
             <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
               <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${escaparHtml(codigo)}</h1>
             </div>
@@ -198,15 +210,15 @@ export class EmailService {
 
   /** Aviso después de cambiar la contraseña: fecha y hora, y cómo recuperar la cuenta. Sin datos sensibles. */
   async sendAvisoPasswordCambiadaEmail(correo: string, fechaHora: string): Promise<void> {
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://miru-franco.vercel.app';
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://www.mirufranco.com';
     const recuperar = `${frontendUrl}/forgot-password`;
     await this.enviarCorreoCuenta(
       correo,
-      'Tu contraseña cambió - Miru Franco',
+      'Tu contraseña cambió - {{salon}}',
       `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #710014;">Tu contraseña cambió</h2>
-            <p>La contraseña de tu cuenta de Miru Franco se cambió el ${escaparHtml(fechaHora)} (hora del centro de México).</p>
+            <p>La contraseña de tu cuenta de {{salon}} se cambió el ${escaparHtml(fechaHora)} (hora del centro de México).</p>
             <p>Por seguridad cerramos todas tus sesiones: inicia sesión de nuevo con tu nueva contraseña.</p>
             <p style="color: #666;">Si no fuiste tú, recupera tu cuenta ahora desde <a href="${recuperar}" style="color: #710014;">¿Olvidaste tu contraseña?</a> y elige una contraseña nueva.</p>
           </div>
@@ -219,14 +231,14 @@ export class EmailService {
   private async enviarCorreoCuenta(to: string, subject: string, html: string, tipo: string): Promise<void> {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
 
     if (!apiKey || !fromEmail || !this.resend) {
       throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
     }
 
     try {
-      const { error } = await this.resend.emails.send({ to, from: `${fromName} <${fromEmail}>`, subject, html });
+      const { error } = await this.enviarConMarca({ to, from: `${fromName} <${fromEmail}>`, subject, html });
       if (error) throw error;
       this.logger.log(`Correo enviado: ${tipo}`);
     } catch (err: any) {
@@ -245,14 +257,14 @@ export class EmailService {
   async sendNotificationEmail(to: string, subject: string, html: string): Promise<void> {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
 
     if (!apiKey || !fromEmail || !this.resend) {
       throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
     }
 
     try {
-      const { error } = await this.resend.emails.send({
+      const { error } = await this.enviarConMarca({
         to,
         from: `${fromName} <${fromEmail}>`,
         subject,
@@ -286,7 +298,7 @@ export class EmailService {
     const respuesta = escaparHtml(datos.respuesta).replace(/\r?\n/g, '<br>');
     await this.enviarCorreoCuenta(
       correo,
-      `Respuesta a tu solicitud ${datos.folio} - Miru Franco`,
+      `Respuesta a tu solicitud ${datos.folio} - {{salon}}`,
       `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #710014;">Respuesta a tu solicitud de derechos ARCO</h2>
@@ -309,7 +321,7 @@ export class EmailService {
     const fecha = new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', dateStyle: 'long', timeStyle: 'short' }).format(datos.fecha);
     await this.enviarCorreoCuenta(
       correo,
-      'Cancelamos tu cuenta - Miru Franco',
+      'Cancelamos tu cuenta - {{salon}}',
       `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #710014;">Cancelamos tu cuenta</h2>
@@ -330,16 +342,46 @@ export class EmailService {
   async sendAvisoCorreoCambiadoEmail(correoAnterior: string, fechaHora: string): Promise<void> {
     await this.enviarCorreoCuenta(
       correoAnterior,
-      'Tu correo cambió - Miru Franco',
+      'Tu correo cambió - {{salon}}',
       `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #710014;">Tu correo cambió</h2>
-            <p>El correo de tu cuenta de Miru Franco se cambió el ${escaparHtml(fechaHora)} (hora del centro de México). Desde ahora, este correo ya no sirve para entrar ni para recuperar tu cuenta.</p>
+            <p>El correo de tu cuenta de {{salon}} se cambió el ${escaparHtml(fechaHora)} (hora del centro de México). Desde ahora, este correo ya no sirve para entrar ni para recuperar tu cuenta.</p>
             <p style="color: #666;">Si no fuiste tú, comunícate con el salón lo antes posible para recuperar tu cuenta.</p>
           </div>
         `,
       'aviso de cambio de correo',
     );
   }
-}
 
+  /** Nombre y contacto del salón desde Configuración del sitio (con caché); sin ella, el nombre registrado. */
+  private async datosSalon(): Promise<{ nombre: string; pie: string }> {
+    try {
+      const salon = ((await this.configuracionSitio?.publica()) as { salon?: Record<string, string> } | undefined)?.salon;
+      if (!salon?.nombre) return { nombre: NOMBRE_SALON_REGISTRADO, pie: '' };
+      const partes = [
+        [salon.direccion, salon.ciudad].filter(Boolean).join(', '),
+        salon.telefono ? `Tel. ${salon.telefono}` : '',
+        salon.whatsapp ? `WhatsApp ${salon.whatsapp}` : '',
+        salon.correoContacto ?? '',
+      ].filter(Boolean);
+      const pie = `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 24px auto 0; padding-top: 12px; border-top: 1px solid #e5e0d8; color: #666; font-size: 12px;"><strong>${escaparHtml(salon.nombre)}</strong><br>${partes.map((p) => escaparHtml(p)).join(' · ')}</div>`;
+      return { nombre: salon.nombre, pie };
+    } catch {
+      return { nombre: NOMBRE_SALON_REGISTRADO, pie: '' };
+    }
+  }
+
+  /** Todos los correos salen por aquí: nombre del salón de la configuración en remitente, asunto y cuerpo, y pie con el contacto. */
+  private async enviarConMarca(p: ParametrosCorreo) {
+    const { nombre, pie } = await this.datosSalon();
+    const enTexto = (t: string) => t.split(MARCADOR_SALON).join(nombre);
+    const enHtml = (t: string) => t.split(MARCADOR_SALON).join(escaparHtml(nombre));
+    return this.resend!.emails.send({
+      ...p,
+      from: p.from.split(MARCADOR_SALON).join(nombreParaRemitente(nombre)),
+      subject: enTexto(p.subject),
+      html: enHtml(p.html) + pie,
+    });
+  }
+}

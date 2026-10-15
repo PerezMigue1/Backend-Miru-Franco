@@ -6,9 +6,10 @@ import { InventarioModule } from '../inventario/inventario.module';
 import { ConfiguracionModule } from '../configuracion/configuracion.module';
 import { ModeloCancelacionService } from './modelo-cancelacion.service';
 import { RiesgoCancelacionService } from './riesgo-cancelacion.service';
+import { AnticiposModule } from './anticipos/anticipos.module';
 
 @Module({
-  imports: [PrismaModule, InventarioModule, ConfiguracionModule],
+  imports: [PrismaModule, InventarioModule, ConfiguracionModule, AnticiposModule],
   controllers: [CitasController],
   providers: [
     CitasService,

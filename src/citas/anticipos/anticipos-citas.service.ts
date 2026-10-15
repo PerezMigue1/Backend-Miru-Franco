@@ -4,9 +4,17 @@ import { EstadoPago, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MercadoPagoClient, PagoMercadoPago } from '../../ecommerce/mercadopago/mercadopago.client';
+import {
+  buscarUltimoPagoEnReferencias,
+  leerReferencia,
+  llaveCandadoPago,
+  pagoAnteriorAlRegistro,
+  referenciasDeBusqueda,
+} from '../../ecommerce/mercadopago/referencia-pago';
 import { METODO_PAGO_MERCADOPAGO } from '../../ecommerce/pedidos/flujo-pedido';
 import { puedeEscribirCualquierCita, type Solicitante } from '../../common/utils/permisos-citas.util';
 import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
+import { EVENTO_REEMBOLSO_REALIZADO } from '../../notificaciones/eventos';
 import {
   ESTADOS_CITA_VIGENTE,
   METODO_PAGO_DE_ANTICIPO,
@@ -22,6 +30,8 @@ import {
 } from './anticipos.util';
 
 const PROVEEDOR = 'mercadopago';
+/** Estados de Mercado Pago de un pago que todavía puede acreditarse. */
+const ESTADOS_MP_EN_PROCESO = ['pending', 'in_process', 'authorized'];
 const vigente = (estado: string) => (ESTADOS_CITA_VIGENTE as readonly string[]).includes(estado);
 
 export type ResultadoPagoCita = 'pagado' | 'ya_procesado' | 'revision' | 'no_aprobado' | 'ignorado';
@@ -97,6 +107,11 @@ export class AnticiposCitasService {
     if (pago.status !== 'approved') return 'no_aprobado';
     const cita = await this.prisma.cita.findUnique({ where: { id: citaId } });
     if (!cita) return 'ignorado';
+    // Referencia antigua sin prefijo: el id pudo ser de la otra base; un pago anterior a la cita no es suyo.
+    if (leerReferencia(pago.external_reference)?.origen === 'sin_prefijo' && cita.creadoEn && pagoAnteriorAlRegistro(pago, cita.creadoEn)) {
+      this.logger.warn(`El pago ${pago.id} (referencia ${pago.external_reference}) es anterior a la cita ${citaId}: es de otra base y se ignora`);
+      return 'ignorado';
+    }
 
     const montoCorrecto = pago.currency_id === 'MXN' && requiereAnticipo(cita) && centavos(pago.transaction_amount) === centavos(cita.anticipoRequerido);
     const referencia = String(pago.id);
@@ -114,6 +129,8 @@ export class AnticiposCitasService {
     });
 
     const resultado = await this.prisma.$transaction(async (tx) => {
+      // Candado por pago: el webhook, el regreso y la barrida no lo aplican a la vez.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${llaveCandadoPago(pago.id)}))`;
       if (montoCorrecto) {
         const marcada = await tx.cita.updateMany({
           where: { id: citaId, anticipoPagadoEn: null, estado: { in: [...ESTADOS_CITA_VIGENTE] } },
@@ -148,9 +165,24 @@ export class AnticiposCitasService {
    * búsqueda cuando quien llama ya la hizo. Los errores de Mercado Pago se propagan.
    */
   async aplicarPagoAprobadoDeMp(citaId: number, ultimo?: PagoMercadoPago | null): Promise<ResultadoPagoCita | null> {
-    const pago = ultimo === undefined ? await this.mercadoPago.buscarUltimoPago(referenciaCita(citaId)) : ultimo;
+    const pago = ultimo === undefined ? await buscarUltimoPagoEnReferencias(this.mercadoPago, referenciasDeBusqueda('cita', citaId)) : ultimo;
     if (pago?.status !== 'approved') return null;
     return this.procesarPagoCita(await this.mercadoPago.obtenerPago(String(pago.id)), citaId);
+  }
+
+  /**
+   * Antes de pasar el anticipo a pago en el salón: qué dice Mercado Pago del pago en línea de la cita. Un pago
+   * aprobado se aplica aquí (misma lógica idempotente que el webhook) y responde "pagado"; uno pendiente o en
+   * proceso responde "en_proceso". Los errores de Mercado Pago se propagan.
+   */
+  async revisarPagoEnLinea(citaId: number): Promise<'pagado' | 'en_proceso' | 'sin_pago'> {
+    const ultimo = await buscarUltimoPagoEnReferencias(this.mercadoPago, referenciasDeBusqueda('cita', citaId));
+    if (ultimo?.status === 'approved') {
+      await this.aplicarPagoAprobadoDeMp(citaId, ultimo);
+      return 'pagado';
+    }
+    if (ultimo && ESTADOS_MP_EN_PROCESO.includes(ultimo.status)) return 'en_proceso';
+    return 'sin_pago';
   }
 
   /** Estado real del anticipo para la confirmación: consulta Mercado Pago, nunca la URL de regreso. */
@@ -185,7 +217,7 @@ export class AnticiposCitasService {
     if (cita.anticipoPagadoEn) return respuesta('aprobado', cita);
     if (cita.estado === 'cancelada') return respuesta('cancelada', cita);
 
-    const ultimo = await this.mercadoPago.buscarUltimoPago(referenciaCita(citaId));
+    const ultimo = await buscarUltimoPagoEnReferencias(this.mercadoPago, referenciasDeBusqueda('cita', citaId));
     if (ultimo?.status === 'approved') {
       // El webhook pudo no haber llegado aún: se aplica aquí con la misma lógica idempotente.
       await this.aplicarPagoAprobadoDeMp(citaId, ultimo);
@@ -286,6 +318,14 @@ export class AnticiposCitasService {
       }
       throw e;
     }
+    // Aviso en vivo a la clienta (campana y navegador), uno por pago reembolsado.
+    this.eventEmitter.emit(EVENTO_REEMBOLSO_REALIZADO, {
+      usuarioId: cita.clienteId,
+      entidadTipo: 'cita',
+      entidadId: citaId,
+      monto: Number(pago.monto),
+      referencia: `pago-${pago.id}`,
+    });
     return { success: true, data: { pagoId: pago.id, estado: EstadoPago.reembolsado } };
   }
 

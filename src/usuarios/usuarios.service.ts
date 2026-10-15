@@ -1,4 +1,5 @@
-import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, BadGatewayException, HttpException, HttpStatus, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, BadGatewayException, HttpException, HttpStatus, InternalServerErrorException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { ImagenesSubidasService } from '../subidas/imagenes-subidas.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { SecurityService } from '../common/services/security.service';
@@ -164,6 +165,7 @@ export class UsuariosService {
     private emailService: EmailService,
     private jwtService: JwtService,
     private securityService: SecurityService,
+    @Optional() private readonly subidas?: ImagenesSubidasService,
   ) {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -224,6 +226,8 @@ export class UsuariosService {
     const datosSalud = traeAlergias(createUsuarioDto);
     if (datosSalud && createUsuarioDto.consienteDatosSensibles !== true) throw errorConsentimientoSalud(!porAdmin);
     if (porAdmin && recibePromociones === true) throw errorPromocionesSoloTitular();
+    // La compatibilidad temporal sin aceptaTerminos es solo para el registro de la app; el alta del panel lo exige.
+    if (porAdmin && createUsuarioDto.aceptaTerminos !== true) throw new BadRequestException('Debes aceptar los términos y condiciones');
 
     // Verificar si el email ya existe
     const existe = await this.prisma.usuario.findUnique({
@@ -314,6 +318,8 @@ export class UsuariosService {
           rutaOrigen: rutaDelCuerpo(createUsuarioDto.rutaOrigen, porAdmin ? RUTA_PANEL_ALTA : RUTA_REGISTRO),
           contexto: opciones.contexto ?? { ip: null, userAgent: null },
           registradoPorId: porAdmin ? (opciones.registradoPorId ?? null) : null,
+          // Registro de la app móvil actual (sin el campo): los términos quedan pendientes. El alta del admin lo exige.
+          sinTerminos: !porAdmin && createUsuarioDto.aceptaTerminos === undefined,
         }),
       });
       return creado;
@@ -686,8 +692,23 @@ export class UsuariosService {
     }, TX_HOLGADA);
   }
 
+  /**
+   * Foto de otra persona que guarda el admin (PUT /api/usuarios/:id): la que ya tenía, quitarla o una subida propia de
+   * usuarios/ con el botón "Subir foto". Una URL escrita a mano es 400. (La foto propia sigue por /auth/me.)
+   */
+  private async fotoSubidaPorAdmin(id: string, foto: unknown, evidencia: EvidenciaEdicion): Promise<string | null | undefined> {
+    if (foto === undefined) return undefined;
+    if (foto === null || (typeof foto === 'string' && foto.trim() === '')) return null;
+    const actual = (await this.prisma.usuario.findUnique({ where: { id }, select: { foto: true } }))?.foto ?? null;
+    if (typeof foto === 'string' && actual !== null && foto.trim() === actual.trim()) return actual;
+    if (!this.subidas) throw new ServiceUnavailableException('La subida de imágenes no está disponible por ahora.');
+    const quien = evidencia.formulario === 'admin-usuario' ? evidencia.registradoPorId : id;
+    return this.subidas.resolverImagen(quien, 'usuarios', typeof foto === 'string' ? foto : '', actual);
+  }
+
   async actualizarUsuario(id: string, updateData: any, evidencia: EvidenciaEdicion) {
-    await this.validarFotoDelCliente(id, updateData.foto);
+    const foto = await this.fotoSubidaPorAdmin(id, updateData.foto, evidencia);
+    if (foto !== undefined) updateData = { ...updateData, foto };
     // consienteDatosSensibles y rutaOrigen no son columnas: los usa guardarEdicion para la evidencia.
     const { email, password, tratamientosQuimicos, tratamientos, perfilCapilar, rutaOrigen: _ruta, ...camposActualizables } = sinConsentimiento(updateData);
     // perfilCapilar no es columna (Prisma daba 500): sus campos van a las columnas, como en el perfil propio.
@@ -986,7 +1007,7 @@ export class UsuariosService {
     });
 
     // Construir enlace de recuperación
-    const frontendUrl = process.env.FRONTEND_URL || 'https://miru-franco.vercel.app';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://www.mirufranco.com';
     const resetLink = `${frontendUrl}/reset-password?token=${token}&email=${encodeURIComponent(usuario.email)}`;
 
     // Enviar email con el enlace

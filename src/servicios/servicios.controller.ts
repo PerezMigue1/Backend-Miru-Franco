@@ -14,6 +14,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ServiciosService } from './servicios.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -58,8 +59,8 @@ export class ServiciosController {
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async crear(@Body() dto: CreateServicioDto) {
-    return this.serviciosService.crear(dto);
+  async crear(@Body() dto: CreateServicioDto, @CurrentUser() usuario: { id: string }) {
+    return this.serviciosService.crear(dto, usuario?.id);
   }
 
   /** PUT /api/servicios/:id/anticipo: anticipo que pide el servicio al agendar en línea (estilista y admin). */
@@ -73,8 +74,8 @@ export class ServiciosController {
   @Put(':id')
   @UseGuards(JwtAuthGuard, PermisosGuard)
   @Permisos('servicios:escritura')
-  async actualizar(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateServicioDto) {
-    return this.serviciosService.actualizar(id, dto);
+  async actualizar(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateServicioDto, @CurrentUser() usuario: { id: string }) {
+    return this.serviciosService.actualizar(id, dto, usuario?.id);
   }
 
   @Delete(':id')

@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { IsBoolean, IsIn, IsOptional } from 'class-validator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -32,6 +32,12 @@ export class SubidasController {
   @Roles(...ROLES_POR_USO.galeria)
   @HttpCode(HttpStatus.OK)
   firma(@CurrentUser() user: any, @Body() dto: FirmaSubidaDto) {
+    // Las imágenes (galería, servicios, productos, equipo, promociones y sitio) ya no se firman aquí: van por la
+    // subida segura (POST /api/subidas/imagen/firma o /api/galeria/firma), con el public_id que genera el servidor
+    // en la carpeta de cada uso. Aquí solo queda el PDF de la factura.
+    if (dto.uso !== 'factura') {
+      throw new BadRequestException('Las imágenes se suben con el botón "Subir foto" de cada formulario (subida segura con firma del servidor).');
+    }
     if (!ROLES_POR_USO[dto.uso].includes(user?.rol)) {
       throw new ForbiddenException({
         message: 'No tienes permisos de administrador para esta acción',

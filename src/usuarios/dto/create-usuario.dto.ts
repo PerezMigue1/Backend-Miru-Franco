@@ -103,10 +103,14 @@ export class CreateUsuarioDto {
   perfilCapilar?: PerfilCapilarDto;
 
   // Casillas de consentimiento: booleano real (BooleanoEstricto); "false" o "no" en texto dan 400.
+  // Compatibilidad temporal con la app móvil actual, que no manda aceptaTerminos: sin el campo la cuenta se crea
+  // sin la fila de términos, que queda pendiente y se pide en su siguiente inicio de sesión. Quitar el
+  // @IsOptional cuando la app nueva esté publicada.
+  @IsOptional()
   @BooleanoEstricto()
   @IsBoolean({ message: 'Debes aceptar los términos y condiciones' })
   @Equals(true, { message: 'Debes aceptar los términos y condiciones' })
-  aceptaTerminos: boolean;
+  aceptaTerminos?: boolean;
 
   // Sin aviso aceptado no se guardan datos (incluidos los de salud del perfil capilar).
   @BooleanoEstricto()
