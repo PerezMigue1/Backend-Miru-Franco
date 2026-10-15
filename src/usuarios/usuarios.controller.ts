@@ -15,8 +15,8 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
-import { Response } from 'express';
-import { UsuariosService } from './usuarios.service';
+import { Request, Response } from 'express';
+import { EvidenciaEdicion, UsuariosService } from './usuarios.service';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { clearAuthCookie } from '../auth/auth-cookie';
@@ -30,6 +30,17 @@ import { CambiarPasswordPerfilDto } from './dto/cambiar-password-perfil.dto';
 import { UpdateEstadoUsuarioDto } from './dto/update-estado-usuario.dto';
 import { UpdateRolUsuarioDto } from './dto/update-rol-usuario.dto';
 import { ROLES_CATALOGO } from '../common/constants/roles.constants';
+import { contextoDeRequest } from '../consentimientos/documentos-legales';
+
+/**
+ * Evidencia de un guardado sobre la cuenta `id`: la titular en su perfil, o el personal sobre otra persona con su
+ * id (registradoPorId). Sin sesión no hay a quién atribuirlo (las rutas llevan JwtAuthGuard).
+ */
+function evidenciaDeEdicion(id: string, quien: { id?: string } | undefined, req: Request): EvidenciaEdicion {
+  if (!quien?.id) throw new ForbiddenException('Inicia sesión para continuar');
+  const contexto = contextoDeRequest(req);
+  return quien.id === id ? { formulario: 'perfil', contexto } : { formulario: 'admin-usuario', contexto, registradoPorId: quien.id };
+}
 
 @Controller('usuarios')
 export class UsuariosController {
@@ -76,8 +87,14 @@ export class UsuariosController {
   @Post('registro')
   @UseGuards(SesionOpcionalGuard)
   @HttpCode(HttpStatus.CREATED)
-  async registro(@Body() createUsuarioDto: CreateUsuarioDto, @CurrentUser() usuario: any) {
-    return this.usuariosService.crearUsuario(createUsuarioDto, { permitirConfirmado: usuario?.rol === 'admin' });
+  async registro(@Body() createUsuarioDto: CreateUsuarioDto, @CurrentUser() usuario: any, @Req() req: Request) {
+    // ip y user agent quedan en los consentimientos del alta (evidencia); en el alta del admin, también su id
+    const porAdmin = usuario?.rol === 'admin';
+    return this.usuariosService.crearUsuario(createUsuarioDto, {
+      permitirConfirmado: porAdmin,
+      contexto: contextoDeRequest(req),
+      ...(porAdmin ? { registradoPorId: usuario.id } : {}),
+    });
   }
 
   // ===== ROUTES CON PARÁMETROS DINÁMICOS (al final) =====
@@ -98,8 +115,11 @@ export class UsuariosController {
   async actualizarPerfilUsuario(
     @Param('id') id: string,
     @Body() updateUsuarioDto: UpdateUsuarioDto,
+    @CurrentUser() usuario: { id?: string } | undefined,
+    @Req() req: Request,
   ) {
-    return this.usuariosService.actualizarPerfilUsuario(id, updateUsuarioDto);
+    // Evidencia de datos_salud y promociones: la titular en su perfil, o el admin sobre otra persona (con su id)
+    return this.usuariosService.actualizarPerfilUsuario(id, updateUsuarioDto, evidenciaDeEdicion(id, usuario, req));
   }
 
   /**
@@ -132,12 +152,13 @@ export class UsuariosController {
   async actualizarUsuario(
     @Param('id') id: string,
     @Body() updateUsuarioDto: UpdateUsuarioDto,
-    @Req() req: { user?: { id: string } },
+    @Req() req: Request & { user?: { id: string } },
   ) {
     if (req.user?.id === id && updateUsuarioDto.rol !== undefined && updateUsuarioDto.rol !== 'admin') {
       throw new ForbiddenException('No puedes quitarte el rol de administrador');
     }
-    return this.usuariosService.actualizarUsuario(id, updateUsuarioDto);
+    // Evidencia de datos_salud y promociones: "admin-usuario" con el id del admin; si se edita a sí mismo, "perfil"
+    return this.usuariosService.actualizarUsuario(id, updateUsuarioDto, evidenciaDeEdicion(id, req.user, req));
   }
 
   /**

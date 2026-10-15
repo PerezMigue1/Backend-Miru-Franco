@@ -22,6 +22,7 @@ import { PedidosService } from './pedidos.service';
 import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
 import { EntregarPedidoDto } from './dto/entregar-pedido.dto';
+import { RevocarPedidoDto } from './dto/revocar-pedido.dto';
 import { esPropios } from '../../common/utils/alcance-propio.util';
 
 @Controller('pedidos')
@@ -115,6 +116,16 @@ export class PedidosController {
     @Body() dto: EntregarPedidoDto,
   ) {
     return this.service.entregar(id, user.id, dto.metodoCobro);
+  }
+
+  /**
+   * Portal (?propios=true): la dueña revoca su compra dentro de los 5 días hábiles (art. 56 LFPC). Siempre solo
+   * la dueña, sea del rol que sea: lo ajeno responde 404.
+   */
+  @Post(':id/revocar')
+  @HttpCode(HttpStatus.OK)
+  revocar(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }, @Body() dto: RevocarPedidoDto) {
+    return this.service.revocar(id, user.id, dto.motivo);
   }
 
   @Delete(':id')

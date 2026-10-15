@@ -171,8 +171,12 @@ export class ProductosService {
     }
   }
 
-  async listar(categoria?: string) {
-    const where: any = {};
+  /**
+   * Por defecto solo activos. Los inactivos se incluyen únicamente si se piden (?incluirInactivos=1)
+   * y quien pide es admin o tiene servicios:escritura; para el resto se ignora y ve solo activos.
+   */
+  async listar(categoria?: string, incluirInactivos = false, usuarioId?: string) {
+    const where: any = incluirInactivos && (await this.puedeVerInactivos(usuarioId)) ? {} : { activo: true };
 
     if (categoria) {
       // Sanitizar categoría antes de usar
@@ -187,33 +191,28 @@ export class ProductosService {
       where.categoria = categoriaSanitizada;
     }
 
-    try {
-      const productos = await this.prisma.producto.findMany({
-        where,
-        include: { presentaciones: true },
-        orderBy: { id: 'asc' },
-      });
+    const productos = await this.prisma.producto.findMany({
+      where,
+      include: { presentaciones: true },
+      orderBy: { id: 'asc' },
+    });
 
-      return {
-        success: true,
-        count: productos.length,
-        data: productos,
-      };
-    } catch (error) {
-      // Evitar duplicar stacks gigantes: HttpExceptionFilter ya registra el error global
-      throw new BadRequestException(
-        `No se pudieron obtener los productos: ${(error as any)?.message || 'error desconocido'}`,
-      );
-    }
+    return {
+      success: true,
+      count: productos.length,
+      data: productos,
+    };
+
   }
 
-  async obtenerPorId(id: number) {
+  /** Un inactivo solo lo ve quien administra productos (detalle admin); al resto le responde 404. */
+  async obtenerPorId(id: number, usuarioId?: string) {
     const producto = await this.prisma.producto.findUnique({
       where: { id },
       include: { presentaciones: true },
     });
 
-    if (!producto) {
+    if (!producto || (!producto.activo && !(await this.puedeVerInactivos(usuarioId)))) {
       throw new NotFoundException('Producto no encontrado');
     }
 
@@ -221,6 +220,16 @@ export class ProductosService {
       success: true,
       data: producto,
     };
+  }
+
+  /** Claves del rol (permisos_rol): '*' (admin) o servicios:escritura, las mismas que editan productos. */
+  private async puedeVerInactivos(usuarioId?: string): Promise<boolean> {
+    if (!usuarioId) return false;
+    const usuario = await this.prisma.usuario.findUnique({ where: { id: usuarioId }, select: { rol: true } });
+    if (!usuario) return false;
+    const permisoRol = await this.prisma.permisoRol.findUnique({ where: { rol: usuario.rol }, select: { claves: true } });
+    const claves = permisoRol?.claves ?? [];
+    return ['*', 'servicios:escritura'].some((c) => claves.includes(c));
   }
 
   async crear(dto: CreateProductoDto) {
@@ -254,7 +263,7 @@ export class ProductosService {
       ? dto.caracteristicas.map(c => sanitizeInput(c))
       : [];
 
-    const { presentaciones, ...dataProducto } = dto;
+    const { presentaciones } = dto;
 
     const producto = await this.prisma.producto.create({
       data: {
@@ -354,6 +363,7 @@ export class ProductosService {
     if (dto.descuento !== undefined) dataActualizada.descuento = dto.descuento;
     if (dto.nuevo !== undefined) dataActualizada.nuevo = dto.nuevo;
     if (dto.crueltyFree !== undefined) dataActualizada.crueltyFree = dto.crueltyFree;
+    if (dto.activo !== undefined) dataActualizada.activo = dto.activo;
 
     const presentacionesInput = dto.presentaciones;
 
@@ -421,11 +431,13 @@ export class ProductosService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    await this.prisma.producto.delete({
+    // Borrado lógico: pedidos, ventas e inventario siguen apuntando al producto.
+    await this.prisma.producto.update({
       where: { id },
+      data: { activo: false },
     });
 
-    console.log('✅ Producto eliminado:', sanitizeForLogging({ id }));
+    console.log('✅ Producto desactivado:', sanitizeForLogging({ id }));
 
     return {
       success: true,

@@ -3,6 +3,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateServicioDto } from './dto/create-servicio.dto';
 import { UpdateServicioDto } from './dto/update-servicio.dto';
 import { sanitizeInput, containsSQLInjection, sanitizeForLogging } from '../common/utils/security.util';
+import { anticipoAplica } from '../citas/anticipos/anticipos.util';
+
+/**
+ * `anticipoAplica`: si hoy se pide anticipo al agendar este servicio en línea (misma regla que la creación de
+ * la cita: monto y ANTICIPOS_DESDE). La web lo usa para anunciar el anticipo; `anticipoMonto` no cambia.
+ */
+const conAnticipoAplica = <T extends { anticipoMonto?: unknown }>(servicio: T) => ({ ...servicio, anticipoAplica: anticipoAplica(servicio) });
 
 @Injectable()
 export class ServiciosService {
@@ -27,35 +34,29 @@ export class ServiciosService {
       where.categoria = categoriaSanitizada;
     }
 
-    try {
-      const servicios = await this.prisma.servicio.findMany({
-        where,
-        include: {
-          productosAsociados: {
-            include: { producto: true },
-          },
-          especialistas: {
-            include: {
-              usuario: {
-                select: { id: true, nombre: true, email: true },
-              },
+    const servicios = await this.prisma.servicio.findMany({
+      where,
+      include: {
+        productosAsociados: {
+          include: { producto: true },
+        },
+        especialistas: {
+          include: {
+            usuario: {
+              select: { id: true, nombre: true, email: true },
             },
           },
         },
-        orderBy: { id: 'asc' },
-      });
+      },
+      orderBy: { id: 'asc' },
+    });
 
-      return {
-        success: true,
-        count: servicios.length,
-        data: servicios,
-      };
-    } catch (error) {
-      // Evitar duplicar stacks gigantes: HttpExceptionFilter ya registra el error global
-      throw new BadRequestException(
-        `No se pudieron obtener los servicios: ${(error as any)?.message || 'error desconocido'}`,
-      );
-    }
+    return {
+      success: true,
+      count: servicios.length,
+      data: servicios.map(conAnticipoAplica),
+    };
+
   }
 
   /** Un inactivo solo lo ve el personal que administra servicios (panel de edición); al resto le responde 404. */
@@ -75,7 +76,7 @@ export class ServiciosService {
 
     return {
       success: true,
-      data: servicio,
+      data: conAnticipoAplica(servicio),
     };
   }
 

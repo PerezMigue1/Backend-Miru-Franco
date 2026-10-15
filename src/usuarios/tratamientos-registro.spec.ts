@@ -13,16 +13,25 @@ const REGISTRO = {
   fechaNacimiento: '1995-03-10',
   preguntaSeguridad: { pregunta: '¿Color favorito?', respuesta: 'azul' },
   perfilCapilar: { tipoCabello: 'liso' },
+  // Ahora también son obligatorios los términos (registro-consentimientos.spec.ts).
+  aceptaTerminos: true,
   aceptaAvisoPrivacidad: true,
 };
 
+/** Evidencia de PUT /usuarios/:id hecho por el admin (usuarios.controller). */
+const ADMIN = { formulario: 'admin-usuario' as const, contexto: { ip: null, userAgent: null }, registradoPorId: 'admin-1' };
+
 function escenario() {
-  const prisma = {
+  const prisma: any = {
     usuario: {
       findUnique: jest.fn().mockResolvedValue(null),
       create: jest.fn(async ({ data }: any) => ({ id: 'u-nuevo', rol: 'cliente', ...data })),
       update: jest.fn(async ({ data }: any) => ({ id: 'u-1', ...data })),
     },
+    // El alta ahora registra sus consentimientos en la misma transacción (registro-consentimientos.spec.ts).
+    versionDocumentoLegal: { findFirst: jest.fn(async ({ where }: any) => ({ slug: where.slug, version: '2.0', hashTexto: 'a'.repeat(64), vigenteDesde: new Date('2026-10-14') })) },
+    consentimiento: { createMany: jest.fn(async ({ data }: any) => ({ count: data.length })) },
+    $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
   const emailService = { sendOTPEmail: jest.fn().mockResolvedValue(undefined) };
   const servicio = new UsuariosService(prisma as any, emailService as any, {} as any, {} as any);
@@ -88,6 +97,8 @@ describe('PATCH /auth/me: tratamientos', () => {
 
   const actualizar = async (cuerpo: Record<string, unknown>) => {
     const { servicio, prisma } = escenario();
+    // La cuenta existe: el guardado la lee para la evidencia de consentimientos (consentimientos-edicion.spec.ts)
+    prisma.usuario.findUnique.mockResolvedValue({ alergias: null, recibePromociones: false });
     await servicio.actualizarPerfilUsuario('u-1', cuerpo);
     return prisma.usuario.update.mock.calls[0][0];
   };
@@ -146,11 +157,13 @@ describe('PATCH /auth/me: tratamientos', () => {
 
   it('PUT /usuarios/:id de admin aplica la misma regla y sanitización', async () => {
     const regla = escenario();
-    await regla.servicio.actualizarUsuario('u-1', { tratamientosQuimicos: false, tratamientos: 'Tinte' });
+    regla.prisma.usuario.findUnique.mockResolvedValue({ alergias: null, recibePromociones: false });
+    await regla.servicio.actualizarUsuario('u-1', { tratamientosQuimicos: false, tratamientos: 'Tinte' }, ADMIN);
     expect(regla.prisma.usuario.update.mock.calls[0][0].data).toMatchObject({ tratamientosQuimicos: false, tratamientos: null });
 
     const sanitiza = escenario();
-    await sanitiza.servicio.actualizarUsuario('u-1', { tratamientosQuimicos: true, tratamientos: '  Tinte\u0000 rojo  ' });
+    sanitiza.prisma.usuario.findUnique.mockResolvedValue({ alergias: null, recibePromociones: false });
+    await sanitiza.servicio.actualizarUsuario('u-1', { tratamientosQuimicos: true, tratamientos: '  Tinte\u0000 rojo  ' }, ADMIN);
     expect(sanitiza.prisma.usuario.update.mock.calls[0][0].data).toMatchObject({ tratamientosQuimicos: true, tratamientos: 'Tinte rojo' });
   });
 });

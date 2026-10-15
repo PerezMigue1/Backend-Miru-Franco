@@ -57,6 +57,12 @@ export class InventarioController {
     return this.inventarioService.caducidades(query);
   }
 
+  @Get('prediccion')
+  @Permisos('inventario:lectura')
+  prediccion() {
+    return this.inventarioService.prediccion();
+  }
+
   @Get('kardex/:presentacionId')
   @Permisos('inventario:lectura')
   kardex(@Param('presentacionId', ParseIntPipe) presentacionId: number) {

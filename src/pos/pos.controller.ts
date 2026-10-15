@@ -66,6 +66,23 @@ export class PosController {
     return this.posService.cancelarVenta(id, dto, req.user.id);
   }
 
+  /**
+   * PATCH /api/pos/ventas/:id/anular: anula una venta en efectivo que YA entró a un corte:
+   * la cancela, devuelve el stock y registra una salida de efectivo por el total que descuenta el
+   * siguiente corte de quien anula. Exige devoluciones:gestionar, no ventas:escritura: mueve dinero
+   * ya contado en un corte, igual que aprobar un reembolso. Además, quien anula debe operar la caja
+   * (caja:escritura); si no, 409 (lo valida el servicio).
+   */
+  @Patch('ventas/:id/anular')
+  @Permisos('devoluciones:gestionar')
+  anularVentaCortada(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CancelarVentaDto,
+    @Request() req: any,
+  ) {
+    return this.posService.anularVentaCortada(id, dto, req.user.id);
+  }
+
   /** GET /api/pos/resumen?desde=&hasta= */
   @Get('resumen')
   @Permisos('caja:lectura')

@@ -18,6 +18,7 @@ import { CancelarVentaDto } from './dto/cancelar-venta.dto';
 import { ListVentasDto } from './dto/list-ventas.dto';
 import { CreateCorteDto } from './dto/create-corte.dto';
 import { ListCortesDto } from './dto/list-cortes.dto';
+import { registrarSalidaAnulacionVenta, TX_HOLGADA } from './salidas-caja';
 
 /** Método de cobro de un pedido en el salón → total del corte donde se suma. */
 export const CAJA_POR_METODO_COBRO: Record<string, 'efectivo' | 'tarjeta' | 'transferencia'> = {
@@ -33,6 +34,9 @@ export const CAJA_POR_METODO_COBRO: Record<string, 'efectivo' | 'tarjeta' | 'tra
 export function diaDelCorte(fecha: string): string {
   return esDiaValido(fecha) ? fecha : diaEnMexico(new Date(fecha));
 }
+
+/** Clave con la que se registra el corte de caja (POST /pos/cortes): quien la tiene opera una caja. */
+export const PERMISO_OPERAR_CAJA = 'caja:escritura';
 
 /** Personal que puede participar en un servicio cobrado. */
 const ROLES_PERSONAL = ['estilista', 'empleado', 'becario', 'admin'];
@@ -182,10 +186,15 @@ export class PosService {
         }
         const presentacion = await this.prisma.productoPresentacion.findUnique({
           where: { id: item.presentacionId },
-          select: { id: true, precio: true, stock: true, disponible: true },
+          select: { id: true, precio: true, stock: true, disponible: true, producto: { select: { activo: true } } },
         });
         if (!presentacion || !presentacion.disponible) {
           throw new NotFoundException(`Presentación ${item.presentacionId} no encontrada o no disponible`);
+        }
+        // Producto desactivado (borrado lógico): ya no se vende. Va antes del stock para que un inactivo
+        // sin existencias reciba este mensaje y no el de stock insuficiente.
+        if (presentacion.producto?.activo === false) {
+          throw new BadRequestException(`Este producto ya no está a la venta (presentación ${item.presentacionId})`);
         }
         if (presentacion.stock < item.cantidad) {
           throw new BadRequestException(
@@ -487,6 +496,108 @@ export class PosService {
     return { success: true, data: ventaActualizada };
   }
 
+  /**
+   * Opera la caja: tiene la clave con la que se registra el corte (caja:escritura, POST /pos/cortes); el
+   * admin tiene todas. Mismas reglas que PermisosGuard.
+   */
+  private async operaCaja(usuarioId: string): Promise<boolean> {
+    const usuario = await this.prisma.usuario.findUnique({ where: { id: usuarioId }, select: { rol: true } });
+    if (!usuario) return false;
+    if (usuario.rol === 'admin') return true;
+    const permisoRol = await this.prisma.permisoRol.findUnique({ where: { rol: usuario.rol }, select: { claves: true } });
+    const claves = permisoRol?.claves ?? [];
+    return claves.includes('*') || claves.includes(PERMISO_OPERAR_CAJA);
+  }
+
+  /**
+   * Anula una venta en efectivo que YA entró a un corte (cancelarVenta la rechaza con 409 para no
+   * descuadrar ese corte). Además de cancelarla y devolver el stock, registra una salida de efectivo
+   * por su total (motivo con folio) para que la caja siga cuadrando. No hay cortes "abiertos": el corte
+   * se guarda al cerrar caja y toma lo que esa persona tiene sin cortar, así que la salida queda sin
+   * corte a nombre de quien anula y la toma su siguiente corte. Por eso solo anula quien opera la caja
+   * (operaCaja); si no, 409 y no cambia nada. Requiere además devoluciones:gestionar (controller).
+   */
+  async anularVentaCortada(id: number, dto: CancelarVentaDto, usuarioId: string) {
+    const venta = await this.prisma.ventaLocal.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (!venta) throw new NotFoundException(`Venta ${id} no encontrada`);
+    if (venta.estado === 'cancelada') {
+      throw new BadRequestException('La venta ya está cancelada');
+    }
+    if (venta.corteId == null) {
+      throw new ConflictException('Esta venta aún no entra a un corte de caja: usa la cancelación normal');
+    }
+    // Solo una venta cobrada en efectivo dejó dinero en el cajón. movimientos_caja solo modela
+    // salidas de EFECTIVO (el corte las resta del efectivo esperado): registrar aquí un cobro con
+    // tarjeta, transferencia o mixto descontaría del cajón dinero que nunca estuvo y descuadraría
+    // el siguiente corte. Esas se devuelven por su método original, fuera de la caja.
+    if (venta.metodoPago !== 'efectivo') {
+      throw new BadRequestException(
+        `Esta venta se cobró con ${venta.metodoPago}, no en efectivo: la anulación con salida de caja solo aplica a ventas en efectivo. Devuelve el dinero por el método original (fuera de la caja) y documenta la devolución.`,
+      );
+    }
+
+    const motivoLimpio = sanitizeInput(dto.motivoCancelacion).trim();
+    if (!motivoLimpio) throw new BadRequestException('Indica el motivo de la anulación');
+    if (containsSQLInjection(motivoLimpio)) {
+      throw new BadRequestException('El motivo contiene caracteres no permitidos');
+    }
+    // La salida entra al siguiente corte de quien anula: tiene que ser alguien que hace cortes.
+    if (!(await this.operaCaja(usuarioId))) {
+      throw new ConflictException('Para anular necesitas operar la caja: pide a quien hace el corte que registre la anulación.');
+    }
+    // Con total $0 (lo cubrió el anticipo) no sale efectivo.
+    const saleEfectivo = new Decimal(venta.total).gt(0);
+
+    const ventaActualizada = await this.prisma.$transaction(async (tx) => {
+      // Transición atómica como en cancelarVenta: de dos anulaciones simultáneas solo una pasa; la
+      // otra no registra salida, no libera citas y no devuelve stock.
+      const { count } = await tx.ventaLocal.updateMany({
+        where: { id, estado: 'pagada', corteId: { not: null } },
+        data: { estado: 'cancelada', motivoCancelacion: motivoLimpio },
+      });
+      if (count !== 1) {
+        throw new ConflictException('La venta cambió mientras la anulabas (ya está cancelada o salió del corte). Recarga para ver su estado.');
+      }
+
+      // El total cobrado sale del cajón de quien anula; lo descuenta su siguiente corte.
+      if (saleEfectivo) {
+        await registrarSalidaAnulacionVenta(tx, {
+          monto: venta.total,
+          registradoPorId: usuarioId,
+          folio: venta.folio,
+          motivo: motivoLimpio,
+        });
+      }
+
+      // Igual que cancelarVenta: la cita cobrada vuelve a quedar por cobrar y el stock regresa.
+      await tx.ventaLocalItem.updateMany({ where: { ventaId: id, citaId: { not: null } }, data: { citaId: null } });
+      for (const item of venta.items) {
+        if (item.presentacionId == null) continue;
+        await this.inventarioService.registrarEntrada(
+          {
+            presentacionId: item.presentacionId,
+            cantidad:       item.cantidad,
+            motivo:         'anulación de venta cortada',
+            referenciaTipo: 'venta_local',
+            referenciaId:   id.toString(),
+          },
+          usuarioId,
+          tx,
+        );
+      }
+
+      return tx.ventaLocal.findUnique({
+        where: { id },
+        include: this.incluirVentaRelaciones(),
+      });
+    }, TX_HOLGADA);
+
+    return { success: true, data: ventaActualizada };
+  }
+
   // ─── cobros de pedidos en el salón ───────────────────────────────────────────
 
   /**
@@ -509,7 +620,14 @@ export class PosService {
         OR: [
           { estado: 'aprobado' },
           { estado: 'en_revision', citaId: { not: null } },
-          ...(filtro.conReembolsadosConSalida ? [{ estado: 'reembolsado' as const, salidaCaja: { isNot: null } }] : []),
+          ...(filtro.conReembolsadosConSalida
+            ? [
+                { estado: 'reembolsado' as const, salidaCaja: { isNot: null } },
+                // Reembolsado por devoluciones (p. ej. una revocación) cuyo efectivo salió de la caja con su propia
+                // salida: el cobro entró y salió, así que también cuenta (si no, el corte quedaría descuadrado).
+                { estado: 'reembolsado' as const, pedido: { devoluciones: { some: { salidaCaja: { isNot: null } } } } },
+              ]
+            : []),
         ],
         metodo: { in: Object.keys(CAJA_POR_METODO_COBRO) },
         cobradoPorId: filtro.cobradoPorId ?? { not: null },

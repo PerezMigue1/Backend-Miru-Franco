@@ -1,9 +1,20 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { EstadoPago, EstadoPedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
+import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
+import { incrementarStockPorLineas } from '../common/pedido-inventario.util';
+import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
+import { ORIGEN_REVOCACION, productoConClienta } from '../pedidos/revocacion';
 import { CreateDevolucionDto } from './dto/create-devolucion.dto';
-import { AprobarDevolucionDto, RechazarDevolucionDto } from './dto/resolver-devolucion.dto';
+import { AprobarDevolucionDto, RechazarDevolucionDto, RecibirRevocacionDto } from './dto/resolver-devolucion.dto';
 import { CAUSAS_POR_TIPO, motivoConPolitica, validarPoliticaDevolucion } from './politica-devolucion';
 
 /** Resolver solicitudes ajenas (crear desde el panel, aprobar, rechazar, ver todas). Admin la tiene con '*'. */
@@ -12,7 +23,26 @@ export const PERMISO_GESTIONAR_DEVOLUCIONES = 'devoluciones:gestionar';
 export const ESTADOS_DEVOLUCION = ['pendiente', 'aprobada', 'rechazada', 'cancelada'] as const;
 
 /** Solicitudes que todavía comprometen dinero o producto: bloquean otra sobre lo mismo. */
-const ESTADOS_ACTIVOS = ['pendiente', 'aprobada'];
+export const ESTADOS_ACTIVOS = ['pendiente', 'aprobada'];
+
+/** Mismo proveedor con el que el webhook registra el pago aprobado (pagos-en-linea.service.ts). */
+const PROVEEDOR_MERCADOPAGO = 'mercadopago';
+
+/**
+ * Cómo se reintegró una revocación: por Mercado Pago (automático), en efectivo de la caja de quien la recibe,
+ * a mano por el mismo medio (terminal o transferencia), o el pago ya estaba reembolsado.
+ */
+export type ReembolsoRevocacion = 'mercado_pago' | 'efectivo' | 'manual' | 'ya_reembolsado';
+
+/**
+ * El reembolso con Mercado Pago espera la API dentro de la transacción (hasta 10 s, más la consulta si falla):
+ * así dos peticiones simultáneas no la llaman dos veces. Más holgada que TX_HOLGADA.
+ */
+const TX_REEMBOLSO_MP = { timeout: 30_000 } as const;
+
+const MENSAJE_REVOCACION_PROCESADA = 'Esta revocación ya se procesó';
+const MENSAJE_REVOCACION_POR_REINTEGRAR =
+  'Esta revocación ya canceló el pedido y falta reintegrar el pago: resuélvela con "Recibir producto y reembolsar".';
 
 /**
  * Serializa, dentro de la transacción, lo que mueve dinero de un pedido (crear o aprobar devoluciones y
@@ -21,6 +51,40 @@ const ESTADOS_ACTIVOS = ['pendiente', 'aprobada'];
 export async function bloquearReembolsosDelPedido(tx: Prisma.TransactionClient, pedidoId: number) {
   const clave = `reembolsos-pedido:${pedidoId}`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${clave}))`;
+}
+
+/**
+ * Reembolsos ya aprobados de un pedido (devoluciones de tipo reembolso): cuánto dinero ya se devolvió y qué
+ * artículos ya regresó la clienta. Una revocación posterior reembolsa solo el resto y esos artículos no vuelven
+ * a sumar stock. Se llama dentro de la transacción, con el candado de reembolsos del pedido tomado.
+ */
+export async function reembolsosAprobadosDelPedido(tx: Prisma.TransactionClient, pedidoId: number) {
+  const filas = await tx.devolucion.findMany({
+    where: { pedidoId, estado: 'aprobada', tipo: 'reembolso' },
+    select: { monto: true, pedidoItemId: true },
+  });
+  return {
+    monto: filas.reduce((suma, d) => suma.plus(d.monto ?? 0), new Prisma.Decimal(0)),
+    articulos: new Set(filas.flatMap((d) => (d.pedidoItemId == null ? [] : [d.pedidoItemId]))),
+  };
+}
+
+/**
+ * Cuánto reintegra una revocación: lo pagado menos lo ya reembolsado por devoluciones aprobadas, sin pasar nunca
+ * de lo cobrado (el pago aprobado menos esos mismos reembolsos). Hoy el total y el pago coinciden (el webhook y
+ * "Cobrar y entregar" cobran el total); el tope blinda el "nunca más de lo cobrado" si alguna vez difieren. Sin
+ * pago registrado (pedido marcado pagado a mano) se usa el total. Mismas reglas en revocar y en el detalle del
+ * portal (montoRevocable). Dentro de la transacción, con el candado de reembolsos del pedido tomado.
+ */
+export async function saldoRevocable(tx: Prisma.TransactionClient, pedidoId: number, total: Prisma.Decimal.Value) {
+  const previos = await reembolsosAprobadosDelPedido(tx, pedidoId);
+  const pago = await tx.pago.findFirst({
+    where: { pedidoId, estado: EstadoPago.aprobado },
+    orderBy: { id: 'desc' },
+    select: { monto: true },
+  });
+  const cobrado = pago ? Prisma.Decimal.min(total, pago.monto) : new Prisma.Decimal(total);
+  return { saldo: Prisma.Decimal.max(cobrado.minus(previos.monto), 0), articulos: previos.articulos };
 }
 
 /** Lo que muestra la lista del panel en una sola consulta (sin N+1). */
@@ -34,9 +98,26 @@ const INCLUDE_LISTA = {
   resueltoPor: { select: { id: true, nombre: true } },
 } satisfies Prisma.DevolucionInclude;
 
+/** Reembolso total en Mercado Pago (clave por pago). Si falla pero Mercado Pago ya lo tiene reembolsado, cuenta como hecho. */
+async function reembolsarEnMercadoPago(mp: MercadoPagoClient | undefined, referencia: string, clave: string) {
+  try {
+    if (!mp) throw new Error('Sin cliente de Mercado Pago');
+    await mp.reembolsarPago(referencia, clave);
+  } catch {
+    const enMp = await mp?.obtenerPago(referencia).catch(() => null);
+    if (enMp?.status !== 'refunded') {
+      throw new ServiceUnavailableException('Mercado Pago no respondió y el reembolso no salió. Intenta de nuevo en unos minutos.');
+    }
+  }
+}
+
 @Injectable()
 export class DevolucionesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Opcional como en AnticiposBarridaService: solo lo usan las revocaciones de compra pagadas en línea.
+    @Optional() private readonly mercadoPago?: MercadoPagoClient,
+  ) {}
 
   /** Claves del rol en permisos_rol; el admin siempre tiene todo. */
   private async puedeGestionar(usuarioId: string): Promise<boolean> {
@@ -209,9 +290,13 @@ export class DevolucionesService {
   async cancelar(id: number, solicitanteId: string) {
     const row = await this.prisma.devolucion.findUnique({
       where: { id },
-      select: { id: true, pedido: { select: { usuarioId: true } } },
+      select: { id: true, origen: true, pedido: { select: { usuarioId: true, estado: true } } },
     });
     if (!row || row.pedido.usuarioId !== solicitanteId) throw new NotFoundException('Devolución no encontrada');
+    // La revocación ya canceló el pedido: el pago se le debe y no se puede retirar la solicitud.
+    if (row.origen === ORIGEN_REVOCACION && row.pedido.estado === EstadoPedido.cancelado) {
+      throw new ConflictException('Tu pedido ya se canceló por la revocación: el salón te reintegra tu pago.');
+    }
     // Condicionado al estado: si el personal la resolvió en paralelo, no se pisa.
     const { count } = await this.prisma.devolucion.updateMany({
       where: { id, estado: 'pendiente' },
@@ -227,8 +312,12 @@ export class DevolucionesService {
    */
   async aprobar(id: number, resueltoPorId: string, dto: AprobarDevolucionDto) {
     return this.prisma.$transaction(async (tx) => {
-      const row = await tx.devolucion.findUnique({ where: { id }, select: { id: true, tipo: true, monto: true, pedidoId: true } });
+      const row = await tx.devolucion.findUnique({ where: { id }, select: { id: true, tipo: true, monto: true, pedidoId: true, origen: true } });
       if (!row) throw new NotFoundException('Devolución no encontrada');
+      // Aprobarla aquí no regresaría el stock ni reembolsaría por Mercado Pago.
+      if (row.origen === ORIGEN_REVOCACION) {
+        throw new ConflictException('Esta es una revocación de compra: resuélvela con "Recibir producto y reembolsar".');
+      }
       const esReembolso = row.tipo === 'reembolso';
       if (!esReembolso && dto.metodoReembolso) {
         throw new BadRequestException('Solo un reembolso lleva método de reembolso');
@@ -285,8 +374,11 @@ export class DevolucionesService {
   }
 
   async rechazar(id: number, resueltoPorId: string, dto: RechazarDevolucionDto) {
-    const row = await this.prisma.devolucion.findUnique({ where: { id }, select: { id: true } });
+    const row = await this.prisma.devolucion.findUnique({ where: { id }, select: { id: true, origen: true, pedido: { select: { estado: true } } } });
     if (!row) throw new NotFoundException('Devolución no encontrada');
+    if (row.origen === ORIGEN_REVOCACION && row.pedido?.estado === EstadoPedido.cancelado) {
+      throw new ConflictException(MENSAJE_REVOCACION_POR_REINTEGRAR);
+    }
     const { count } = await this.prisma.devolucion.updateMany({
       where: { id, estado: 'pendiente' },
       data: { estado: 'rechazada', resueltoPorId, resueltoEn: new Date(), notaResolucion: dto.nota?.trim() || null },
@@ -294,6 +386,114 @@ export class DevolucionesService {
     if (count === 0) throw new ConflictException('La solicitud ya no está pendiente');
     const data = await this.prisma.devolucion.findUnique({ where: { id }, include: INCLUDE_LISTA });
     return { success: true, data };
+  }
+
+  /**
+   * "Recibir producto y reembolsar" una revocación de compra (devoluciones:gestionar): se reintegra el total por
+   * el método original y, si el pedido se había entregado, el producto recibido regresa al stock. Si Mercado
+   * Pago falla responde 503 y nada cambia, así que se puede reintentar.
+   */
+  async recibirRevocacion(id: number, quienId: string, dto: RecibirRevocacionDto) {
+    const { reembolso } = await this.completarRevocacion(id, quienId, { nota: dto.nota });
+    const data = await this.prisma.devolucion.findUnique({ where: { id }, include: INCLUDE_LISTA });
+    return { success: true, data, reembolso };
+  }
+
+  /**
+   * Único camino del dinero de una revocación (art. 56 LFPC). En una transacción con el candado de reembolsos
+   * del pedido: la devolución pasa de pendiente a aprobada una sola vez (updateMany condicional), se reembolsa
+   * el pago aprobado (Mercado Pago con su clave por pago; efectivo del salón con salida de la caja de quien
+   * recibe) y el stock regresa solo si el producto estaba con la clienta (entregado o el heredado 'enviado'; si
+   * no, regresó al cancelarlo). Si lo devuelto cubre el pago completo, el pago queda reembolsado.
+   * Con `soloMercadoPago` (la revocación automática de la clienta) no hace nada si el pago no es en línea:
+   * el efectivo lo entrega el personal.
+   */
+  async completarRevocacion(
+    id: number,
+    quienId: string | null,
+    opciones: { nota?: string; soloMercadoPago?: boolean } = {},
+  ): Promise<{ reembolso: ReembolsoRevocacion; aplicada: boolean }> {
+    const fila = await this.prisma.devolucion.findUnique({ where: { id }, select: { id: true, pedidoId: true, origen: true } });
+    if (!fila) throw new NotFoundException('Devolución no encontrada');
+    if (fila.origen !== ORIGEN_REVOCACION) throw new BadRequestException('Esta solicitud no es una revocación de compra');
+    const { pedidoId } = fila;
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await bloquearReembolsosDelPedido(tx, pedidoId);
+        // Leída después del candado: si otra petición ya la procesó, aquí se ve.
+        const dev = await tx.devolucion.findUnique({ where: { id }, select: { estado: true, monto: true } });
+        if (dev?.estado !== 'pendiente') throw new ConflictException(MENSAJE_REVOCACION_PROCESADA);
+        const pedido = await tx.pedido.findUnique({
+          where: { id: pedidoId },
+          select: { estado: true, items: { select: { id: true, presentacionId: true, cantidad: true } } },
+        });
+        if (!pedido) throw new NotFoundException('Pedido no encontrado');
+        const pagos = await tx.pago.findMany({
+          where: { pedidoId, estado: { in: [EstadoPago.aprobado, EstadoPago.reembolsado] } },
+          orderBy: { id: 'desc' },
+        });
+        const pago = pagos.find((p) => p.estado === EstadoPago.aprobado) ?? null;
+        // Solo el saldo (ya hubo reembolsos parciales): el cliente de Mercado Pago reembolsa el pago completo,
+        // así que ese saldo lo reintegra el personal a mano por el mismo medio.
+        const soloSaldo = !!pago && dev.monto != null && new Prisma.Decimal(dev.monto).lt(pago.monto);
+        const viaMp = !!pago && pago.proveedor === PROVEEDOR_MERCADOPAGO && !!pago.referenciaExterna && !soloSaldo;
+        const efectivo = !!pago && esCobroEnEfectivoDelSalon(pago);
+        const reembolso: ReembolsoRevocacion = viaMp ? 'mercado_pago' : efectivo ? 'efectivo' : !pago && pagos.length > 0 ? 'ya_reembolsado' : 'manual';
+        if (opciones.soloMercadoPago && !viaMp) return { reembolso, aplicada: false };
+        if (efectivo && !quienId) throw new BadRequestException('El reembolso en efectivo lo registra quien entrega el dinero');
+
+        if (viaMp) await reembolsarEnMercadoPago(this.mercadoPago, pago.referenciaExterna!, `reembolso-pedido-${pago.id}`);
+
+        const ahora = new Date();
+        const { count } = await tx.devolucion.updateMany({
+          where: { id, estado: 'pendiente' },
+          data: {
+            estado: 'aprobada',
+            resueltoPorId: quienId,
+            resueltoEn: ahora,
+            notaResolucion: opciones.nota?.trim() || null,
+            metodoReembolso: efectivo ? 'efectivo' : 'metodo_original',
+          },
+        });
+        if (count !== 1) throw new ConflictException(MENSAJE_REVOCACION_PROCESADA);
+        // Ya con esta revocación aprobada: lo devuelto por devoluciones de reembolso y qué artículos regresaron.
+        const devueltos = await reembolsosAprobadosDelPedido(tx, pedidoId);
+        // Entregado (o el heredado 'enviado'): el producto estaba con la clienta y regresa al stock al recibirlo.
+        if (productoConClienta(pedido.estado)) {
+          // Los artículos que ya regresó con un reembolso aprobado no se suman otra vez.
+          await incrementarStockPorLineas(tx, pedido.items.filter((i) => !devueltos.articulos.has(i.id)), {
+            usuarioId: quienId ?? undefined,
+            referenciaTipo: 'devolucion',
+            referenciaId: String(id),
+            motivo: 'revocacion_compra',
+          });
+        }
+        // El pago queda reembolsado si lo devolvió Mercado Pago o si lo devuelto (en efectivo o a mano) ya cubre
+        // el pago completo: así los reportes de ingresos no cuentan dinero devuelto.
+        if (pago && (viaMp || devueltos.monto.gte(pago.monto))) {
+          await tx.pago.updateMany({
+            where: { id: pago.id, estado: EstadoPago.aprobado },
+            data: { estado: EstadoPago.reembolsado, reembolsadoEn: ahora, errorMensaje: 'Reembolsado por revocación de compra (art. 56 LFPC)' },
+          });
+        }
+        if (efectivo) {
+          await registrarSalidaEfectivo(tx, {
+            concepto: 'reembolso_devolucion',
+            // Nunca más de lo cobrado.
+            monto: Prisma.Decimal.min(dev.monto ?? pago.monto, pago.monto),
+            registradoPorId: quienId!,
+            devolucionId: id,
+            motivo: `Revocación de compra del pedido ${pedidoId}`,
+          });
+        }
+        return { reembolso, aplicada: true };
+      }, TX_REEMBOLSO_MP);
+    } catch (e) {
+      // Dos salidas de caja por la misma devolución: la llave única (devolucion_id) rechaza la segunda.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw new ConflictException(MENSAJE_REVOCACION_PROCESADA);
+      throw e;
+    }
   }
 
   /**

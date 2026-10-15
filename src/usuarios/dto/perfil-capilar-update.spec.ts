@@ -51,9 +51,17 @@ describe('UpdateUsuarioDto.telefono', () => {
 
 describe('PUT /usuarios/:id (admin) con perfilCapilar', () => {
   it('no manda perfilCapilar a Prisma (antes 500): lo pasa a las columnas, sanitizado', async () => {
-    const prisma = { usuario: { findUnique: jest.fn(), update: jest.fn(async ({ data }: any) => ({ id: 'u-1', ...data })) } };
+    // Las alergias ya guardadas no piden otra vez el consentimiento (consentimientos-edicion.spec.ts)
+    const prisma: any = {
+      usuario: {
+        findUnique: jest.fn().mockResolvedValue({ alergias: 'Látex', recibePromociones: false }),
+        update: jest.fn(async ({ data }: any) => ({ id: 'u-1', ...data })),
+      },
+    };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     const servicio = new UsuariosService(prisma as any, {} as any, {} as any, {} as any);
-    await servicio.actualizarUsuario('u-1', { nombre: 'Ana', perfilCapilar: { tipoCabello: 'rizado', colorNatural: ' Negro\u0000 ', alergias: 'Látex' } });
+    const admin = { formulario: 'admin-usuario' as const, contexto: { ip: null, userAgent: null }, registradoPorId: 'admin-1' };
+    await servicio.actualizarUsuario('u-1', { nombre: 'Ana', perfilCapilar: { tipoCabello: 'rizado', colorNatural: ' Negro\u0000 ', alergias: 'Látex' } }, admin);
     const data = prisma.usuario.update.mock.calls[0][0].data;
     expect(data).not.toHaveProperty('perfilCapilar');
     expect(data).toMatchObject({ nombre: 'Ana', tipoCabello: 'rizado', colorNatural: 'Negro', alergias: 'Látex' });

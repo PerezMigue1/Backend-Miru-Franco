@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { EstadoPago, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -12,7 +12,11 @@ import {
   METODO_PAGO_DE_ANTICIPO,
   RUTA_RETORNO_APP,
   type MetodoAnticipoSalon,
+  EVENTO_ANTICIPO_POR_DEVOLVER,
+  EVENTO_ANTICIPO_REEMBOLSABLE,
+  type MotivoAnticipoPorDevolver,
   centavos,
+  politicaCancelacionAnticipo,
   referenciaCita,
   requiereAnticipo,
 } from './anticipos.util';
@@ -154,6 +158,9 @@ export class AnticiposCitasService {
     let cita = await this.citaConServicio(citaId);
     if (cita.clienteId !== s.id && !puedeEscribirCualquierCita(s)) throw new NotFoundException('Cita no encontrada');
 
+    // Qué pasa si la clienta cancela hoy (política de anticipos, art. 56): solo con el anticipo pagado, sin
+    // retener y la cita vigente. La pantalla de cancelar lo explica con esto.
+    let cancelacion: ReturnType<typeof politicaCancelacionAnticipo> = null;
     const respuesta = (estado: EstadoAnticipo, c: typeof cita) => ({
       estado,
       citaEstado: c.estado,
@@ -161,12 +168,17 @@ export class AnticiposCitasService {
       anticipoVenceEn: c.anticipoVenceEn,
       anticipoPagadoEn: c.anticipoPagadoEn,
       anticipoEnSalon: c.anticipoEnSalon,
+      cancelacion,
     });
     if (!requiereAnticipo(cita)) return respuesta('no_requiere', cita);
 
     // Prioridad: un anticipo pagado y aprobado manda aunque haya un duplicado reembolsado o en revisión.
-    const pagos = await this.prisma.pago.findMany({ where: { citaId }, select: { estado: true } });
+    const pagos = await this.prisma.pago.findMany({ where: { citaId }, select: { estado: true, pagadoEn: true, retenidoEn: true } });
     const hay = (e: EstadoPago) => pagos.some((p) => p.estado === e);
+    const aprobado = pagos.find((p) => p.estado === EstadoPago.aprobado && !p.retenidoEn);
+    if (cita.anticipoPagadoEn && aprobado && vigente(cita.estado)) {
+      cancelacion = politicaCancelacionAnticipo(aprobado.pagadoEn ?? cita.anticipoPagadoEn, cita.fechaHoraInicio, ahora);
+    }
     if (cita.anticipoPagadoEn && hay(EstadoPago.aprobado)) return respuesta('aprobado', cita);
     if (hay(EstadoPago.en_revision)) return respuesta('revision', cita);
     if (hay(EstadoPago.reembolsado)) return respuesta('reembolsado', cita);
@@ -221,7 +233,7 @@ export class AnticiposCitasService {
    * pago en revisión. Mercado Pago: API de refunds (con clave de idempotencia por pago); en el salón se
    * registra y, si se cobró en efectivo, queda una salida de caja. El pago queda 'reembolsado' una sola vez.
    */
-  async reembolsar(citaId: number, solicitanteId: string) {
+  async reembolsar(citaId: number, solicitanteId: string, opciones: { soloMercadoPago?: boolean; nota?: string } = {}) {
     const cita = await this.prisma.cita.findUnique({ where: { id: citaId } });
     if (!cita) throw new NotFoundException('Cita no encontrada');
     const pago = await this.prisma.pago.findFirst({
@@ -233,6 +245,10 @@ export class AnticiposCitasService {
       orderBy: { id: 'desc' },
     });
     if (!pago) throw new ConflictException('No hay un anticipo por reembolsar en esta cita');
+    // Reembolso automático (la clienta canceló a tiempo): solo el pago en línea; el del salón lo entrega el personal.
+    if (opciones.soloMercadoPago && !(pago.proveedor === PROVEEDOR && pago.referenciaExterna)) {
+      return { success: true, data: { pagoId: pago.id, estado: pago.estado } };
+    }
 
     if (pago.proveedor === PROVEEDOR && pago.referenciaExterna) {
       try {
@@ -250,7 +266,7 @@ export class AnticiposCitasService {
       await this.prisma.$transaction(async (tx) => {
         const r = await tx.pago.updateMany({
           where: { id: pago.id, estado: { in: [EstadoPago.aprobado, EstadoPago.en_revision] } },
-          data: { estado: EstadoPago.reembolsado, errorMensaje: `Reembolsado por ${solicitanteId}`, reembolsadoEn: new Date() },
+          data: { estado: EstadoPago.reembolsado, errorMensaje: opciones.nota ?? `Reembolsado por ${solicitanteId}`, reembolsadoEn: new Date() },
         });
         if (r.count !== 1) throw new ConflictException('Este anticipo ya se reembolsó');
         if (esCobroEnEfectivoDelSalon(pago)) {
@@ -271,6 +287,30 @@ export class AnticiposCitasService {
       throw e;
     }
     return { success: true, data: { pagoId: pago.id, estado: EstadoPago.reembolsado } };
+  }
+
+  /**
+   * La clienta canceló a tiempo según la política de anticipos (CitasService.cancelar no lo retuvo): el anticipo
+   * pagado con Mercado Pago se reembolsa solo; el pagado en el salón queda aprobado y sin retener para que el
+   * personal lo reembolse, igual que cuando cancela el salón. Nunca lanza: si Mercado Pago falla, también queda
+   * para el personal. En los dos casos se avisa a quien maneja la caja (EVENTO_ANTICIPO_POR_DEVOLVER).
+   */
+  @OnEvent(EVENTO_ANTICIPO_REEMBOLSABLE)
+  async alCancelarConReembolso(payload: { citaId: number; solicitanteId: string }): Promise<void> {
+    let porDevolver: MotivoAnticipoPorDevolver | null = null;
+    try {
+      const r = await this.reembolsar(payload.citaId, payload.solicitanteId, {
+        soloMercadoPago: true,
+        nota: 'Reembolsado al cancelar la clienta dentro del plazo de la política de anticipos (art. 56 LFPC)',
+      });
+      // Pagado en el salón: reembolsar no lo toca (lo entrega el personal).
+      if (r.data.estado !== EstadoPago.reembolsado) porDevolver = 'pagado_en_salon';
+    } catch (e) {
+      // 409: ya no hay anticipo por reembolsar (otra petición lo resolvió); no hay nada que avisar.
+      if (!(e instanceof ConflictException)) porDevolver = 'reembolso_automatico_fallo';
+      this.logger.warn(`El anticipo de la cita ${payload.citaId} queda por reembolsar a mano (${e instanceof Error ? e.message : e})`);
+    }
+    if (porDevolver) this.eventEmitter.emit(EVENTO_ANTICIPO_POR_DEVOLVER, { citaId: payload.citaId, motivo: porDevolver });
   }
 
   /**

@@ -13,7 +13,15 @@ import { ReenviarCodigoDto } from './dto/reenviar-codigo.dto';
 import { sanitizeInput, containsSQLInjection, sanitizeRegisterData, sanitizeEmail, sanitizePhone, normalizePhone, buildPhoneLookupCandidates, formaEscapadaAnterior } from '../common/utils/security.util';
 import { validatePasswordAgainstPersonalData } from '../common/validators/password.validator';
 import twilio from 'twilio';
-import { sinConsentimiento } from './dto/consentimiento-datos-sensibles';
+import {
+  CODIGO_CONSENTIMIENTO_SALUD,
+  MENSAJE_SALUD_PERSONAL,
+  MENSAJE_SALUD_TITULAR,
+  alergiasNuevas,
+  sinConsentimiento,
+  traeAlergias,
+} from './dto/consentimiento-datos-sensibles';
+import { ContextoPeticion, documentosDeRegistro, documentoVigente, filaConsentimiento, filasConsentimientoAlta } from '../consentimientos/documentos-legales';
 import { esFotoPerfilPermitida } from '../common/utils/foto-perfil.util';
 import { jwtSecretObligatorio } from '../auth/jwt-secret';
 import {
@@ -30,6 +38,47 @@ import {
   leerCodigo,
 } from './cambio-password';
 import { MAX_TRATAMIENTOS, normalizarTratamientos } from './tratamientos';
+import { TX_HOLGADA } from '../pos/salidas-caja';
+
+/** Página del alta pública de la web: ruta de origen de los consentimientos del registro si el cuerpo no la trae. */
+export const RUTA_REGISTRO = '/register';
+/** Rutas de origen de los consentimientos de la cuenta: el perfil de la titular y las pantallas del panel. */
+export const RUTA_PERFIL = '/perfil';
+export const RUTA_PANEL_USUARIO = '/admin/usuarios-roles';
+export const RUTA_PANEL_ALTA = '/admin/usuarios-roles/nuevo';
+
+/** Promociones: solo la titular puede aceptarlas; el personal solo puede quitarlas (oposición de la persona). */
+export const MENSAJE_PROMOCIONES_SOLO_TITULAR = 'Solo la persona puede aceptar recibir promociones.';
+export const CODIGO_PROMOCIONES_SOLO_TITULAR = 'PROMOCIONES_SOLO_TITULAR';
+
+/**
+ * Quién guarda un cambio de la cuenta, para la evidencia de los consentimientos (datos_salud, promociones):
+ * "perfil" si es la titular (su perfil, ruta "/perfil"); "admin-usuario" si es el personal sobre otra persona,
+ * con su id en registradoPorId (ruta: la que manda el panel o "/admin/usuarios-roles"). Con la ip y el user agent.
+ */
+export type EvidenciaEdicion =
+  | { formulario: 'perfil'; contexto: ContextoPeticion }
+  | { formulario: 'admin-usuario'; contexto: ContextoPeticion; registradoPorId: string };
+const SIN_CONTEXTO: ContextoPeticion = { ip: null, userAgent: null };
+
+/** 400 de datos de salud: el mensaje depende de si guarda la titular o el personal; la web marca la casilla. */
+function errorConsentimientoSalud(esTitular: boolean): BadRequestException {
+  const message = esTitular ? MENSAJE_SALUD_TITULAR : MENSAJE_SALUD_PERSONAL;
+  return new BadRequestException({ message, code: CODIGO_CONSENTIMIENTO_SALUD, errors: { consienteDatosSensibles: message } });
+}
+
+function errorPromocionesSoloTitular(): BadRequestException {
+  return new BadRequestException({
+    message: MENSAJE_PROMOCIONES_SOLO_TITULAR,
+    code: CODIGO_PROMOCIONES_SOLO_TITULAR,
+    errors: { recibePromociones: MENSAJE_PROMOCIONES_SOLO_TITULAR },
+  });
+}
+
+/** Ruta de origen que manda el panel (sanitizada) o, sin ella, la de respaldo. */
+function rutaDelCuerpo(valor: unknown, respaldo: string): string {
+  return (typeof valor === 'string' ? sanitizeInput(valor).slice(0, 300) : '') || respaldo;
+}
 
 /**
  * Select seguro y único para cualquier respuesta que exponga un Usuario al cliente.
@@ -147,7 +196,10 @@ export class UsuariosService {
    * POST /usuarios/registro. `permitirConfirmado` lo pone el controlador solo si quien registra tiene
    * sesión de admin; en el registro público `confirmado` se ignora (la cuenta se activa con el OTP).
    */
-  async crearUsuario(createUsuarioDto: CreateUsuarioDto, opciones: { permitirConfirmado?: boolean } = {}) {
+  async crearUsuario(
+    createUsuarioDto: CreateUsuarioDto,
+    opciones: { permitirConfirmado?: boolean; contexto?: { ip: string | null; userAgent: string | null }; registradoPorId?: string | null } = {},
+  ) {
     // ⚠️ IMPORTANTE: Sanitizar TODOS los datos recibidos antes de procesarlos
     // Esto previene XSS incluso si alguien envía peticiones directas (bypass del frontend)
     const sanitizedData = sanitizeRegisterData(createUsuarioDto);
@@ -165,6 +217,13 @@ export class UsuariosService {
       this.logger.warn('Intento de SQL injection detectado en crearUsuario');
       throw new BadRequestException('Datos inválidos. Por favor verifica la información ingresada.');
     }
+
+    // Alta hecha por el admin (pantalla "nuevo usuario"): misma regla de salud que la titular, sus filas llevan
+    // registradoPorId y no puede aceptar promociones por la persona.
+    const porAdmin = !!opciones.permitirConfirmado;
+    const datosSalud = traeAlergias(createUsuarioDto);
+    if (datosSalud && createUsuarioDto.consienteDatosSensibles !== true) throw errorConsentimientoSalud(!porAdmin);
+    if (porAdmin && recibePromociones === true) throw errorPromocionesSoloTitular();
 
     // Verificar si el email ya existe
     const existe = await this.prisma.usuario.findUnique({
@@ -207,34 +266,58 @@ export class UsuariosService {
     const codigoOTP = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpira = new Date(Date.now() + 2 * 60 * 1000); // 2 minutos
 
-    // Crear nuevo usuario con campos embebidos
+    // Consentimientos del alta (términos, aviso, promociones si las pidió y datos de salud si los capturó con su
+    // consentimiento expreso), siempre: aceptaAvisoPrivacidad=true nunca queda sin su fila. En el alta del admin
+    // llevan su id (registradoPorId). Los documentos (los que manda la web o la versión vigente) se validan antes
+    // de crear nada.
+    const documentos = await documentosDeRegistro(this.prisma, createUsuarioDto.documentos);
+
+    // Crear nuevo usuario con campos embebidos y sus consentimientos en la MISMA transacción
     // ⚠️ IMPORTANTE: Usar sanitizedData, NO createUsuarioDto directamente
-    const nuevoUsuario = await this.prisma.usuario.create({
-      data: {
-        nombre,              // ✅ Ya sanitizado
-        email,               // ✅ Ya sanitizado
-        telefono,            // ✅ Ya sanitizado
-        password: hashedPassword,
-        fechaNacimiento: new Date(fechaNacimiento),
-        // Pregunta de seguridad embebida
-        preguntaSeguridad: sinRespuesta ? null : preguntaSeguridad?.pregunta || '', // ✅ Ya sanitizado
-        respuestaSeguridad: respuestaHasheada,
-        // Campos de perfil capilar embebidos
-        tipoCabello: perfilCapilar?.tipoCabello as any,
-        colorNatural: perfilCapilar?.colorNatural,      // ✅ Ya sanitizado
-        colorActual: perfilCapilar?.colorActual,        // ✅ Ya sanitizado
-        productosUsados: perfilCapilar?.productosUsados, // ✅ Ya sanitizado
-        alergias: perfilCapilar?.alergias,              // ✅ Ya sanitizado
-        tratamientosQuimicos: tratamientos.tratamientosQuimicos ?? false,
-        tratamientos: tratamientos.tratamientos ?? null, // ✅ Sanitizado en normalizarTratamientos
-        aceptaAvisoPrivacidad,
-        recibePromociones: recibePromociones || false,
-        codigoOTP,
-        otpExpira,
-        confirmado: opciones.permitirConfirmado ? (createUsuarioDto.confirmado ?? false) : false,
-        activo: true,
-      },
-    });
+    const nuevoUsuario = await this.prisma.$transaction(async (tx) => {
+      const creado = await tx.usuario.create({
+        data: {
+          nombre,              // ✅ Ya sanitizado
+          email,               // ✅ Ya sanitizado
+          telefono,            // ✅ Ya sanitizado
+          password: hashedPassword,
+          // Opcional (minimización)
+          fechaNacimiento: fechaNacimiento ? new Date(fechaNacimiento) : null,
+          // Pregunta de seguridad embebida
+          preguntaSeguridad: sinRespuesta ? null : preguntaSeguridad?.pregunta || '', // ✅ Ya sanitizado
+          respuestaSeguridad: respuestaHasheada,
+          // Campos de perfil capilar embebidos (opcionales). El tipo de cabello sale del DTO (enum validado):
+          // sanitizeRegisterData pone 'liso' cuando no viene y no se debe inventar el dato.
+          tipoCabello: createUsuarioDto.perfilCapilar?.tipoCabello ?? null,
+          colorNatural: perfilCapilar?.colorNatural,      // ✅ Ya sanitizado
+          colorActual: perfilCapilar?.colorActual,        // ✅ Ya sanitizado
+          productosUsados: perfilCapilar?.productosUsados, // ✅ Ya sanitizado
+          alergias: perfilCapilar?.alergias,              // ✅ Ya sanitizado
+          tratamientosQuimicos: tratamientos.tratamientosQuimicos ?? false,
+          tratamientos: tratamientos.tratamientos ?? null, // ✅ Sanitizado en normalizarTratamientos
+          aceptaAvisoPrivacidad,
+          recibePromociones: recibePromociones || false,
+          codigoOTP,
+          otpExpira,
+          confirmado: opciones.permitirConfirmado ? (createUsuarioDto.confirmado ?? false) : false,
+          activo: true,
+        },
+      });
+      await tx.consentimiento.createMany({
+        data: filasConsentimientoAlta({
+          usuarioId: creado.id,
+          documentos,
+          recibePromociones: recibePromociones === true,
+          datosSalud,
+          formulario: porAdmin ? 'admin-usuario' : 'registro',
+          // La página que manda la web; sin ella, la del alta (pública o del panel)
+          rutaOrigen: rutaDelCuerpo(createUsuarioDto.rutaOrigen, porAdmin ? RUTA_PANEL_ALTA : RUTA_REGISTRO),
+          contexto: opciones.contexto ?? { ip: null, userAgent: null },
+          registradoPorId: porAdmin ? (opciones.registradoPorId ?? null) : null,
+        }),
+      });
+      return creado;
+    }, TX_HOLGADA);
 
     // Log seguro (sin datos sensibles)
     this.logger.log(`Usuario registrado: ${nuevoUsuario.id}`);
@@ -556,10 +639,57 @@ export class UsuariosService {
     }
   }
 
-  async actualizarUsuario(id: string, updateData: any) {
+  /**
+   * Guarda los cambios de la cuenta y, en la MISMA transacción, la evidencia de los consentimientos que cambian
+   * (con la versión vigente del aviso de privacidad, que describe esas finalidades):
+   * - Alergias con texto y distintas de las guardadas: exigen consienteDatosSensibles === true (400) e insertan
+   *   datos_salud aceptado. Las mismas alergias, o quitarlas, no piden nada ni insertan otra fila.
+   * - recibePromociones distinto del guardado: fila promociones aceptado o revocado. El personal solo puede
+   *   ponerlo en false (400 si intenta aceptarlo por la persona).
+   * Las filas del personal llevan registradoPorId; las de la titular, formulario "perfil" y ruta "/perfil".
+   */
+  private async guardarEdicion(id: string, data: Record<string, any>, cuerpo: any, evidencia: EvidenciaEdicion) {
+    const esTitular = evidencia.formulario === 'perfil';
+    const registradoPorId = evidencia.formulario === 'admin-usuario' ? evidencia.registradoPorId : null;
+    const rutaOrigen = esTitular ? RUTA_PERFIL : rutaDelCuerpo(cuerpo?.rutaOrigen, RUTA_PANEL_USUARIO);
+    return this.prisma.$transaction(async (tx) => {
+      const actual = await tx.usuario.findUnique({ where: { id }, select: { alergias: true, recibePromociones: true } });
+      if (!actual) throw new NotFoundException('Usuario no encontrado');
+
+      const cambios: Array<{ tipo: 'datos_salud' | 'promociones'; accion: 'aceptado' | 'revocado' }> = [];
+      if (alergiasNuevas(data.alergias, actual.alergias)) {
+        if (cuerpo?.consienteDatosSensibles !== true) throw errorConsentimientoSalud(esTitular);
+        cambios.push({ tipo: 'datos_salud', accion: 'aceptado' });
+      }
+      if (typeof data.recibePromociones === 'boolean' && data.recibePromociones !== actual.recibePromociones) {
+        if (data.recibePromociones && !esTitular) throw errorPromocionesSoloTitular();
+        cambios.push({ tipo: 'promociones', accion: data.recibePromociones ? 'aceptado' : 'revocado' });
+      }
+      // Antes de escribir: sin versión publicada del aviso no se guarda (no queda una fila sin documento)
+      const aviso = cambios.length > 0 ? await documentoVigente(tx, 'aviso-privacidad') : null;
+
+      const usuario = await tx.usuario.update({ where: { id }, data, select: SELECT_USUARIO_SEGURO });
+      for (const cambio of cambios) {
+        await tx.consentimiento.create({
+          data: filaConsentimiento({
+            usuarioId: id,
+            ...cambio,
+            documento: aviso,
+            formulario: evidencia.formulario,
+            rutaOrigen,
+            contexto: evidencia.contexto,
+            registradoPorId,
+          }),
+        });
+      }
+      return usuario;
+    }, TX_HOLGADA);
+  }
+
+  async actualizarUsuario(id: string, updateData: any, evidencia: EvidenciaEdicion) {
     await this.validarFotoDelCliente(id, updateData.foto);
-    // El consentimiento de datos sensibles solo se valida en el DTO: no es una columna.
-    const { email, password, tratamientosQuimicos, tratamientos, perfilCapilar, ...camposActualizables } = sinConsentimiento(updateData);
+    // consienteDatosSensibles y rutaOrigen no son columnas: los usa guardarEdicion para la evidencia.
+    const { email, password, tratamientosQuimicos, tratamientos, perfilCapilar, rutaOrigen: _ruta, ...camposActualizables } = sinConsentimiento(updateData);
     // perfilCapilar no es columna (Prisma daba 500): sus campos van a las columnas, como en el perfil propio.
     const pc = perfilCapilar ?? {};
     if (pc.tipoCabello !== undefined && camposActualizables.tipoCabello === undefined) camposActualizables.tipoCabello = pc.tipoCabello;
@@ -581,11 +711,7 @@ export class UsuariosService {
       );
     }
 
-    const usuarioActualizado = await this.prisma.usuario.update({
-      where: { id },
-      data: camposActualizables,
-      select: SELECT_USUARIO_SEGURO,
-    });
+    const usuarioActualizado = await this.guardarEdicion(id, camposActualizables, updateData, evidencia);
 
     if (!usuarioActualizado) {
       throw new NotFoundException('Usuario no encontrado');
@@ -1289,7 +1415,7 @@ export class UsuariosService {
     };
   }
 
-  async actualizarPerfilUsuario(id: string, updateData: any) {
+  async actualizarPerfilUsuario(id: string, updateData: any, evidencia: EvidenciaEdicion = { formulario: 'perfil', contexto: SIN_CONTEXTO }) {
     await this.validarFotoDelCliente(id, updateData.foto);
     const camposPermitidos = [
       'nombre', 'telefono', 'fechaNacimiento', 'recibePromociones', 'foto',
@@ -1353,11 +1479,7 @@ export class UsuariosService {
       ),
     );
 
-    const usuario = await this.prisma.usuario.update({
-      where: { id },
-      data: actualizaciones,
-      select: SELECT_USUARIO_SEGURO,
-    });
+    const usuario = await this.guardarEdicion(id, actualizaciones, updateData, evidencia);
 
     if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');

@@ -19,20 +19,27 @@ afterAll(() => {
   else process.env.CLOUDINARY_CLOUD_NAME = nubeOriginal;
 });
 
+/** Evidencia de PUT /usuarios/:id hecho por el admin (usuarios.controller). */
+const ADMIN = { formulario: 'admin-usuario' as const, contexto: { ip: null, userAgent: null }, registradoPorId: 'admin-1' };
+/** Lo que validarFotoDelCliente consulta (la foto guardada); guardarEdicion lee otra cosa (alergias y promociones). */
+const CONSULTA_FOTO = expect.objectContaining({ select: { foto: true } });
+
 function servicioCon(fotoGuardada: string | null) {
-  const prisma = {
+  const prisma: any = {
     usuario: {
       findUnique: jest.fn().mockResolvedValue({ foto: fotoGuardada }),
       update: jest.fn(async ({ data }) => ({ id: 'u-1', ...data })),
     },
   };
+  // El guardado va en una transacción (consentimientos-edicion.spec.ts): aquí la transacción usa el mismo cliente
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const servicio = new UsuariosService(prisma as any, {} as any, {} as any, {} as any);
   return { servicio, prisma };
 }
 
 describe.each([
   ['actualizarPerfilUsuario', (s: UsuariosService, foto: unknown) => s.actualizarPerfilUsuario('u-1', { foto })],
-  ['actualizarUsuario (admin)', (s: UsuariosService, foto: unknown) => s.actualizarUsuario('u-1', { foto })],
+  ['actualizarUsuario (admin)', (s: UsuariosService, foto: unknown) => s.actualizarUsuario('u-1', { foto }, ADMIN)],
 ])('Validación de foto en %s', (_nombre, actualizar) => {
   it('rechaza con 400 una URL ajena y no guarda nada', async () => {
     const { servicio, prisma } = servicioCon(GOOGLE);
@@ -58,13 +65,13 @@ describe.each([
     const { servicio, prisma } = servicioCon(GOOGLE);
     await actualizar(servicio, null);
     expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBeNull();
-    expect(prisma.usuario.findUnique).not.toHaveBeenCalled();
+    expect(prisma.usuario.findUnique).not.toHaveBeenCalledWith(CONSULTA_FOTO);
   });
 
   it('sin foto en el cuerpo no consulta ni valida', async () => {
     const { servicio, prisma } = servicioCon(GOOGLE);
     await actualizar(servicio, undefined);
-    expect(prisma.usuario.findUnique).not.toHaveBeenCalled();
+    expect(prisma.usuario.findUnique).not.toHaveBeenCalledWith(CONSULTA_FOTO);
     expect(prisma.usuario.update).toHaveBeenCalled();
   });
 
@@ -85,7 +92,7 @@ describe('Cadena vacía', () => {
 
   it('en el admin se guarda tal cual (como antes)', async () => {
     const { servicio, prisma } = servicioCon(GOOGLE);
-    await servicio.actualizarUsuario('u-1', { foto: '' });
+    await servicio.actualizarUsuario('u-1', { foto: '' }, ADMIN);
     expect(prisma.usuario.update.mock.calls[0][0].data.foto).toBe('');
   });
 });

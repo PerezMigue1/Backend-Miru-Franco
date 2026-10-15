@@ -1,8 +1,10 @@
-import { INestApplication, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, INestApplication, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import type { AddressInfo } from 'node:net';
-import { crearFirma, crearFirmaSubidaFoto, firmarParametrosCloudinary } from './firma-cloudinary';
+import { crearFirma, crearFirmaSubidaFoto, firmarParametrosCloudinary, usoDeFirma } from './firma-cloudinary';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 
@@ -17,6 +19,8 @@ jest
 const { AuthController } = require('./auth.controller');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { AuthService } = require('./auth.service');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { SubidasController, FirmaSubidaDto } = require('./subidas.controller');
 
 // Valores falsos: nunca se llama a la API de Cloudinary.
 const NUBE = 'nube-de-prueba';
@@ -217,5 +221,62 @@ describe('crearFirma por uso', () => {
     const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     expect(() => crearFirma('galeria', 'admin-1', ahora)).toThrow(ServiceUnavailableException);
     log.mockRestore();
+  });
+
+  it('ilustrativa: carpeta galeria/ilustrativas (queda en la URL), los mismos formatos y sin public_id ni overwrite', () => {
+    ponerVariables(completas);
+    const r = crearFirma('ilustrativa', 'admin-1', ahora);
+    expect(r.uploadUrl).toBe(`https://api.cloudinary.com/v1_1/${NUBE}/image/upload`);
+    expect(r.params).toEqual({
+      allowed_formats: 'jpg,jpeg,png,webp,gif,avif,heic,heif',
+      folder: 'galeria/ilustrativas',
+      timestamp,
+    });
+    expect(r.signature).toBe(firmarParametrosCloudinary(r.params, SECRETO));
+    expect(JSON.stringify(r)).not.toContain(SECRETO);
+  });
+});
+
+/**
+ * Imágenes ilustrativas marcadas al subirlas: quien sube a la galería elige si es una foto real de un
+ * trabajo del salón o una imagen ilustrativa; las ilustrativas van a una carpeta con /ilustrativas/ en la URL.
+ */
+describe('POST /api/subidas/firma con la bandera ilustrativa', () => {
+  const ahora = Date.UTC(2026, 9, 7, 12, 0, 0);
+
+  it('usoDeFirma: galería con ilustrativa=true firma la carpeta de ilustrativas; sin la bandera, galería', () => {
+    expect(usoDeFirma({ uso: 'galeria', ilustrativa: true })).toBe('ilustrativa');
+    expect(usoDeFirma({ uso: 'galeria', ilustrativa: false })).toBe('galeria');
+    expect(usoDeFirma({ uso: 'galeria' })).toBe('galeria');
+    expect(usoDeFirma({ uso: 'factura' })).toBe('factura');
+  });
+
+  it('usoDeFirma: una factura no puede ser ilustrativa (400 en español)', () => {
+    expect(() => usoDeFirma({ uso: 'factura', ilustrativa: true })).toThrow(BadRequestException);
+    expect(() => usoDeFirma({ uso: 'factura', ilustrativa: true })).toThrow('Solo una imagen de la galería puede marcarse como ilustrativa');
+  });
+
+  it('el DTO acepta la bandera opcional y la exige booleana, con el mismo error de uso de siempre', async () => {
+    expect(await validate(plainToInstance(FirmaSubidaDto, { uso: 'galeria', ilustrativa: true }))).toEqual([]);
+    expect(await validate(plainToInstance(FirmaSubidaDto, { uso: 'galeria' }))).toEqual([]);
+    const errores = await validate(plainToInstance(FirmaSubidaDto, { uso: 'galeria', ilustrativa: 'si' }));
+    expect(errores.map((e) => e.property)).toEqual(['ilustrativa']);
+    expect(Object.values(errores[0].constraints ?? {})).toEqual(['ilustrativa debe ser verdadero o falso']);
+  });
+
+  it('el controlador firma la carpeta de ilustrativas para el personal de galería', () => {
+    ponerVariables(completas);
+    jest.useFakeTimers({ now: ahora });
+    try {
+      const controller = new SubidasController();
+      const r = controller.firma({ id: 'estilista-1', rol: 'estilista' }, { uso: 'galeria', ilustrativa: true });
+      expect(r.success).toBe(true);
+      expect(r.data.params.folder).toBe('galeria/ilustrativas');
+      expect(r.data.signature).toBe(firmarParametrosCloudinary(r.data.params, SECRETO));
+      const real = controller.firma({ id: 'estilista-1', rol: 'estilista' }, { uso: 'galeria' });
+      expect(real.data.params.folder).toBe('galeria');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

@@ -23,6 +23,8 @@ const REGISTRO = {
   fechaNacimiento: '1995-05-10T00:00:00.000Z',
   preguntaSeguridad: { pregunta: '¿Mascota?', respuesta: 'Firulais' },
   perfilCapilar: { tipoCabello: 'rizado' },
+  // Ahora también son obligatorios los términos (registro-consentimientos.spec.ts).
+  aceptaTerminos: true,
   aceptaAvisoPrivacidad: true,
 };
 const capilar = (extra: Record<string, unknown>) => ({ ...REGISTRO, perfilCapilar: { tipoCabello: 'liso', ...extra } });

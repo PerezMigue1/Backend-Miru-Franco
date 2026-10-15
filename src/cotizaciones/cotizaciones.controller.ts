@@ -17,11 +17,12 @@ export class CotizacionesController {
   }
 
   /**
-   * GET /api/cotizaciones/mias — las cotizaciones del cliente en sesión. El cliente sale del token;
+   * GET /api/cotizaciones/mias: las cotizaciones del usuario en sesión. El usuario sale del token;
    * no se acepta clienteId por query, params ni body. Va antes de `:id` para que no la capture.
+   * Sin @Permisos: cualquier usuario autenticado (también el personal desde su portal) puede llamarla,
+   * porque SIEMPRE se filtra por req.user.id y nunca expone datos ajenos.
    */
   @Get('mias')
-  @Permisos('citas:propia')
   async listarMias(@Request() req: any) {
     return this.cotizacionesService.listarMias(req.user?.id);
   }

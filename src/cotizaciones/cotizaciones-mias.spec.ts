@@ -18,10 +18,12 @@ const USUARIOS: Record<string, { rol: string }> = {
   'u-ana': { rol: 'cliente' },
   'u-beto': { rol: 'cliente' },
   'u-beca': { rol: 'becario' },
+  'u-esti': { rol: 'estilista' },
 };
 const PERMISOS: Record<string, string[]> = {
   cliente: ['tienda:propia', 'citas:propia', 'perfil:propio'],
   becario: ['citas:asignadas', 'servicios:lectura'],
+  estilista: ['citas:escritura', 'servicios:lectura', 'clientes:lectura'],
 };
 
 const PAQUETE_XV = { id: 1, tipo_evento: 'XV años', descripcion: 'Peinado y maquillaje', servicios_vinculados: ['s1'], precio_especial: '4500.00' };
@@ -33,6 +35,7 @@ const FILAS = [
   { id: 11, clienteNombre: 'Ana', clienteId: 'u-ana', fechaEvento: new Date('2027-02-14T17:00:00Z'), cantidadPersonas: null, monto: '8900.00', anticipo: '0.00', estado: 'confirmada', notas: null, creadoEn: new Date(), actualizadoEn: new Date(), paqueteId: 2, paquete: PAQUETE_BODA, cliente: { id: 'u-ana', nombre: 'Ana', email: 'ana@example.com', telefono: '5550000001' } },
   { id: 20, clienteNombre: 'Beto', clienteId: 'u-beto', fechaEvento: new Date('2026-12-01T16:00:00Z'), cantidadPersonas: 2, monto: '4500.00', anticipo: '4500.00', estado: 'confirmada', notas: 'Solo de Beto', creadoEn: new Date(), actualizadoEn: new Date(), paqueteId: 1, paquete: PAQUETE_XV, cliente: { id: 'u-beto', nombre: 'Beto', email: 'beto@example.com', telefono: '5550000002' } },
   { id: 30, clienteNombre: 'Sin cuenta', clienteId: null, fechaEvento: new Date('2026-10-30T16:00:00Z'), cantidadPersonas: 10, monto: '9000.00', anticipo: '0.00', estado: 'pendiente', notas: null, creadoEn: new Date(), actualizadoEn: new Date(), paqueteId: 2, paquete: PAQUETE_BODA, cliente: null },
+  { id: 40, clienteNombre: 'Becaria', clienteId: 'u-beca', fechaEvento: new Date('2026-12-15T16:00:00Z'), cantidadPersonas: 1, monto: '1500.00', anticipo: '0.00', estado: 'pendiente', notas: 'De la becaria', creadoEn: new Date(), actualizadoEn: new Date(), paqueteId: 1, paquete: PAQUETE_XV, cliente: { id: 'u-beca', nombre: 'Becaria', email: 'beca@example.com', telefono: '5550000003' } },
 ];
 
 /** Aplica un `select` de Prisma (anidado) a una fila. */
@@ -138,10 +141,24 @@ describe('GET /api/cotizaciones/mias', () => {
     expect(prisma.cotizacion.findMany).not.toHaveBeenCalled();
   });
 
-  it('un rol sin el permiso recibe 403', async () => {
-    const res = await pedir('/api/cotizaciones/mias', sesion('u-beca'));
+  it('cualquier rol autenticado usa /mias y ve solo las suyas (el personal ya no recibe 403)', async () => {
+    const beca = await pedir('/api/cotizaciones/mias', sesion('u-beca'));
+    expect(beca.status).toBe(200);
+    const cuerpoBeca = await beca.json();
+    expect(cuerpoBeca.data.map((c: any) => c.id)).toEqual([40]);
+    expect(prisma.cotizacion.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { clienteId: 'u-beca' } }));
+
+    const esti = await pedir('/api/cotizaciones/mias', sesion('u-esti'));
+    expect(esti.status).toBe(200);
+    const cuerpoEsti = await esti.json();
+    expect(cuerpoEsti.data).toEqual([]);
+    expect(prisma.cotizacion.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { clienteId: 'u-esti' } }));
+  });
+
+  it('pedir una cotización ajena por id responde como ya responde el repo: 403 para la clienta (sin servicios:lectura)', async () => {
+    const res = await pedir('/api/cotizaciones/20', sesion('u-ana'));
     expect(res.status).toBe(403);
-    expect(prisma.cotizacion.findMany).not.toHaveBeenCalled();
+    expect(prisma.cotizacion.findUnique).not.toHaveBeenCalled();
   });
 
   it('la respuesta no incluye campos fuera de la lista', async () => {

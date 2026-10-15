@@ -9,6 +9,7 @@ import {
   Post,
   Put,
   Query,
+  Request,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -18,6 +19,7 @@ import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
+import { SesionOpcionalGuard } from '../auth/sesion-opcional.guard';
 
 /** Un id que no es número responde 400 (antes llegaba NaN a Prisma y daba 500). */
 const idPipe = new ParseIntPipe({ exceptionFactory: () => new BadRequestException('Id inválido') });
@@ -27,20 +29,29 @@ export class ProductosController {
   constructor(private readonly productosService: ProductosService) {}
 
   /**
-   * Obtener catálogo de productos (público)
-   * Devuelve todos los productos. Filtro opcional: ?categoria=shampoo
+   * Obtener catálogo de productos (público): solo activos. Filtro opcional: ?categoria=shampoo
+   * Con sesión opcional: ?incluirInactivos=1 suma los inactivos solo para admin o servicios:escritura
+   * (inventario admin); para el resto se ignora.
    */
   @Get()
-  async listar(@Query('categoria') categoria?: string) {
-    return this.productosService.listar(categoria);
+  @UseGuards(SesionOpcionalGuard)
+  async listar(
+    @Request() req: any,
+    @Query('categoria') categoria?: string,
+    @Query('incluirInactivos') incluirInactivos?: string,
+  ) {
+    const pideInactivos = incluirInactivos === '1' || incluirInactivos === 'true';
+    return this.productosService.listar(categoria, pideInactivos, req.user?.id);
   }
 
   /**
-   * Obtener producto por ID (público)
+   * Obtener producto por ID (público). Uno inactivo responde 404, salvo al admin o a quien tiene
+   * servicios:escritura (detalle admin, para reactivarlo).
    */
   @Get(':id')
-  async obtenerPorId(@Param('id', idPipe) id: number) {
-    return this.productosService.obtenerPorId(id);
+  @UseGuards(SesionOpcionalGuard)
+  async obtenerPorId(@Param('id', idPipe) id: number, @Request() req: any) {
+    return this.productosService.obtenerPorId(id, req.user?.id);
   }
 
   /**

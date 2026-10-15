@@ -4,11 +4,14 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CreatePresentacionDto } from './presentacion.dto';
+import { MENSAJE_DESCUENTO_MAX, MENSAJE_DESCUENTO_MIN } from './create-producto.dto';
 
 /**
  * DTO para actualización parcial de productos.
@@ -38,6 +41,8 @@ export class UpdateProductoDto {
   descripcionLarga?: string;
 
   @IsInt()
+  @Min(0, { message: MENSAJE_DESCUENTO_MIN })
+  @Max(100, { message: MENSAJE_DESCUENTO_MAX })
   @IsOptional()
   descuento?: number;
 
@@ -58,6 +63,11 @@ export class UpdateProductoDto {
   @IsBoolean()
   @IsOptional()
   crueltyFree?: boolean;
+
+  /** true reactiva un producto desactivado (DELETE pone false). */
+  @IsBoolean()
+  @IsOptional()
+  activo?: boolean;
 
   @IsArray()
   @IsString({ each: true })

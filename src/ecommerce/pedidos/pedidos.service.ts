@@ -5,17 +5,26 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPago, EstadoPedido, Pago, Pedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { TX_HOLGADA } from '../../pos/salidas-caja';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
-import { bloquearReembolsosDelPedido } from '../devoluciones/devoluciones.service';
+import {
+  bloquearReembolsosDelPedido,
+  DevolucionesService,
+  ESTADOS_ACTIVOS,
+  saldoRevocable,
+} from '../devoluciones/devoluciones.service';
+import { mensajePlazoRevocacionTerminado, ORIGEN_REVOCACION, plazoRevocacion, productoConClienta } from './revocacion';
 import { CreatePedidoDto } from './dto/create-pedido.dto';
 import { UpdatePedidoDto } from './dto/update-pedido.dto';
 import { PedidoItemLineDto } from './dto/pedido-item-line.dto';
 import { precioPresentacionANumero } from '../../common/utils/money.util';
+import { containsSQLInjection, sanitizeInput } from '../../common/utils/security.util';
 import { normalizarRangoFechas } from '../../common/utils/fecha-rango.util';
 import {
   cantidadPorPresentacion,
@@ -46,6 +55,33 @@ const PROVEEDOR_MERCADOPAGO = 'mercadopago';
 /** Qué pasó con el dinero cuando la clienta cancela un pedido ya pagado (lo leen la web y la app). */
 export type EstadoReembolsoCancelacion = 'reembolsado' | 'en_revision';
 
+/** Resultado de revocar una compra: reembolsada, por reembolsar por el personal, o falta entregar el producto. */
+export type EstadoRevocacion = EstadoReembolsoCancelacion | 'pendiente_entrega';
+
+const MENSAJE_YA_REVOCADA = 'Ya revocaste esta compra.';
+
+/** Motivo de la devolución de una revocación: la etiqueta legible y, si la dio, lo que escribió la clienta. */
+function motivoRevocacion(motivo?: string | null): string {
+  const prefijo = '[Revocación de compra · art. 56 LFPC]';
+  const texto = (motivo ?? '').trim();
+  return texto ? `${prefijo} ${texto}` : prefijo;
+}
+
+/** Lo que agrega el detalle del portal para el plazo de revocación (sale de la misma consulta del pedido). */
+type ExtraRevocacion = { historialEstado?: { estadoNuevo: EstadoPedido; creadoEn: Date }[]; devoluciones?: { id: number }[] };
+
+/** Datos del plazo de revocación: la primera entrega (o el primer 'enviado' heredado) del historial, si hay. */
+function datosPlazo(pedido: { estado: EstadoPedido; pagadoEn: Date | null }, historial: ExtraRevocacion['historialEstado'], yaRevocado: boolean) {
+  const primera = (estado: EstadoPedido) => historial?.find((h) => h.estadoNuevo === estado)?.creadoEn ?? null;
+  return {
+    estado: pedido.estado,
+    pagadoEn: pedido.pagadoEn,
+    entregadoEn: primera(EstadoPedido.entregado),
+    enviadoEn: primera(EstadoPedido.enviado),
+    yaRevocado,
+  };
+}
+
 @Injectable()
 export class PedidosService {
   private readonly logger = new Logger(PedidosService.name);
@@ -55,6 +91,8 @@ export class PedidosService {
     private readonly access: EcommerceAccessService,
     private readonly eventEmitter: EventEmitter2,
     private readonly mercadoPago: MercadoPagoClient,
+    // Opcional: solo lo usa la revocación de compra (el reembolso de una revocación vive en devoluciones).
+    @Optional() private readonly devoluciones?: DevolucionesService,
   ) {}
 
   private includeDefault(): Prisma.PedidoInclude {
@@ -62,6 +100,19 @@ export class PedidosService {
       items: { include: { producto: true, presentacion: true } },
       direccionEnvio: true,
       usuario: { select: { id: true, nombre: true, email: true } },
+    };
+  }
+
+  /** Además, la entrega o el envío heredado (historial) y si ya tiene una revocación activa: para el plazo del art. 56. */
+  private includeRevocacion(): Prisma.PedidoInclude {
+    return {
+      ...this.includeDefault(),
+      historialEstado: {
+        where: { estadoNuevo: { in: [EstadoPedido.entregado, EstadoPedido.enviado] } },
+        select: { estadoNuevo: true, creadoEn: true },
+        orderBy: { creadoEn: 'asc' },
+      },
+      devoluciones: { where: { origen: ORIGEN_REVOCACION, estado: { in: ESTADOS_ACTIVOS } }, select: { id: true }, take: 1 },
     };
   }
 
@@ -180,10 +231,10 @@ export class PedidosService {
     };
   }
 
-  async obtenerPorId(id: number, solicitanteId: string, propios = false) {
+  async obtenerPorId(id: number, solicitanteId: string, propios = false, ahora: Date = new Date()) {
     const data = await this.prisma.pedido.findUnique({
       where: { id },
-      include: this.includeDefault(),
+      include: propios ? this.includeRevocacion() : this.includeDefault(),
     });
     if (!data) throw new NotFoundException('Pedido no encontrado');
 
@@ -197,7 +248,123 @@ export class PedidosService {
         throw new ForbiddenException('No tienes permiso para acceder a este recurso');
       }
     }
-    return { success: true, data };
+    if (!propios) return { success: true, data };
+    // Portal: hasta cuándo puede revocar su compra (art. 56) y si hoy puede; lo auxiliar no sale en la respuesta.
+    const { historialEstado, devoluciones, ...pedido } = data as typeof data & ExtraRevocacion;
+    const plazo = plazoRevocacion(datosPlazo(pedido, historialEstado, (devoluciones?.length ?? 0) > 0), ahora);
+    if (!plazo.revocableHasta) return { success: true, data: { ...pedido, ...plazo, montoRevocable: 0 } };
+    // Mismas reglas que revocar(): una devolución en proceso o el pago ya reembolsado la bloquean, y solo
+    // se reintegra el saldo (saldoRevocable: menos lo ya reembolsado y nunca más de lo cobrado).
+    const [enProceso, pagoReembolsado, { saldo }] = await Promise.all([
+      this.prisma.devolucion.findFirst({ where: { pedidoId: id, estado: 'pendiente' }, select: { id: true } }),
+      this.prisma.pago.findFirst({ where: { pedidoId: id, estado: EstadoPago.reembolsado }, select: { id: true } }),
+      saldoRevocable(this.prisma, id, pedido.total),
+    ]);
+    const puedeRevocar = plazo.puedeRevocar && !enProceso && !pagoReembolsado && saldo.gt(0);
+    return { success: true, data: { ...pedido, revocableHasta: plazo.revocableHasta, puedeRevocar, montoRevocable: saldo.toNumber() } };
+  }
+
+  /**
+   * Revocación de compra (art. 56 LFPC), solo la dueña (lo ajeno responde 404) y dentro de los 5 días hábiles.
+   * - Sin entregar: se cancela el pedido, regresa el stock y se registra la devolución (origen revocacion_art56);
+   *   si se pagó con Mercado Pago se reembolsa en ese momento; si no, el personal la reembolsa desde devoluciones.
+   * - Entregado (o el heredado 'enviado'): queda la devolución pendiente de que la clienta entregue el producto
+   *   en el salón; el plazo corre desde la entrega (o el envío) del historial y, si no hay, desde el pago.
+   * Con el candado de reembolsos del pedido: dos peticiones simultáneas dejan una sola devolución.
+   */
+  async revocar(id: number, solicitanteId: string, motivo?: string, ahora: Date = new Date()) {
+    const leido = await this.prisma.pedido.findUnique({ where: { id }, include: this.includeRevocacion() });
+    if (!leido || leido.usuarioId !== solicitanteId) throw new NotFoundException('Pedido no encontrado');
+    // Mismo saneamiento que los demás textos libres, antes de tocar nada.
+    const motivoLimpio = motivo ? sanitizeInput(motivo) : '';
+    if (motivoLimpio && containsSQLInjection(motivoLimpio)) throw new BadRequestException('El motivo contiene caracteres no permitidos');
+    const { historialEstado, devoluciones: revocaciones, ...pedido } = leido as typeof leido & ExtraRevocacion;
+    if ((revocaciones?.length ?? 0) > 0) throw new ConflictException(MENSAJE_YA_REVOCADA);
+    if (pedido.estado === EstadoPedido.cancelado) throw new ConflictException('Este pedido está cancelado: no hay compra que revocar.');
+    const { revocableHasta } = plazoRevocacion(datosPlazo(pedido, historialEstado, false), ahora);
+    if (!revocableHasta) throw new ConflictException('Tu pedido todavía no está pagado: no hay pago que reintegrar.');
+    if (ahora.getTime() > revocableHasta.getTime()) throw new ConflictException(mensajePlazoRevocacionTerminado(revocableHasta));
+
+    // Entregado o el heredado 'enviado': el producto está con la clienta, se espera a que lo devuelva.
+    const entregado = productoConClienta(pedido.estado);
+    const items = (pedido as { items?: { id: number; presentacionId: number; cantidad: number }[] }).items ?? [];
+    const devolucion = await this.prisma.$transaction(async (tx) => {
+      await bloquearReembolsosDelPedido(tx, id);
+      // Bloquea una devolución en proceso (pendiente) o una revocación vigente; una normal ya resuelta no.
+      const activa = await tx.devolucion.findFirst({
+        where: { pedidoId: id, OR: [{ estado: 'pendiente' }, { origen: ORIGEN_REVOCACION, estado: { in: ESTADOS_ACTIVOS } }] },
+        select: { origen: true },
+      });
+      if (activa) {
+        throw new ConflictException(
+          activa.origen === ORIGEN_REVOCACION
+            ? MENSAJE_YA_REVOCADA
+            : 'Tienes una solicitud de devolución activa en este pedido: retírala o comunícate con el salón para revocar la compra.',
+        );
+      }
+      const reembolsado = await tx.pago.findFirst({ where: { pedidoId: id, estado: EstadoPago.reembolsado }, select: { id: true } });
+      if (reembolsado) throw new ConflictException('El pago de este pedido ya se reembolsó.');
+      // Solo el saldo: lo pagado menos lo ya reembolsado por devoluciones aprobadas, nunca más de lo cobrado.
+      const { saldo, articulos } = await saldoRevocable(tx, id, pedido.total);
+      if (saldo.lte(0)) throw new ConflictException('Este pedido ya se reembolsó por completo');
+      // El stock regresa solo por los artículos que la clienta no haya devuelto ya.
+      const lineas = items
+        .filter((i) => !articulos.has(i.id))
+        .map((i) => ({ presentacionId: i.presentacionId, cantidad: i.cantidad }));
+      if (!entregado) {
+        // Condicional: si el salón lo movió (o lo entregó) un instante antes, no se pisa.
+        const r = await tx.pedido.updateMany({ where: { id, estado: pedido.estado }, data: { estado: EstadoPedido.cancelado } });
+        if (r.count !== 1) throw new ConflictException('El pedido cambió mientras lo revocabas. Recarga para ver su estado.');
+        await incrementarStockPorLineas(tx, lineas, { usuarioId: solicitanteId, referenciaTipo: 'pedido', referenciaId: String(id), motivo: 'pedido_revocado' });
+        await tx.historialEstadoPedido.create({
+          data: { pedidoId: id, estadoAnterior: pedido.estado, estadoNuevo: EstadoPedido.cancelado, origen: 'api.revocar_clienta', usuarioId: solicitanteId },
+        });
+      }
+      return tx.devolucion.create({
+        data: {
+          pedidoId: id,
+          estado: 'pendiente',
+          tipo: 'reembolso',
+          origen: ORIGEN_REVOCACION,
+          motivo: motivoRevocacion(motivoLimpio),
+          monto: saldo,
+        },
+        select: { id: true, monto: true },
+      });
+    }, TX_HOLGADA);
+
+    const monto = Number(devolucion.monto);
+    let estado: EstadoRevocacion = 'pendiente_entrega';
+    if (!entregado) {
+      estado = await this.reembolsarRevocacionEnLinea(devolucion.id);
+      const usuario = (pedido as { usuario?: { nombre?: string | null; email?: string | null } }).usuario;
+      this.eventEmitter.emit('pedido.cancelado', { pedidoId: id, usuarioId: pedido.usuarioId });
+      this.eventEmitter.emit('pedido.cancelado_pagado', {
+        pedidoId: id,
+        usuarioId: pedido.usuarioId,
+        clienta: usuario?.nombre?.trim() || usuario?.email || pedido.usuarioId,
+        monto,
+        reembolso: estado,
+      });
+    } else {
+      // El producto está con la clienta: se avisa a quien gestiona devoluciones que lo reciba y reembolse
+      // (NotificacionesListener.onRevocacionPorRecibir). Después del commit: nunca afecta la revocación.
+      this.eventEmitter.emit('pedido.revocacion_por_recibir', { pedidoId: id, usuarioId: pedido.usuarioId, devolucionId: devolucion.id, monto });
+    }
+    const { data } = await this.obtenerPorId(id, solicitanteId, true, ahora);
+    return { success: true, data, revocacion: { estado, monto, devolucionId: devolucion.id } };
+  }
+
+  /** Reembolso inmediato de la revocación pagada en línea. Nunca lanza: si no sale, lo reembolsa el personal. */
+  private async reembolsarRevocacionEnLinea(devolucionId: number): Promise<EstadoReembolsoCancelacion> {
+    if (!this.devoluciones) return 'en_revision';
+    try {
+      const { aplicada } = await this.devoluciones.completarRevocacion(devolucionId, null, { soloMercadoPago: true });
+      return aplicada ? 'reembolsado' : 'en_revision';
+    } catch (e) {
+      this.logger.warn(`La revocación ${devolucionId} quedó por reembolsar a mano (${e instanceof Error ? e.message : e})`);
+      return 'en_revision';
+    }
   }
 
   private async validarItems(lines: PedidoItemLineDto[]) {
@@ -223,6 +390,10 @@ export class PedidosService {
       }
       // productoId canónico desde BD (el cliente puede enviar un productoId desfasado del carrito)
       const productoId = pres.productoId;
+      // Producto desactivado (borrado lógico): ya no se vende.
+      if (pres.producto.activo === false) {
+        throw new BadRequestException(`Este producto ya no está a la venta (${pres.producto.nombre})`);
+      }
       if (!pres.disponible || pres.stock < line.cantidad) {
         throw new BadRequestException(
           `Stock insuficiente o presentación no disponible (producto ${pres.producto.nombre})`,

@@ -11,6 +11,12 @@ import { CreateSalidaDto } from './dto/create-salida.dto';
 import { containsSQLInjection, sanitizeInput } from '../common/utils/security.util';
 import { normalizarRangoFechas, normalizarRangoFechasSoloDia } from '../common/utils/fecha-rango.util';
 import { diaEnMexico, diasHastaDiaCalendario, sumarDias } from '../common/utils/zona-mexico';
+import {
+  ESTADOS_PEDIDO_VENDIDO,
+  SEMANAS_PREDICCION,
+  calcularFilaPrediccion,
+  ventanaUltimas8Semanas,
+} from './prediccion-inventario';
 
 type MovimientoRow = {
   id: number;
@@ -410,8 +416,9 @@ export class InventarioService {
   async alertasStock(query: AlertasStockDto) {
     const umbral = query.umbral ?? 5;
 
+    // Un producto desactivado ya no se vende: no sale en las alertas.
     const presentaciones = await this.prisma.productoPresentacion.findMany({
-      where: { stock: { lte: umbral } },
+      where: { stock: { lte: umbral }, producto: { activo: true } },
       orderBy: { stock: 'asc' },
       select: {
         id: true,
@@ -425,6 +432,77 @@ export class InventarioService {
     return { success: true, umbral, count: presentaciones.length, data: presentaciones };
   }
 
+  /**
+   * GET /inventario/prediccion: por presentación de productos activos, unidades vendidas en las
+   * últimas 8 semanas (días completos en México) en la tienda en línea (pedidos pagados, en
+   * preparación, listos o entregados; fecha de pago o, si falta, de creación) y en el salón (ventas
+   * pagadas), con promedio semanal, diario y días de cobertura del stock actual.
+   */
+  async prediccion(ahora: Date = new Date()) {
+    const { desde, hasta } = ventanaUltimas8Semanas(ahora);
+    const enVentana = { gte: desde, lt: hasta };
+
+    const [presentaciones, enLinea, enSalon] = await Promise.all([
+      this.prisma.productoPresentacion.findMany({
+        where: { producto: { activo: true } },
+        select: {
+          id: true,
+          tamanio: true,
+          stock: true,
+          producto: { select: { id: true, nombre: true, marca: true, categoria: true } },
+        },
+      }),
+      this.prisma.pedidoItem.groupBy({
+        by: ['presentacionId'],
+        where: {
+          pedido: {
+            estado: { in: [...ESTADOS_PEDIDO_VENDIDO] },
+            OR: [{ pagadoEn: enVentana }, { pagadoEn: null, creadoEn: enVentana }],
+          },
+        },
+        _sum: { cantidad: true },
+      }),
+      this.prisma.ventaLocalItem.groupBy({
+        by: ['presentacionId'],
+        where: { presentacionId: { not: null }, venta: { estado: 'pagada', creadoEn: enVentana } },
+        _sum: { cantidad: true },
+      }),
+    ]);
+
+    const vendidas = new Map<number, number>();
+    for (const fila of [...enLinea, ...enSalon]) {
+      if (fila.presentacionId == null) continue;
+      vendidas.set(fila.presentacionId, (vendidas.get(fila.presentacionId) ?? 0) + (fila._sum.cantidad ?? 0));
+    }
+
+    const data = presentaciones
+      .map((p) => ({
+        presentacionId: p.id,
+        productoId: p.producto.id,
+        producto: p.producto.nombre,
+        marca: p.producto.marca,
+        categoria: p.producto.categoria,
+        tamanio: p.tamanio,
+        stock: p.stock,
+        ...calcularFilaPrediccion(p.stock, vendidas.get(p.id) ?? 0),
+      }))
+      // Primero lo que se acaba antes; al final lo que no tuvo ventas.
+      .sort((a, b) => {
+        if (a.diasCobertura === null || b.diasCobertura === null) {
+          if (a.diasCobertura !== b.diasCobertura) return a.diasCobertura === null ? 1 : -1;
+          return a.producto.localeCompare(b.producto);
+        }
+        return a.diasCobertura - b.diasCobertura;
+      });
+
+    return {
+      success: true,
+      ventana: { desde, hasta, semanas: SEMANAS_PREDICCION },
+      count: data.length,
+      data,
+    };
+  }
+
   async caducidades(query: CaducidadesDto) {
     const dias = query.dias ?? 30;
     const ahora = new Date();
@@ -433,7 +511,7 @@ export class InventarioService {
     const { lte: limite } = normalizarRangoFechasSoloDia(undefined, sumarDias(diaEnMexico(ahora), dias));
 
     const presentaciones = await this.prisma.productoPresentacion.findMany({
-      where: { fechaCaducidad: { lte: limite } },
+      where: { fechaCaducidad: { lte: limite }, producto: { activo: true } },
       orderBy: { fechaCaducidad: 'asc' },
       select: {
         id: true,

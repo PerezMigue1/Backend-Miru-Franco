@@ -5,11 +5,17 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CreatePresentacionDto } from './presentacion.dto';
+
+/** productos.descuento es un porcentaje: un monto en pesos (350, 1200...) se rechaza. */
+export const MENSAJE_DESCUENTO_MAX = 'El descuento es un porcentaje: no puede ser mayor a 100';
+export const MENSAJE_DESCUENTO_MIN = 'El descuento es un porcentaje: no puede ser menor a 0';
 
 export class CreateProductoDto {
   @IsInt()
@@ -34,6 +40,8 @@ export class CreateProductoDto {
   descripcionLarga?: string;
 
   @IsInt()
+  @Min(0, { message: MENSAJE_DESCUENTO_MIN })
+  @Max(100, { message: MENSAJE_DESCUENTO_MAX })
   @IsOptional()
   descuento?: number;
 

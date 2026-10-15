@@ -1,4 +1,4 @@
-import { Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 
 const logger = new Logger('FirmaCloudinary');
@@ -16,17 +16,40 @@ export function firmarParametrosCloudinary(params: Record<string, string>, secre
   return createHash('sha1').update(cadena + secreto).digest('hex');
 }
 
-/** Para qué se sube: decide la carpeta, los formatos y quién puede pedir la firma. */
-export type UsoSubida = 'perfil' | 'galeria' | 'factura';
+/**
+ * Para qué se sube: decide la carpeta, los formatos y quién puede pedir la firma. `ilustrativa` es una
+ * imagen de la galería que quien sube marcó como ilustrativa (no es foto real de un trabajo del salón).
+ */
+export type UsoSubida = 'perfil' | 'galeria' | 'ilustrativa' | 'factura';
 
 /** Usos que se piden en POST /api/subidas/firma (perfil va por POST /api/auth/me/foto/firma). */
 export const USOS_SUBIDA_PERSONAL = ['galeria', 'factura'] as const;
+
+/** Cuerpo de POST /api/subidas/firma: el uso y, solo en galería, si la imagen es ilustrativa. */
+export interface PedidoFirmaSubida {
+  uso: (typeof USOS_SUBIDA_PERSONAL)[number];
+  ilustrativa?: boolean;
+}
+
+/**
+ * Uso que se firma. Una imagen de galería marcada como ilustrativa va a galeria/ilustrativas: la carpeta
+ * queda en la URL y la web la reconoce (nunca la presenta como trabajo real ni la usa de vista previa).
+ */
+export function usoDeFirma({ uso, ilustrativa }: PedidoFirmaSubida): UsoSubida {
+  if (!ilustrativa) return uso;
+  if (uso !== 'galeria') {
+    throw new BadRequestException('Solo una imagen de la galería puede marcarse como ilustrativa');
+  }
+  return 'ilustrativa';
+}
 
 /** Roles que pueden pedir cada uso de POST /api/subidas/firma. */
 export const ROLES_POR_USO: Record<(typeof USOS_SUBIDA_PERSONAL)[number], readonly string[]> = {
   galeria: ['admin', 'estilista', 'empleado', 'becario'],
   factura: ['admin'],
 };
+
+const FORMATOS_GALERIA = 'jpg,jpeg,png,webp,gif,avif,heic,heif';
 
 /** Parámetros fijos de cada uso, sin timestamp. Nada de esto lo elige el cliente. */
 function parametrosDeUso(uso: UsoSubida, usuarioId: string): Record<string, string> {
@@ -44,7 +67,10 @@ function parametrosDeUso(uso: UsoSubida, usuarioId: string): Record<string, stri
     case 'galeria':
       // Sin public_id ni overwrite: Cloudinary pone un nombre aleatorio y nadie pisa archivos ajenos.
       // Los mismos formatos que aceptaban los botones de subida con el preset.
-      return { allowed_formats: 'jpg,jpeg,png,webp,gif,avif,heic,heif', folder: 'galeria' };
+      return { allowed_formats: FORMATOS_GALERIA, folder: 'galeria' };
+    case 'ilustrativa':
+      // Igual que galería, en su propia carpeta: "/galeria/ilustrativas/" queda en la URL de la imagen.
+      return { allowed_formats: FORMATOS_GALERIA, folder: 'galeria/ilustrativas' };
     case 'factura':
       return { allowed_formats: 'pdf', folder: 'facturas' };
   }

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
@@ -9,11 +9,62 @@ import { ReenviarCodigoDto } from '../usuarios/dto/reenviar-codigo.dto';
 import { SecurityService } from '../common/services/security.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
-import { JWT_TTL_SEGUNDOS, VENTANA_REFRESH_SEGUNDOS } from './jwt-ttl';
+import { JWT_TTL_REGISTRO_GOOGLE_SEGUNDOS, JWT_TTL_SEGUNDOS, VENTANA_REFRESH_SEGUNDOS } from './jwt-ttl';
 import { crearFirmaSubidaFoto } from './firma-cloudinary';
 import { SesionesMovilesService } from './sesiones-moviles.service';
 import { CANAL_MOVIL, esTokenMovil } from './sesion-movil';
 import { DEEP_LINK_APP, challengeDeVerifier, codigoGuardadoApp, esCodeVerifier } from './google-app';
+import { jwtSecretObligatorio } from './jwt-secret';
+import type { RegistroGooglePendiente } from './strategies/google.strategy';
+import { CompletarRegistroGoogleDto } from '../usuarios/dto/completar-registro-google.dto';
+import { ContextoPeticion, documentosDeRegistro, filasConsentimientoAlta } from '../consentimientos/documentos-legales';
+import { TX_HOLGADA } from '../pos/salidas-caja';
+
+export const PROPOSITO_REGISTRO_GOOGLE = 'registro_google';
+/** Página de la web que recibe el token y muestra las casillas de términos y aviso de privacidad. */
+export const RUTA_COMPLETAR_REGISTRO = '/auth/completar-registro';
+
+/** Dónde empezó el alta: la web (entrega sesión al completar) o la app (no; la app vuelve a entrar con Google). */
+export type OrigenRegistroGoogle = 'web' | 'app';
+const ORIGENES_REGISTRO_GOOGLE: readonly OrigenRegistroGoogle[] = ['web', 'app'];
+
+type DatosRegistroGoogle = Omit<RegistroGooglePendiente, 'registroGooglePendiente'>;
+type TokenRegistroGoogle = DatosRegistroGoogle & { origen: OrigenRegistroGoogle };
+
+/**
+ * Llave derivada del secreto de sesión, nunca el secreto mismo (mismo criterio que el state de la app en
+ * google-app.ts): así el token del alta no sirve como token de sesión Bearer.
+ */
+function llaveRegistroGoogle(): string {
+  return crypto.createHmac('sha256', jwtSecretObligatorio(process.env.JWT_SECRET)).update('registro-google:v1').digest('hex');
+}
+
+export function firmarTokenRegistroGoogle(datos: DatosRegistroGoogle, origen: OrigenRegistroGoogle): string {
+  const { googleId, email, nombre, foto } = datos;
+  return new JwtService({ secret: llaveRegistroGoogle() }).sign(
+    { proposito: PROPOSITO_REGISTRO_GOOGLE, origen, googleId, email, nombre, foto },
+    { expiresIn: JWT_TTL_REGISTRO_GOOGLE_SEGUNDOS },
+  );
+}
+
+/** null si el token no es nuestro, venció, no es de un alta con Google o no dice si viene de la web o de la app. */
+export function leerTokenRegistroGoogle(token: unknown): TokenRegistroGoogle | null {
+  if (typeof token !== 'string' || !token) return null;
+  try {
+    const p: any = new JwtService({ secret: llaveRegistroGoogle() }).verify(token);
+    if (p?.proposito !== PROPOSITO_REGISTRO_GOOGLE || typeof p.googleId !== 'string' || typeof p.email !== 'string') return null;
+    if (!ORIGENES_REGISTRO_GOOGLE.includes(p.origen)) return null;
+    return {
+      googleId: p.googleId,
+      email: p.email,
+      nombre: typeof p.nombre === 'string' ? p.nombre : '',
+      foto: typeof p.foto === 'string' ? p.foto : null,
+      origen: p.origen,
+    };
+  } catch {
+    return null;
+  }
+}
 
 @Injectable()
 export class AuthService {
@@ -90,6 +141,94 @@ export class AuthService {
       console.error('❌ Error en googleLogin:', error.message);
       throw new Error(`Error al generar token: ${error.message}`);
     }
+  }
+
+  /**
+   * Callback de Google con una persona sin cuenta (web o app): no se crea nada. Va a la página de la web que pide
+   * aceptar términos y aviso, con un token firmado de 15 minutos (googleId, correo, nombre, foto y origen). El token
+   * va en el fragmento (#token=): el navegador no lo manda al servidor web, así no queda en sus logs.
+   */
+  iniciarRegistroGoogle(pendiente: RegistroGooglePendiente, origen: OrigenRegistroGoogle): { redirect: string } {
+    const frontendUrl = (this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000').replace(/\/+$/, '');
+    const token = firmarTokenRegistroGoogle(pendiente, origen);
+    return { redirect: `${frontendUrl}${RUTA_COMPLETAR_REGISTRO}#token=${encodeURIComponent(token)}` };
+  }
+
+  /**
+   * POST /auth/google/completar: valida casillas y token, crea la cuenta y sus consentimientos en una sola
+   * transacción. Origen web: entrega la sesión igual que el canje web ({ success, token }; el controller la pone en
+   * cookie). Origen app: { success, data: { origen: 'app' } } sin sesión; la app vuelve a entrar con Google (PKCE).
+   */
+  async completarRegistroGoogle(
+    dto: CompletarRegistroGoogleDto,
+    contexto: ContextoPeticion,
+  ): Promise<{ success: true; token: string } | { success: true; data: { origen: 'app' } }> {
+    if (dto.aceptaTerminos !== true) throw new BadRequestException('Debes aceptar los términos y condiciones');
+    if (dto.aceptaAvisoPrivacidad !== true) throw new BadRequestException('Debes aceptar el aviso de privacidad');
+    const datos = leerTokenRegistroGoogle(dto.token);
+    if (!datos) {
+      throw new UnauthorizedException('El enlace para completar tu registro no es válido o ya venció. Vuelve a entrar con Google.');
+    }
+    const documentos = await documentosDeRegistro(this.prisma, dto.documentos);
+    const existente = await this.prisma.usuario.findFirst({
+      where: { OR: [{ email: datos.email }, { googleId: datos.googleId }] },
+      select: { id: true },
+    });
+    if (existente) throw new ConflictException('Ya existe una cuenta con este correo. Entra con Google para iniciar sesión.');
+
+    const recibePromociones = dto.recibePromociones === true;
+    let usuario: { id: string; email: string };
+    try {
+      usuario = await this.prisma.$transaction(async (tx) => {
+        const creado = await tx.usuario.create({
+          data: {
+            nombre: datos.nombre,
+            email: datos.email,
+            googleId: datos.googleId,
+            foto: datos.foto,
+            telefono: null,
+            password: null,
+            fechaNacimiento: null,
+            preguntaSeguridad: null,
+            respuestaSeguridad: null,
+            aceptaAvisoPrivacidad: true,
+            recibePromociones,
+            confirmado: true,
+            activo: true,
+          },
+        });
+        await tx.consentimiento.createMany({
+          data: filasConsentimientoAlta({
+            usuarioId: creado.id,
+            documentos,
+            recibePromociones,
+            datosSalud: false,
+            formulario: 'registro_google',
+            rutaOrigen: RUTA_COMPLETAR_REGISTRO,
+            contexto,
+          }),
+        });
+        return creado;
+      }, TX_HOLGADA);
+    } catch (error: any) {
+      // Dos envíos a la vez con el mismo token: el segundo choca con el correo o el googleId únicos.
+      if (error?.code === 'P2002') throw new ConflictException('Ya existe una cuenta con este correo. Entra con Google para iniciar sesión.');
+      throw error;
+    }
+
+    // App: sin sesión desde el navegador; la cuenta ya existe y la app entra con Google como cualquier cuenta.
+    if (datos.origen === 'app') {
+      return { success: true, data: { origen: 'app' } };
+    }
+
+    const token = await this.generateToken(usuario);
+    try {
+      await this.securityService.updateLastActivity(usuario.id);
+    } catch (error) {
+      // Igual que el canje: no bloquear el alta por la última actividad
+      console.error('Error actualizando última actividad en el alta con Google:', (error as Error)?.message ?? error);
+    }
+    return { success: true, token };
   }
 
   /**
@@ -222,7 +361,7 @@ export class AuthService {
         success: true,
         message: 'Todas las sesiones han sido cerradas correctamente',
       };
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('Error al cerrar sesión');
     }
   }
@@ -236,7 +375,7 @@ export class AuthService {
         success: true,
         message: 'Todas las sesiones han sido cerradas correctamente',
       };
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('Error al cerrar todas las sesiones');
     }
   }
@@ -318,9 +457,12 @@ export class AuthService {
     return this.usuariosService.cambiarPasswordConCodigo(userId, actualPassword, nuevaPassword, codigo);
   }
 
-  /** PATCH /auth/me: mismos campos permitidos que PUT usuarios/:id/perfil (incl. `foto`). */
-  async updateProfileMe(userId: string, dto: UpdateUsuarioDto) {
-    return this.usuariosService.actualizarPerfilUsuario(userId, dto);
+  /**
+   * PATCH /auth/me: mismos campos permitidos que PUT usuarios/:id/perfil (incl. `foto`). La ip y el user agent quedan
+   * en el consentimiento datos_salud si guarda alergias con su consentimiento (formulario "perfil").
+   */
+  async updateProfileMe(userId: string, dto: UpdateUsuarioDto, contexto: ContextoPeticion = { ip: null, userAgent: null }) {
+    return this.usuariosService.actualizarPerfilUsuario(userId, dto, { formulario: 'perfil', contexto });
   }
 
   /** POST /auth/me/foto/firma: firma para subir la foto de perfil del usuario a Cloudinary. */

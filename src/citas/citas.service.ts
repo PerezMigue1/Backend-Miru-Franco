@@ -26,9 +26,11 @@ import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante }
 import {
   ANTES_PAGO_SALON_MS,
   ESTADOS_CITA_VIGENTE,
+  EVENTO_ANTICIPO_REEMBOLSABLE,
   MOTIVO_ANTICIPO_NO_PAGADO,
   PLAZO_ANTICIPO_MS,
-  anticiposDesde,
+  anticipoAplica,
+  politicaCancelacionAnticipo,
   requiereAnticipo,
 } from './anticipos/anticipos.util';
 
@@ -607,8 +609,8 @@ export class CitasService {
     // /operacion solo si el personal lo marca. Se guarda la foto del monto y el plazo para pagarlo:
     // en línea, PLAZO_ANTICIPO_MS sin pasar de 15 min antes del inicio; en el salón, 15 min antes del inicio.
     const enLinea = propios || !puedeEscribirCualquierCita(solicitante);
-    const pideAnticipo =
-      (enLinea || dto.pedirAnticipo === true) && requiereAnticipo({ anticipoRequerido: servicio.anticipoMonto }) && anticiposDesde() !== null;
+    // Misma regla que `anticipoAplica` de GET /servicios (lo que la web anuncia).
+    const pideAnticipo = (enLinea || dto.pedirAnticipo === true) && anticipoAplica(servicio);
     // Desde el portal (propios) la clienta tiene límites para no acaparar horarios; el personal no.
     let anticipo: Pick<Prisma.CitaUncheckedCreateInput, 'anticipoRequerido' | 'anticipoVenceEn' | 'anticipoEnSalon'> = {};
     if (pideAnticipo) {
@@ -847,15 +849,28 @@ export class CitasService {
       motivo: motivoLimpio,
     });
 
-    // La clienta canceló una cita con anticipo pagado: el anticipo se retiene, no se devuelve (Términos,
-    // sección 6); sigue 'aprobado' y queda firme. Si cancela el salón, el personal lo reembolsa.
+    // La clienta canceló una cita con anticipo pagado. Política de anticipos (art. 56 LFPC): si la cita está a
+    // más de 10 días hábiles del pago y cancela dentro de los 5 días hábiles siguientes, no se retiene y se le
+    // devuelve (AnticiposCitasService reembolsa solo el pago en línea; el del salón lo reembolsa el personal).
+    // En cualquier otro caso se retiene (Términos, sección 6): sigue 'aprobado' y queda firme. Si cancela el
+    // salón, el personal lo reembolsa.
     const comoClienta = cita.clienteId === solicitante.id && (propios || !puedeEscribirCualquierCita(solicitante));
-    // Sin depender de anticipoPagadoEn leído antes: si el webhook lo marcó justo ahora, el pago también se retiene.
     if (comoClienta && requiereAnticipo(cita)) {
-      await this.prisma.pago.updateMany({
+      const pagoAprobado = await this.prisma.pago.findFirst({
         where: { citaId: id, estado: 'aprobado', retenidoEn: null },
-        data: { retenidoEn: new Date() },
+        orderBy: { id: 'desc' },
+        select: { pagadoEn: true },
       });
+      const politica = politicaCancelacionAnticipo(pagoAprobado?.pagadoEn ?? cita.anticipoPagadoEn, cita.fechaHoraInicio);
+      if (pagoAprobado && politica?.reembolsable) {
+        this.eventEmitter.emit(EVENTO_ANTICIPO_REEMBOLSABLE, { citaId: id, solicitanteId: solicitante.id });
+      } else {
+        // Sin depender de anticipoPagadoEn leído antes: si el webhook lo marcó justo ahora, el pago también se retiene.
+        await this.prisma.pago.updateMany({
+          where: { citaId: id, estado: 'aprobado', retenidoEn: null },
+          data: { retenidoEn: new Date() },
+        });
+      }
     }
 
     return { success: true, data: actualizada };

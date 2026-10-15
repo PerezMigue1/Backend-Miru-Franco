@@ -9,6 +9,8 @@ import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { CreateCarritoItemDto } from './dto/create-carrito-item.dto';
 import { UpdateCarritoItemDto } from './dto/update-carrito-item.dto';
 
+const PRODUCTO_NO_DISPONIBLE = 'Este producto ya no está disponible';
+
 @Injectable()
 export class CarritoService {
   constructor(
@@ -28,8 +30,11 @@ export class CarritoService {
       targetUserId = filtroUsuarioId;
     }
 
+    // Los artículos de productos desactivados (borrado lógico) no se listan: la clienta no ve totales
+    // con algo que ya no puede comprar y el checkout no le falla por ellos. La fila se conserva: si el
+    // producto se reactiva, el artículo vuelve a aparecer; y puede eliminarse con DELETE /carrito/:id.
     const data = await this.prisma.carritoItem.findMany({
-      where: { usuarioId: targetUserId, activo: true },
+      where: { usuarioId: targetUserId, activo: true, producto: { activo: true } },
       include: { producto: true, presentacion: true },
       orderBy: { creadoEn: 'desc' },
     });
@@ -53,9 +58,14 @@ export class CarritoService {
   async upsert(solicitanteId: string, dto: CreateCarritoItemDto) {
     const pres = await this.prisma.productoPresentacion.findUnique({
       where: { id: dto.presentacionId },
+      include: { producto: { select: { activo: true } } },
     });
     if (!pres) {
       throw new BadRequestException('Presentación no encontrada');
+    }
+    // Producto desactivado (borrado lógico): ya no entra al carrito.
+    if (pres.producto?.activo === false) {
+      throw new BadRequestException(PRODUCTO_NO_DISPONIBLE);
     }
     const productoId = pres.productoId;
     if (!pres.disponible) {
@@ -95,13 +105,20 @@ export class CarritoService {
     solicitanteId: string,
     dto: UpdateCarritoItemDto,
   ) {
-    const item = await this.prisma.carritoItem.findUnique({ where: { id } });
+    const item = await this.prisma.carritoItem.findUnique({
+      where: { id },
+      include: { producto: { select: { activo: true } } },
+    });
     if (!item) throw new NotFoundException('Ítem de carrito no encontrado');
     this.access.assertOwnerOrAdmin(
       solicitanteId,
       item.usuarioId,
       await this.access.getRol(solicitanteId),
     );
+    // Producto desactivado (borrado lógico): el artículo ya no se modifica, solo se elimina.
+    if (item.producto?.activo === false) {
+      throw new BadRequestException(PRODUCTO_NO_DISPONIBLE);
+    }
 
     if (dto.cantidad !== undefined) {
       const pres = await this.prisma.productoPresentacion.findUnique({

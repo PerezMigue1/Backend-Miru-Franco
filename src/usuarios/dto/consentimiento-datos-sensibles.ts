@@ -1,11 +1,15 @@
-import { Equals, ValidateIf } from 'class-validator';
+import { IsBoolean, IsOptional } from 'class-validator';
+import { BooleanoEstricto } from '../../common/utils/booleano-estricto.util';
 
 /**
- * Consentimiento expreso para datos sensibles (LFPDPPP): las alergias son datos de salud.
- * Se exige en cada petición que trae alergias con texto y NO se guarda en la base.
+ * Consentimiento expreso para datos sensibles (LFPDPPP): las alergias son datos de salud. No se guarda en la
+ * base. Lo exige el servicio (no el DTO) en todo guardado que ponga alergias con texto y distintas de las
+ * guardadas, porque solo el servicio sabe qué hay guardado y quién guarda: la titular o el personal.
  */
-export const MENSAJE_CONSENTIMIENTO_DATOS_SENSIBLES =
-  'Para guardar alergias se necesita el consentimiento expreso para usar datos de salud (consienteDatosSensibles: true).';
+export const MENSAJE_SALUD_TITULAR = 'Para guardar tus alergias marca la casilla de datos de salud.';
+export const MENSAJE_SALUD_PERSONAL = 'Marca que la persona aceptó que registremos sus datos de salud.';
+/** `code` del 400 (con `errors.consienteDatosSensibles`) para que la web marque la casilla. */
+export const CODIGO_CONSENTIMIENTO_SALUD = 'CONSENTIMIENTO_SALUD_REQUERIDO';
 
 function conTexto(valor: unknown): boolean {
   return typeof valor === 'string' && valor.trim() !== '';
@@ -17,14 +21,23 @@ export function traeAlergias(dto: { alergias?: unknown; perfilCapilar?: { alergi
 }
 
 /**
- * Decorador del campo `consienteDatosSensibles`: solo se valida cuando hay alergias con texto, y entonces
- * debe ser exactamente `true`. Sin alergias el campo es opcional (no lleva @IsOptional a propósito:
- * @IsOptional saltaría la validación justo cuando falta).
+ * true si guardar `nuevas` pone alergias con texto distintas de las `guardadas` (sin contar espacios de los
+ * extremos): es cuando hace falta el consentimiento expreso y su fila datos_salud. Quitar alergias o volver a
+ * mandar las mismas no lo pide.
+ */
+export function alergiasNuevas(nuevas: unknown, guardadas: string | null | undefined): boolean {
+  return conTexto(nuevas) && (nuevas as string).trim() !== (guardadas ?? '').trim();
+}
+
+/**
+ * Decorador del campo `consienteDatosSensibles`: opcional y, si viene, booleano real (un texto como "false"
+ * ya no se convierte en true). Que sea obligatorio lo decide el servicio.
  */
 export function ConsentimientoDatosSensibles(): PropertyDecorator {
   return (target: object, propertyKey: string | symbol) => {
-    ValidateIf((dto) => traeAlergias(dto))(target, propertyKey);
-    Equals(true, { message: MENSAJE_CONSENTIMIENTO_DATOS_SENSIBLES })(target, propertyKey);
+    IsOptional()(target, propertyKey);
+    BooleanoEstricto()(target, propertyKey);
+    IsBoolean({ message: 'El campo consienteDatosSensibles debe ser verdadero o falso' })(target, propertyKey);
   };
 }
 

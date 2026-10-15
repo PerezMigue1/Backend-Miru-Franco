@@ -1,17 +1,21 @@
 import './tracing';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { crearErrorDeValidacion } from './common/filters/errores-validacion';
 import { crearCorsOptions, crearRechazoPreflight } from './config/cors.config';
-const cookieParser = require('cookie-parser');
+import cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Evita exponer el framework en la cabecera X-Powered-By (alerta ZAP low)
   app.getHttpAdapter().getInstance().disable('x-powered-by');
+
+  // Detrás de un solo proxy (Render): req.ip es la IP de la clienta para el límite de peticiones y la evidencia
+  // de los consentimientos, y no el primer valor de x-forwarded-for, que lo puede escribir quien pide.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
   
   // Cookie parser para CSRF tokens
   app.use(cookieParser());

@@ -19,7 +19,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { esPropios } from '../../common/utils/alcance-propio.util';
 import { DevolucionesService, PERMISO_GESTIONAR_DEVOLUCIONES } from './devoluciones.service';
 import { CreateDevolucionDto } from './dto/create-devolucion.dto';
-import { AprobarDevolucionDto, RechazarDevolucionDto } from './dto/resolver-devolucion.dto';
+import { AprobarDevolucionDto, RechazarDevolucionDto, RecibirRevocacionDto } from './dto/resolver-devolucion.dto';
 
 @Controller('devoluciones')
 @UseGuards(JwtAuthGuard)
@@ -89,6 +89,15 @@ export class DevolucionesController {
   @Permisos(PERMISO_GESTIONAR_DEVOLUCIONES)
   rechazar(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }, @Body() dto: RechazarDevolucionDto) {
     return this.service.rechazar(id, user.id, dto);
+  }
+
+  /** Revocación de compra (art. 56 LFPC): el personal recibe el producto y se reintegra todo lo pagado. */
+  @Post(':id/recibir-revocacion')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermisosGuard)
+  @Permisos(PERMISO_GESTIONAR_DEVOLUCIONES)
+  recibirRevocacion(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: { id: string }, @Body() dto: RecibirRevocacionDto) {
+    return this.service.recibirRevocacion(id, user.id, dto);
   }
 
   @Delete(':id')

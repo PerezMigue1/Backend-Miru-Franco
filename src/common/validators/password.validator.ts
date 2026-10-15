@@ -105,14 +105,14 @@ function isCommonPassword(password: string): boolean {
 }
 
 export function IsStrongPassword(validationOptions?: ValidationOptions) {
-  return function (object: Object, propertyName: string) {
+  return function (object: object, propertyName: string) {
     registerDecorator({
       name: 'isStrongPassword',
       target: object.constructor,
       propertyName: propertyName,
       options: validationOptions,
       validator: {
-        validate(value: any, args: ValidationArguments) {
+        validate(value: any, _args: ValidationArguments) {
           if (typeof value !== 'string') {
             return false;
           }
@@ -140,7 +140,7 @@ export function IsStrongPassword(validationOptions?: ValidationOptions) {
           }
 
           // 5. Al menos un carácter especial
-          if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+          if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)) {
             return false;
           }
 
@@ -160,7 +160,7 @@ export function IsStrongPassword(validationOptions?: ValidationOptions) {
 
           return true;
         },
-        defaultMessage(args: ValidationArguments) {
+        defaultMessage(_args: ValidationArguments) {
           return 'La contraseña debe tener al menos 8 caracteres, incluir mayúsculas, minúsculas, números y caracteres especiales. No puede contener datos personales, patrones simples o ser una contraseña común';
         },
       },

@@ -157,6 +157,122 @@ describe('ExportDirectService: solo tablas de la aplicación', () => {
   });
 });
 
+describe('ExportDirectService: sin secretos ni datos de salud en exportaciones por tabla (punto 13)', () => {
+  const COLUMNAS_USUARIOS = [
+    'id',
+    'email',
+    'password',
+    'resetPasswordToken',
+    'codigoOTP',
+    'respuesta_seguridad',
+    'pregunta_seguridad',
+    'alergias',
+    'tratamientos',
+    'tratamientos_quimicos',
+    'tipoCabello',
+    'color_natural',
+    'color_actual',
+    'productos_usados',
+  ];
+  const poolUsuarios = () =>
+    poolFalso(async (sql) =>
+      sql.includes('information_schema.columns')
+        ? { rows: COLUMNAS_USUARIOS.map((c) => ({ column_name: c })) }
+        : { rows: [{ id: 'u1', email: 'ana@example.com' }] },
+    );
+
+  it('exportar usuarios: el SELECT no pide columnas secretas ni de salud y el archivo no las trae', async () => {
+    const { pool, envios } = poolUsuarios();
+    const r = (await servicioCon(pool).handleGet({ tabla: 'usuarios', formato: 'json' })) as { body: string };
+    const consulta = envios.find((e) => e.text.includes('FROM "public"."usuarios"'));
+    expect(consulta?.text).toContain('"id", "email", "pregunta_seguridad"');
+    for (const prohibido of [
+      'password',
+      'resetPasswordToken',
+      'codigoOTP',
+      'respuesta_seguridad',
+      'alergias',
+      'tratamientos',
+      'tipoCabello',
+      'color_natural',
+      'color_actual',
+      'productos_usados',
+    ]) {
+      expect(consulta?.text).not.toContain(prohibido);
+      expect(r.body).not.toContain(prohibido);
+    }
+  });
+
+  it('pedir columnas excluidas por query (columnas=email,password,alergias) no las devuelve', async () => {
+    const { pool, envios } = poolUsuarios();
+    await servicioCon(pool).handleGet({ tabla: 'usuarios', formato: 'csv', columnas: 'email,password,alergias' });
+    const consulta = envios.find((e) => e.text.includes('FROM "public"."usuarios"'));
+    expect(consulta?.text).toContain('SELECT "email" FROM');
+    expect(consulta?.text).not.toContain('password');
+    expect(consulta?.text).not.toContain('alergias');
+  });
+
+  it('exportar codigos_oauth no contiene token ni el código canjeable (ni los pide a la base)', async () => {
+    const { pool, envios } = poolFalso(async (sql) =>
+      sql.includes('information_schema.columns')
+        ? { rows: [{ column_name: 'id' }, { column_name: 'codigo' }, { column_name: 'token' }, { column_name: 'expira_en' }] }
+        : { rows: [{ id: 1, expira_en: '2026-01-01' }] },
+    );
+    const r = (await servicioCon(pool).handleGet({ tabla: 'codigos_oauth', formato: 'json' })) as { body: string };
+    const consulta = envios.find((e) => e.text.includes('FROM "public"."codigos_oauth"'));
+    expect(consulta?.text).toContain('SELECT "id", "expira_en" FROM');
+    expect(consulta?.text).not.toContain('token');
+    expect(consulta?.text).not.toContain('"codigo"');
+    expect(r.body).not.toContain('token');
+    expect(r.body).not.toContain('codigo');
+  });
+
+  it.each([
+    ['solicitudes_cambio_correo', 'codigo_hash'],
+    ['codigos_oauth', 'codigo'],
+  ])('%s: la columna %s (código de un solo uso) no se ofrece, no se exporta ni sirve para filtrar en explain', async (tabla, columna) => {
+    const { pool, envios } = poolFalso(async (sql) =>
+      sql.includes('information_schema.columns')
+        ? { rows: [{ column_name: 'id' }, { column_name: columna }, { column_name: 'creado_en' }] }
+        : sql.startsWith('EXPLAIN')
+          ? { rows: [{ 'QUERY PLAN': [] }] }
+          : { rows: [{ id: 1, creado_en: '2026-01-01' }] },
+    );
+    const meta = await servicioCon(pool).handleGet({ tabla, meta: '1' });
+    expect(meta).toMatchObject({ body: { columnas: ['id', 'creado_en'] } });
+    await servicioCon(pool).handleGet({ tabla, formato: 'csv' });
+    const consulta = envios.find((e) => e.text.includes(`FROM "public"."${tabla}"`) && !e.text.includes('EXPLAIN'));
+    expect(consulta?.text).toContain('SELECT "id", "creado_en" FROM');
+    await servicioCon(pool).handleGet({ tabla, meta: 'explain', columna, valor: 'x' });
+    const plan = envios.find((e) => e.text.includes('EXPLAIN'));
+    expect(plan?.text).toContain(`FROM "public"."${tabla}" LIMIT 200`);
+    expect(plan?.text).not.toContain(`"${columna}"`);
+  });
+
+  it.each([
+    ['dispositivos_push', 'token'],
+    ['tokens_revocados', 'token'],
+    ['sesiones_moviles', 'token_hash'],
+  ])('exportar %s en CSV no contiene la columna %s (ni la pide a la base)', async (tabla, columna) => {
+    const { pool, envios } = poolFalso(async (sql) =>
+      sql.includes('information_schema.columns')
+        ? { rows: [{ column_name: 'id' }, { column_name: columna }, { column_name: 'creado_en' }] }
+        : { rows: [{ id: 1, creado_en: '2026-01-01' }] },
+    );
+    const r = (await servicioCon(pool).handleGet({ tabla, formato: 'csv' })) as { body: string };
+    const consulta = envios.find((e) => e.text.includes(`FROM "public"."${tabla}"`));
+    expect(consulta?.text).toContain('SELECT "id", "creado_en" FROM');
+    expect(consulta?.text).not.toContain(`"${columna}"`);
+    expect(r.body.split('\r\n')[0]).toBe('id,creado_en');
+  });
+
+  it('meta=1 (columnas para elegir en la web) tampoco lista las columnas excluidas', async () => {
+    const { pool } = poolUsuarios();
+    const r = await servicioCon(pool).handleGet({ tabla: 'usuarios', meta: '1' });
+    expect(r).toMatchObject({ kind: 'json', status: 200, body: { columnas: ['id', 'email', 'pregunta_seguridad'] } });
+  });
+});
+
 describe('ExportDirectService: CSV sin fórmulas', () => {
   it('un valor que empieza con =, +, - o @ sale con comilla simple delante; los números no cambian', async () => {
     const { pool } = poolFalso(async (sql) =>

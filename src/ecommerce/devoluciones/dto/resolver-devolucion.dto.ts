@@ -11,6 +11,9 @@ export class RechazarDevolucionDto {
   nota?: string;
 }
 
+/** "Recibir producto y reembolsar" una revocación de compra: solo la nota (el método sale del pago original). */
+export class RecibirRevocacionDto extends RechazarDevolucionDto {}
+
 /** Aprobar: en un reembolso, cómo se devuelve el dinero (por defecto, al método original). */
 export class AprobarDevolucionDto extends RechazarDevolucionDto {
   @IsOptional()

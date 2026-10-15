@@ -13,6 +13,9 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { JWT_TTL_SEGUNDOS } from './jwt-ttl';
 import { jwtSecretObligatorio } from './jwt-secret';
 import { SesionesMovilesService } from './sesiones-moviles.service';
+import { EmailModule } from '../email/email.module';
+import { CambioCorreoController } from './cambio-correo.controller';
+import { CambioCorreoService } from './cambio-correo.service';
 
 @Module({
   imports: [
@@ -20,6 +23,7 @@ import { SesionesMovilesService } from './sesiones-moviles.service';
     UsuariosModule,
     SecurityModule,
     PrismaModule,
+    EmailModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
@@ -29,8 +33,8 @@ import { SesionesMovilesService } from './sesiones-moviles.service';
       inject: [ConfigService],
     }),
   ],
-  controllers: [AuthController, SubidasController],
-  providers: [AuthService, GoogleStrategy, JwtStrategy, SesionesMovilesService],
+  controllers: [AuthController, SubidasController, CambioCorreoController],
+  providers: [AuthService, GoogleStrategy, JwtStrategy, SesionesMovilesService, CambioCorreoService],
   exports: [AuthService],
 })
 export class AuthModule {

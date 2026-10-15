@@ -34,6 +34,9 @@ import { EnviarCodigoRecuperacionSmsDto } from '../usuarios/dto/enviar-codigo-re
 import { VerificarCodigoRecuperacionSmsDto } from '../usuarios/dto/verificar-codigo-recuperacion-sms.dto';
 import { ValidarTokenRecuperacionDto } from '../usuarios/dto/validar-token-recuperacion.dto';
 import { sanitizeForLogOutput } from '../common/utils/security.util';
+import { esRegistroGooglePendiente } from './strategies/google.strategy';
+import { CompletarRegistroGoogleDto } from '../usuarios/dto/completar-registro-google.dto';
+import { contextoDeRequest } from '../consentimientos/documentos-legales';
 
 @Controller('auth')
 export class AuthController {
@@ -60,6 +63,12 @@ export class AuthController {
       try {
         if (!req.user) {
           return res.redirect(`${DEEP_LINK_APP}?error=authentication_failed`);
+        }
+        // App, persona sin cuenta: no se crea aquí. Va a la página de la web que pide aceptar términos y aviso, con un
+        // token de origen app; al completar, la app vuelve a entrar con Google y la cuenta ya existe.
+        if (esRegistroGooglePendiente(req.user)) {
+          console.log('🔍 Redirigiendo a completar el registro con Google (app)');
+          return res.redirect(this.authService.iniciarRegistroGoogle(req.user, 'app').redirect);
         }
         const result = await this.authService.googleLogin(req.user, { codeChallenge: app.codeChallenge });
         console.log('🔍 Redirigiendo a la app (OAuth callback)');
@@ -89,6 +98,12 @@ export class AuthController {
         );
       }
 
+      // Web, persona sin cuenta: no se crea; va a aceptar términos y aviso con un token de 15 minutos.
+      if (esRegistroGooglePendiente(req.user)) {
+        console.log('🔍 Redirigiendo al frontend para completar el registro con Google');
+        return res.redirect(this.authService.iniciarRegistroGoogle(req.user, 'web').redirect);
+      }
+
       const result = await this.authService.googleLogin(req.user);
       // Redirigir al frontend con una redirección HTTP real
       // NO loggear la URL completa que contiene el código (por seguridad)
@@ -102,6 +117,26 @@ export class AuthController {
       // Sin el mensaje del error en la URL: puede traer detalles internos (se queda en el log).
       res.redirect(`${cleanFrontendUrl}/auth/callback?error=authentication_failed`);
     }
+  }
+
+  /**
+   * Alta con Google: con el token de /auth/completar-registro#token= y las casillas marcadas crea la cuenta y
+   * registra sus consentimientos. Token de origen web: entrega la sesión como exchange-code (cookie mf_session con
+   * X-Auth-Mode: cookie). Token de origen app: { success, data: { origen: 'app' } } sin sesión ni cookie.
+   */
+  @Post('google/completar')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(new RateLimitGuard(5, 60000))
+  async completarRegistroGoogle(
+    @Body() dto: CompletarRegistroGoogleDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const enCookie = pideSesionEnCookie(req);
+    const resultado = await this.authService.completarRegistroGoogle(dto, contextoDeRequest(req));
+    // Origen app: sin sesión ni cookie, la respuesta va tal cual
+    if (!('token' in resultado)) return resultado;
+    return entregarSesion(res, resultado, enCookie);
   }
 
   /**
@@ -175,8 +210,9 @@ export class AuthController {
   @Patch('me')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async patchMe(@CurrentUser() user: any, @Body() dto: UpdateUsuarioDto) {
-    return this.authService.updateProfileMe(user.id, dto);
+  async patchMe(@CurrentUser() user: any, @Body() dto: UpdateUsuarioDto, @Req() req: Request) {
+    // ip y user agent: evidencia del consentimiento datos_salud si guarda alergias
+    return this.authService.updateProfileMe(user.id, dto, contextoDeRequest(req));
   }
 
   /**

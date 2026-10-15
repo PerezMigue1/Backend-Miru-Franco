@@ -157,23 +157,29 @@ describe('Rutas: canal movil y registro', () => {
       fechaNacimiento: '1995-03-10',
       preguntaSeguridad: { pregunta: '¿Color favorito?', respuesta: 'azul' },
       perfilCapilar: { tipoCabello: 'liso' },
+      // Ahora también son obligatorios los términos (usuarios/registro-consentimientos.spec.ts).
+      aceptaTerminos: true,
       aceptaAvisoPrivacidad: true,
       confirmado: true,
     };
 
     it('sin sesión: confirmado no se respeta', async () => {
       await pedir('/api/usuarios/registro', cuerpo);
-      expect(usuariosService.crearUsuario).toHaveBeenLastCalledWith(expect.anything(), { permitirConfirmado: false });
+      expect(usuariosService.crearUsuario).toHaveBeenLastCalledWith(expect.anything(), { permitirConfirmado: false, contexto: expect.any(Object) });
     });
 
     it('con sesión de clienta u otro rol: tampoco', async () => {
       await pedir('/api/usuarios/registro', cuerpo, { 'x-usuaria': 'u-1', 'x-rol': 'estilista' });
-      expect(usuariosService.crearUsuario).toHaveBeenLastCalledWith(expect.anything(), { permitirConfirmado: false });
+      expect(usuariosService.crearUsuario).toHaveBeenLastCalledWith(expect.anything(), { permitirConfirmado: false, contexto: expect.any(Object) });
     });
 
-    it('con sesión de admin (pantalla de admin "nuevo usuario"): se respeta', async () => {
+    it('con sesión de admin (pantalla de admin "nuevo usuario"): se respeta y va el id de quien registra', async () => {
       await pedir('/api/usuarios/registro', cuerpo, { 'x-usuaria': 'admin-1', 'x-rol': 'admin' });
-      expect(usuariosService.crearUsuario).toHaveBeenLastCalledWith(expect.anything(), { permitirConfirmado: true });
+      expect(usuariosService.crearUsuario).toHaveBeenLastCalledWith(expect.anything(), {
+        permitirConfirmado: true,
+        contexto: expect.any(Object),
+        registradoPorId: 'admin-1',
+      });
     });
   });
 });

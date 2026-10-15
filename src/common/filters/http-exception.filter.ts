@@ -5,6 +5,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  PayloadTooLargeException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { randomBytes } from 'crypto';
@@ -33,6 +34,48 @@ const MENSAJES_CONEXION =
 /** Mensajes de JSON.parse que Nest pasa tal cual cuando body-parser falla ('entity.parse.failed'). */
 const MENSAJE_JSON_INVALIDO = /in JSON at position|is not valid JSON|end of JSON input/;
 
+/** El campo `error` de la respuesta, en español, por código de estado. */
+const ERROR_POR_ESTADO: Record<number, string> = {
+  [HttpStatus.BAD_REQUEST]: 'Solicitud inválida',
+  [HttpStatus.UNAUTHORIZED]: 'No autenticado',
+  [HttpStatus.FORBIDDEN]: 'Sin permiso',
+  [HttpStatus.NOT_FOUND]: 'No encontrado',
+  [HttpStatus.CONFLICT]: 'Conflicto',
+  [HttpStatus.PAYLOAD_TOO_LARGE]: 'Contenido demasiado grande',
+  [HttpStatus.UNPROCESSABLE_ENTITY]: 'No se puede procesar',
+  [HttpStatus.TOO_MANY_REQUESTS]: 'Demasiadas solicitudes',
+  [HttpStatus.SERVICE_UNAVAILABLE]: 'Servicio no disponible',
+  [HttpStatus.INTERNAL_SERVER_ERROR]: 'Error interno',
+};
+
+/**
+ * Los `error` por defecto que Nest pone en inglés (el "reason phrase" HTTP). Cuando el campo trae
+ * uno de estos, se sustituye por el texto de ERROR_POR_ESTADO; un `error` propio (p. ej. el del
+ * verificador de tarjetas) se conserva tal cual.
+ */
+const ERRORES_NEST_EN_INGLES = new Set([
+  'Bad Request',
+  'Unauthorized',
+  'Payment Required',
+  'Forbidden',
+  'Not Found',
+  'Method Not Allowed',
+  'Not Acceptable',
+  'Request Timeout',
+  'Conflict',
+  'Gone',
+  'Precondition Failed',
+  'Payload Too Large',
+  'Unsupported Media Type',
+  'Unprocessable Entity',
+  'Too Many Requests',
+  'Internal Server Error',
+  'Not Implemented',
+  'Bad Gateway',
+  'Service Unavailable',
+  'Gateway Timeout',
+]);
+
 /**
  * Los mensajes por defecto de Nest (en inglés) en español; los propios no cambian. body-parser marca
  * el JSON inválido con type 'entity.parse.failed', pero Nest lo convierte en BadRequestException con
@@ -44,7 +87,26 @@ export function traducirMensajePorDefecto(message: string): string {
   if (/^Cannot [A-Z]+ \//.test(message)) return 'Ruta no encontrada';
   if (MENSAJE_JSON_INVALIDO.test(message)) return 'El cuerpo de la petición no es JSON válido';
   if (message === 'Validation failed (numeric string is expected)') return 'Id inválido';
+  // multer (LIMIT_FILE_SIZE) llega como PayloadTooLargeException('File too large').
+  if (message === 'File too large') return 'El archivo es demasiado grande';
+  if (message === 'Payload Too Large' || message === 'request entity too large') return 'El contenido enviado es demasiado grande';
+  if (message === 'Unprocessable Entity') return 'No se pudo procesar la solicitud';
+  if (message === 'Too Many Requests' || message === 'ThrottlerException: Too Many Requests') {
+    return 'Demasiadas solicitudes. Espera un momento e intenta de nuevo.';
+  }
   return message;
+}
+
+/**
+ * body-parser rechaza un cuerpo de más del límite con un error propio (type 'entity.too.large', status 413)
+ * que Nest no convierte en HttpException: sin esto saldría como 500.
+ */
+function normalizarErrorDeCuerpo(exception: unknown): unknown {
+  const e = exception as { type?: unknown } | null;
+  if (e && typeof e === 'object' && e.type === 'entity.too.large') {
+    return new PayloadTooLargeException('request entity too large');
+  }
+  return exception;
 }
 
 /** true si el error es de conexión a la base (caída, inalcanzable o pool agotado), no de la consulta. */
@@ -104,7 +166,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logCooldownMs = 5000;
   private readonly logDedup = new Map<string, { ts: number; referencia?: string }>();
 
-  catch(exception: unknown, host: ArgumentsHost) {
+  catch(excepcionOriginal: unknown, host: ArgumentsHost) {
+    const exception = normalizarErrorDeCuerpo(excepcionOriginal);
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest();
@@ -145,7 +208,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
-      error: noDisponible ? 'Servicio no disponible' : 'Error interno del servidor',
+      error: this.getDefaultError(status),
       message: noDisponible ? MENSAJE_SERVICIO_NO_DISPONIBLE : MENSAJE_ERROR_INTERNO,
       referencia,
     });
@@ -168,7 +231,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       const msg = typeof res === 'string' ? res : (res as Record<string, unknown>);
 
       const error =
-        typeof msg === 'object' && msg !== null && typeof msg.error === 'string'
+        typeof msg === 'object' && msg !== null && typeof msg.error === 'string' && !ERRORES_NEST_EN_INGLES.has(msg.error)
           ? msg.error
           : this.getDefaultError(status);
       const message = traducirMensajePorDefecto(this.normalizeMessage(msg));
@@ -206,20 +269,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
   }
 
   private getDefaultError(status: number): string {
-    switch (status) {
-      case HttpStatus.BAD_REQUEST:
-        return 'Solicitud incorrecta';
-      case HttpStatus.FORBIDDEN:
-        return 'No tienes permiso para realizar esta acción';
-      case HttpStatus.NOT_FOUND:
-        return 'Recurso no encontrado';
-      case HttpStatus.UNAUTHORIZED:
-        return 'No autorizado';
-      case HttpStatus.INTERNAL_SERVER_ERROR:
-        return 'Error interno del servidor';
-      default:
-        return 'Error en la solicitud';
-    }
+    return ERROR_POR_ESTADO[status] ?? 'Error en la solicitud';
   }
 
   /**

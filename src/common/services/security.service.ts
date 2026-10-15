@@ -208,7 +208,7 @@ export class SecurityService {
    * Nota: Para una verificación completa, necesitaríamos el token completo
    * Este método es un placeholder - la verificación real debe hacerse con el token completo
    */
-  async isJtiRevoked(jti: string): Promise<boolean> {
+  async isJtiRevoked(_jti: string): Promise<boolean> {
     // Buscar en tokens revocados por jti
     // Nota: Esto requiere almacenar jti en la tabla tokens_revocados
     // Por ahora, esta es una implementación simplificada

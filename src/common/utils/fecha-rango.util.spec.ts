@@ -8,9 +8,11 @@ describe('normalizarRangoFechas', () => {
     expect(r.lte?.toISOString()).toBe('2026-10-04T05:59:59.999Z');
   });
 
-  it('un datetime ISO completo se respeta tal cual y lo inválido se ignora', () => {
+  it("un datetime ISO completo se respeta tal cual y lo ilegible responde 400 'Fecha inválida'", () => {
     expect(normalizarRangoFechas('2026-10-03T15:00:00.000Z').gte?.toISOString()).toBe('2026-10-03T15:00:00.000Z');
-    expect(normalizarRangoFechas('no-es-fecha', undefined)).toEqual({});
+    expect(() => normalizarRangoFechas('no-es-fecha', undefined)).toThrow(BadRequestException);
+    expect(() => normalizarRangoFechas('no-es-fecha', undefined)).toThrow('Fecha inválida');
+    expect(() => normalizarRangoFechas(undefined, 'xx')).toThrow('Fecha inválida');
   });
 
   it('da lo mismo que el desfase fijo anterior (-06:00) para fechas actuales', () => {

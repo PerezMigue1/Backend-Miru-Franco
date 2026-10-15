@@ -1,3 +1,4 @@
+import { diasHabilesEntre, sumarDiasHabiles } from '../../common/utils/dias-habiles.util';
 import { esDiaValido, inicioDiaMexico } from '../../common/utils/zona-mexico';
 
 /**
@@ -68,3 +69,54 @@ export function anticiposDesde(): Date | null {
   return Number.isNaN(fecha.getTime()) ? null : fecha;
 }
 export const requiereAnticipo = (cita: { anticipoRequerido?: unknown }) => centavos(cita.anticipoRequerido ?? 0) > 0;
+
+/**
+ * Si hoy, al agendar en línea, se pide anticipo para este servicio: tiene monto y ANTICIPOS_DESDE está
+ * configurada. Es la regla de CitasService.crear y la que viaja como `anticipoAplica` en GET /servicios.
+ */
+export const anticipoAplica = (servicio: { anticipoMonto?: unknown }) =>
+  requiereAnticipo({ anticipoRequerido: servicio.anticipoMonto }) && anticiposDesde() !== null;
+
+/**
+ * Política de anticipos compatible con el art. 56 de la Ley Federal de Protección al Consumidor (la más
+ * favorable a la clienta, autorizada por el dueño): si la cita está a MÁS de 10 días hábiles del pago del
+ * anticipo, la clienta puede cancelar dentro de los 5 días hábiles siguientes al pago y se le devuelve completo;
+ * a 10 días hábiles o menos (excepción de servicios del art. 56), al cancelar no se devuelve (puede reagendar
+ * con aviso y el anticipo se respeta). Si cancela el salón, se devuelve completo. Días hábiles: dias-habiles.util.ts.
+ */
+export const DIAS_HABILES_EXCEPCION_SERVICIO = 10;
+export const DIAS_HABILES_CANCELAR_CON_REEMBOLSO = 5;
+
+/** CitasService.cancelar lo emite cuando la clienta cancela a tiempo; AnticiposCitasService reembolsa el pago en línea. */
+export const EVENTO_ANTICIPO_REEMBOLSABLE = 'cita.anticipo_reembolsable';
+
+/**
+ * El anticipo de una cancelación a tiempo no se reembolsó solo y lo debe devolver el personal: se pagó en el
+ * salón, o el reembolso automático en Mercado Pago falló. Lo escucha NotificacionesListener.onAnticipoPorDevolver.
+ */
+export const EVENTO_ANTICIPO_POR_DEVOLVER = 'cita.anticipo_por_devolver';
+export type MotivoAnticipoPorDevolver = 'pagado_en_salon' | 'reembolso_automatico_fallo';
+
+export interface PoliticaCancelacionAnticipo {
+  /** Si la clienta cancela en `ahora`, se le devuelve el anticipo completo. */
+  reembolsable: boolean;
+  /** Fin del plazo para cancelar con reembolso; null si la cita está a 10 días hábiles o menos del pago. */
+  reembolsableHasta: Date | null;
+  /** Días hábiles entre el pago del anticipo y el inicio de la cita. */
+  diasHabilesHastaCita: number;
+}
+
+const esFecha = (d: Date | null | undefined): d is Date => d instanceof Date && !Number.isNaN(d.getTime());
+
+/** null si falta la fecha de pago o de la cita (entonces el anticipo se retiene como siempre). */
+export function politicaCancelacionAnticipo(
+  pagadoEn: Date | null | undefined,
+  inicioCita: Date | null | undefined,
+  ahora: Date = new Date(),
+): PoliticaCancelacionAnticipo | null {
+  if (!esFecha(pagadoEn) || !esFecha(inicioCita)) return null;
+  const diasHabilesHastaCita = diasHabilesEntre(pagadoEn, inicioCita);
+  if (diasHabilesHastaCita <= DIAS_HABILES_EXCEPCION_SERVICIO) return { reembolsable: false, reembolsableHasta: null, diasHabilesHastaCita };
+  const reembolsableHasta = sumarDiasHabiles(pagadoEn, DIAS_HABILES_CANCELAR_CON_REEMBOLSO);
+  return { reembolsable: ahora.getTime() <= reembolsableHasta.getTime(), reembolsableHasta, diasHabilesHastaCita };
+}

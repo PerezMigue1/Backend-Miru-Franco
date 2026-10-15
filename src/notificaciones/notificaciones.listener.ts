@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TX_HOLGADA } from '../pos/salidas-caja';
+import { EVENTO_ANTICIPO_POR_DEVOLVER, type MotivoAnticipoPorDevolver } from '../citas/anticipos/anticipos.util';
 import { OutboxService } from './outbox.service';
 import { ResolverDestinatariosService } from './resolver-destinatarios.service';
 import { DespachadorService } from './despachador.service';
@@ -65,6 +68,22 @@ export interface PedidoCanceladoPagadoEvent extends PedidoEvent {
   reembolso: 'reembolsado' | 'en_revision';
 }
 
+/** La clienta revocó la compra de un pedido que ya tiene (PedidosService.revocar): el personal debe recibirlo. */
+export interface RevocacionPorRecibirEvent extends PedidoEvent {
+  devolucionId: number;
+  monto: number;
+}
+
+/** Anticipo de una cancelación a tiempo que el personal debe devolver (AnticiposCitasService.alCancelarConReembolso). */
+export interface AnticipoPorDevolverEvent {
+  citaId: number;
+  motivo: MotivoAnticipoPorDevolver;
+}
+
+/** Quien recibe el producto de una revocación (devoluciones:gestionar) y quien devuelve un anticipo (caja). */
+const PERMISO_GESTIONAR_DEVOLUCIONES = 'devoluciones:gestionar';
+const PERMISO_CAJA = 'caja:escritura';
+
 /** Tipo usado tanto al programar los 2 recordatorios en `onCitaCreada` como al
  *  identificarlos para descartarlos en la cascada de `onCitaCancelada` —
  *  cambiarlo en un solo lado rompe esa cascada silenciosamente. */
@@ -82,13 +101,22 @@ export class NotificacionesListener {
     private readonly despachador: DespachadorService,
   ) {}
 
+  /**
+   * Transacción del outbox (notificación + envíos) con tiempo holgado: con la latencia a Neon, los 5 s por
+   * defecto de Prisma no alcanzaban ("Transaction already closed") y el aviso se perdía aunque la operación
+   * principal ya se hubiera hecho. Mismo tiempo que TX_HOLGADA.
+   */
+  private enOutbox<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction(fn, TX_HOLGADA);
+  }
+
   @OnEvent('cita.creada')
   async onCitaCreada(payload: CitaCreadaEvent): Promise<void> {
     const fecha = this.formatearFecha(payload.fechaHoraInicio);
     const envioIds: string[] = [];
 
     const clienteId = payload.clienteId;
-    await this.prisma.$transaction(async (tx) => {
+    await this.enOutbox(async (tx) => {
       if (clienteId) {
         const canalesCliente = await this.resolver.resolverCanales(clienteId, 'cita_creada', ['in_app']);
         const { envios: enviosCliente } = await this.outbox.encolar(tx, {
@@ -153,7 +181,7 @@ export class NotificacionesListener {
     const envioIds: string[] = [];
 
     const clienteId = payload.clienteId;
-    await this.prisma.$transaction(async (tx) => {
+    await this.enOutbox(async (tx) => {
       if (clienteId) {
         const canalesCliente = await this.resolver.resolverCanales(clienteId, 'cita_cancelada', ['in_app']);
         const { envios: enviosCliente } = await this.outbox.encolar(tx, {
@@ -208,7 +236,7 @@ export class NotificacionesListener {
     const envioIds: string[] = [];
     const clienteId = payload.clienteId;
 
-    await this.prisma.$transaction(async (tx) => {
+    await this.enOutbox(async (tx) => {
       // (a) Cancelar primero los recordatorios viejos (apuntan a la hora
       // anterior) — debe ir ANTES de programar los nuevos de (c), o este mismo
       // updateMany también los descartaría a ellos.
@@ -299,7 +327,7 @@ export class NotificacionesListener {
         maximumFractionDigits: 2,
       })}`;
 
-      await this.prisma.$transaction(async (tx) => {
+      await this.enOutbox(async (tx) => {
         const canales = await this.resolver.resolverCanales(payload.clienteId, 'venta', ['in_app']);
         const { envios } = await this.outbox.encolar(tx, {
           usuarioId: payload.clienteId,
@@ -365,7 +393,7 @@ export class NotificacionesListener {
     let envioIds: string[] = [];
     try {
       const admins = await this.resolver.resolverUsuariosPorPermiso('*');
-      await this.prisma.$transaction(async (tx) => {
+      await this.enOutbox(async (tx) => {
         for (const usuarioId of admins) {
           const canales = await this.resolver.resolverCanales(usuarioId, 'pago_revision', ['in_app']);
           const { envios } = await this.outbox.encolar(tx, {
@@ -403,7 +431,7 @@ export class NotificacionesListener {
     let envioIds: string[] = [];
     try {
       const destinatarios = await this.resolver.resolverUsuariosPorPermiso('caja:escritura');
-      await this.prisma.$transaction(async (tx) => {
+      await this.enOutbox(async (tx) => {
         for (const usuarioId of destinatarios) {
           const canales = await this.resolver.resolverCanales(usuarioId, 'pago_revision', ['in_app']);
           const { envios } = await this.outbox.encolar(tx, {
@@ -441,7 +469,7 @@ export class NotificacionesListener {
     let envioIds: string[] = [];
     try {
       const destinatarios = await this.resolver.resolverUsuariosPorPermiso('caja:escritura');
-      await this.prisma.$transaction(async (tx) => {
+      await this.enOutbox(async (tx) => {
         for (const usuarioId of destinatarios) {
           const canales = await this.resolver.resolverCanales(usuarioId, 'pedido_cancelado_pagado', ['in_app']);
           const { envios } = await this.outbox.encolar(tx, {
@@ -467,13 +495,80 @@ export class NotificacionesListener {
     this.despachador.drenarInmediatas(envioIds);
   }
 
+  /**
+   * La clienta revocó (art. 56 LFPC) la compra de un pedido que ya tiene (entregado o el heredado enviado): aviso
+   * por la app a quien gestiona devoluciones para recibir el producto en el salón y reembolsar.
+   */
+  @OnEvent('pedido.revocacion_por_recibir')
+  async onRevocacionPorRecibir(payload: RevocacionPorRecibirEvent): Promise<void> {
+    await this.avisarPorPermiso(PERMISO_GESTIONAR_DEVOLUCIONES, {
+      tipo: 'revocacion_por_recibir',
+      titulo: 'Revocación por recibir',
+      mensaje: `La clienta revocó la compra del pedido #${payload.pedidoId}: recibe el producto en el salón y reembolsa.`,
+      metadata: { devolucionId: payload.devolucionId, monto: payload.monto },
+      entidadTipo: 'pedido',
+      entidadId: String(payload.pedidoId),
+      urlAccion: '/operacion/devoluciones',
+    });
+  }
+
+  /**
+   * La clienta canceló a tiempo una cita con anticipo y no se reembolsó solo (pagado en el salón, o falló el
+   * reembolso automático): aviso por la app a quien maneja la caja para devolverlo desde Gestión de citas.
+   */
+  @OnEvent(EVENTO_ANTICIPO_POR_DEVOLVER)
+  async onAnticipoPorDevolver(payload: AnticipoPorDevolverEvent): Promise<void> {
+    const mensaje =
+      payload.motivo === 'pagado_en_salon'
+        ? `La clienta canceló a tiempo la cita #${payload.citaId}: devuélvele el anticipo que pagó en el salón.`
+        : `La clienta canceló a tiempo la cita #${payload.citaId} y el reembolso automático del anticipo no salió: reembólsalo a mano.`;
+    await this.avisarPorPermiso(PERMISO_CAJA, {
+      tipo: 'anticipo_por_devolver',
+      titulo: 'Anticipo por devolver',
+      mensaje,
+      metadata: { motivo: payload.motivo },
+      entidadTipo: 'cita',
+      entidadId: String(payload.citaId),
+      urlAccion: '/operacion/gestion-citas',
+    });
+  }
+
+  /**
+   * Aviso por la app a todo el personal con una clave de permisos_rol, un envío por destinatario (la clave de
+   * idempotencia es por entidad, tipo y canal). Nunca lanza: la operación que lo originó ya se hizo.
+   */
+  private async avisarPorPermiso(
+    clave: string,
+    aviso: { tipo: string; titulo: string; mensaje: string; metadata: Prisma.InputJsonObject; entidadTipo: string; entidadId: string; urlAccion: string },
+  ): Promise<void> {
+    let envioIds: string[] = [];
+    try {
+      const destinatarios = await this.resolver.resolverUsuariosPorPermiso(clave);
+      await this.enOutbox(async (tx) => {
+        for (const usuarioId of destinatarios) {
+          const canales = await this.resolver.resolverCanales(usuarioId, aviso.tipo, ['in_app']);
+          const { envios } = await this.outbox.encolar(tx, {
+            usuarioId,
+            ...aviso,
+            canales: canales.map((c) => ({ ...c, discriminador: usuarioId })),
+          });
+          envioIds = envioIds.concat(envios.map((e) => e.id));
+        }
+      });
+    } catch (e) {
+      this.logger.error(`No se pudo avisar '${aviso.tipo}' de ${aviso.entidadTipo} ${aviso.entidadId}`, e);
+      return;
+    }
+    this.despachador.drenarInmediatas(envioIds);
+  }
+
   /** Anticipo recibido (en línea o en el salón): la clienta sabe que su cita quedó confirmada. */
   @OnEvent('cita.anticipo_pagado')
   async onAnticipoPagado(payload: { citaId: number; clienteId: string | null }): Promise<void> {
     if (!payload.clienteId) return;
     let envioIds: string[] = [];
     try {
-      await this.prisma.$transaction(async (tx) => {
+      await this.enOutbox(async (tx) => {
         const canales = await this.resolver.resolverCanales(payload.clienteId as string, 'cita_confirmada', ['in_app']);
         const { envios } = await this.outbox.encolar(tx, {
           usuarioId: payload.clienteId as string,
@@ -555,7 +650,7 @@ export class NotificacionesListener {
   ): Promise<void> {
     let envioIds: string[] = [];
     try {
-      await this.prisma.$transaction(async (tx) => {
+      await this.enOutbox(async (tx) => {
         const canales = await this.resolver.resolverCanales(payload.usuarioId, datos.tipo, canalesDeseados);
         const { envios } = await this.outbox.encolar(tx, {
           usuarioId: payload.usuarioId,

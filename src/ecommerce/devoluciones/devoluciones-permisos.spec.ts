@@ -377,6 +377,14 @@ describe('Dinero: una sola devolución activa por artículo y nunca más que el 
     expect(prisma.devolucion.updateMany).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['rechazada', 'cancelada'])('un reembolso previo %s no cuenta en el tope: la nueva sí se aprueba', async (estado) => {
+    // 400 + 120 pasaría del total (450) si la previa contara; como no se aprobó, no se devolvió dinero.
+    const previa = { id: 40, pedidoId: 9, pedidoItemId: null, estado, tipo: 'reembolso', monto: '400.00' };
+    const { servicio, prisma } = montar({ devoluciones: [previa, solicitud()] });
+    await servicio.aprobar(20, 'est-1', {});
+    expect(prisma.devolucion.updateMany).toHaveBeenCalledTimes(1);
+  });
+
   it('si un pago del pedido ya se reembolsó, aprobar un reembolso responde 409', async () => {
     const { servicio, prisma } = montar({ devoluciones: [solicitud()], pagos: [{ id: 7, pedidoId: 9, estado: 'reembolsado' }] });
     await expect(servicio.aprobar(20, 'est-1', {})).rejects.toThrow('El pago del pedido ya se reembolsó');

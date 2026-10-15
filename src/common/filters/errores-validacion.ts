@@ -25,6 +25,15 @@ const TRADUCCIONES: Record<string, { porDefecto: RegExp; es: (campo: string, val
   matches: { porDefecto: /must match .* regular expression$/, es: (c) => `El campo ${c} no tiene el formato correcto` },
   isArray: { porDefecto: /must be an array$/, es: (c) => `El campo ${c} debe ser una lista` },
   arrayNotEmpty: { porDefecto: /should not be empty$/, es: (c) => `El campo ${c} no puede estar vacío` },
+  isObject: { porDefecto: /must be an object$/, es: (c) => `El campo ${c} debe ser un objeto` },
+  isDefined: { porDefecto: /should not be null or undefined$/, es: (c) => `El campo ${c} es obligatorio` },
+  arrayMinSize: { porDefecto: /must contain at least (\d+) elements$/, es: (c, v) => `El campo ${c} debe tener al menos ${v} elementos` },
+  arrayMaxSize: { porDefecto: /must contain no more than (\d+) elements$/, es: (c, v) => `El campo ${c} debe tener como máximo ${v} elementos` },
+  isNumberString: { porDefecto: /must be a number string$/, es: (c) => `El campo ${c} debe contener solo números` },
+  isUrl: { porDefecto: /must be a URL address$/, es: (c) => `El campo ${c} debe ser una URL válida` },
+  equals: { porDefecto: /must be equal to .*$/, es: (c) => `El campo ${c} no tiene el valor esperado` },
+  isDate: { porDefecto: /must be a Date instance$/, es: (c) => `El campo ${c} debe ser una fecha válida` },
+  isNotEmptyObject: { porDefecto: /must be a non-empty object$/, es: (c) => `El campo ${c} no puede estar vacío` },
 };
 /** Forma de cualquier texto por defecto de class-validator ("x must…", "property x should not exist"…). */
 const TEXTO_POR_DEFECTO = /^(each value in |nested property |property )?\S+ (must|should) /;

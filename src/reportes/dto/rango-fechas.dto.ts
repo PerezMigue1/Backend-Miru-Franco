@@ -1,11 +1,11 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsOptional } from 'class-validator';
 
 export class RangoFechasDto {
   @IsOptional()
-  @IsString()
+  @IsDateString({}, { message: 'La fecha "desde" no es válida (usa AAAA-MM-DD)' })
   desde?: string;
 
   @IsOptional()
-  @IsString()
+  @IsDateString({}, { message: 'La fecha "hasta" no es válida (usa AAAA-MM-DD)' })
   hasta?: string;
 }

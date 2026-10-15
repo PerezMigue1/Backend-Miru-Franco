@@ -137,6 +137,13 @@ model Usuario {
   sesionesMoviles              SesionMovil[]
   movimientosCajaRegistrados   MovimientoCaja[]          @relation("MovimientosCajaRegistrados")
   devolucionesResueltas        Devolucion[]              @relation("DevolucionesResueltas")
+  consentimientos              Consentimiento[]          @relation("ConsentimientosDelTitular")
+  consentimientosRegistrados   Consentimiento[]          @relation("ConsentimientosRegistradosPor")
+  solicitudesArco              SolicitudArco[]           @relation("SolicitudesArcoTitular")
+  solicitudesArcoAtendidas     SolicitudArco[]           @relation("SolicitudesArcoAtendidas")
+  observacionesRecibidas       ObservacionCliente[]      @relation("ObservacionesDelCliente")
+  observacionesEscritas        ObservacionCliente[]      @relation("ObservacionesDelAutor")
+  solicitudesCambioCorreo      SolicitudCambioCorreo[]
 
   @@index([activo])
   @@index([email])
@@ -425,6 +432,9 @@ model Devolucion {
   causa           String?
   /// efectivo | metodo_original (solo reembolsos aprobados).
   metodoReembolso String?         @map("metodo_reembolso")
+  /// solicitud | revocacion_art56 (CHECK en la base). revocacion_art56: la clienta revocó la compra dentro
+  /// de los 5 días hábiles del art. 56 de la Ley Federal de Protección al Consumidor (se reintegra todo lo pagado).
+  origen          String          @default("solicitud")
   notaResolucion  String?         @map("nota_resolucion") @db.Text
   resueltoEn      DateTime?       @map("resuelto_en")
   resueltoPor     Usuario?        @relation("DevolucionesResueltas", fields: [resueltoPorId], references: [id], onDelete: SetNull)
@@ -598,6 +608,8 @@ model Producto {
   ingredientes     String?
   modoUso          String?  @map("modo_uso") @db.Text
   resultado        String?  @db.Text
+  /// Borrado lógico: false = desactivado (no se lista ni se vende; pedidos y ventas pasadas lo conservan)
+  activo           Boolean  @default(true)
   creadoEn         DateTime @default(now()) @map("creado_en")
   actualizadoEn    DateTime @updatedAt @map("actualizado_en")
 
@@ -1198,4 +1210,124 @@ model ComisionServicio {
   actualizadoPorId String?  @map("actualizado_por_id")
 
   @@map("comisiones_servicio")
+}
+
+// ─── Privacidad y consentimientos ────────────────────────────────────────────
+
+/// Evidencia de cada consentimiento otorgado o revocado. SOLO INSERCIÓN: triggers en la base rechazan
+/// UPDATE, DELETE y TRUNCATE. Revocar es insertar otra fila con accion "revocado" (sin efectos
+/// retroactivos); lo vigente de un titular y tipo es su fila más reciente.
+model Consentimiento {
+  id               BigInt   @id @default(autoincrement())
+  /// Titular con cuenta, o visitanteId si aún no la tiene (CHECK en la base: al menos uno de los dos).
+  usuarioId        String?  @map("usuario_id")
+  visitanteId      String?  @map("visitante_id")
+  /// terminos | aviso_privacidad | promociones | datos_salud | terminos_venta | reembolsos | anticipos |
+  /// fotos_resultado | cookies (CHECK en la base).
+  tipo             String
+  /// Documento aceptado: slug, versión y hash del registro de la web (versiones_documentos_legales).
+  documentoSlug    String?  @map("documento_slug")
+  documentoVersion String?  @map("documento_version")
+  documentoHash    String?  @map("documento_hash")
+  /// aceptado | revocado (CHECK en la base).
+  accion           String
+  creadoEn         DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+  ip               String?
+  userAgent        String?  @map("user_agent")
+  /// Formulario o pantalla donde se otorgó o revocó.
+  formulario       String
+  rutaOrigen       String?  @map("ruta_origen")
+  metodo           String   @default("casilla_marcada")
+  /// Quién capturó la fila cuando no fue la titular (el admin en el alta o en la ficha, el personal al revocar
+  /// promociones). NULL si la registró la propia titular o un visitante. Migración 20261014160000.
+  registradoPorId  String?  @map("registrado_por_id")
+
+  usuario       Usuario? @relation("ConsentimientosDelTitular", fields: [usuarioId], references: [id], onDelete: Restrict)
+  /// Sin acciones que modifiquen filas: la tabla es de solo inserción y su trigger rechaza UPDATE.
+  registradoPor Usuario? @relation("ConsentimientosRegistradosPor", fields: [registradoPorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([usuarioId])
+  @@index([registradoPorId])
+  @@index([visitanteId])
+  @@index([tipo, creadoEn])
+  @@map("consentimientos")
+}
+
+/// Versiones publicadas de los documentos legales (registro documentosLegales.ts de la web). SOLO
+/// INSERCIÓN: una versión nueva es una fila nueva, sembrada en una migración nueva.
+model VersionDocumentoLegal {
+  id           Int      @id @default(autoincrement())
+  /// terminos | aviso-privacidad | cookies | reembolsos | anticipos
+  slug         String
+  version      String
+  /// SHA-256 hex del archivo de la página legal con saltos LF (scripts/hash-documentos-legales.mjs de la web).
+  hashTexto    String   @map("hash_texto")
+  vigenteDesde DateTime @map("vigente_desde") @db.Date
+  creadoEn     DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  @@unique([slug, version])
+  @@map("versiones_documentos_legales")
+}
+
+/// Solicitud de derechos ARCO. Plazos en días hábiles (common/utils/dias-habiles.util.ts): respuesta a
+/// más tardar en 20 desde la recepción y efectividad dentro de los 15 siguientes a la respuesta.
+model SolicitudArco {
+  id               Int       @id @default(autoincrement())
+  /// ARCO-AAAA-000001: lo genera la base (siguiente_folio_arco() con la secuencia solicitudes_arco_folio_seq).
+  folio            String    @unique @default(dbgenerated("siguiente_folio_arco()"))
+  usuarioId        String    @map("usuario_id")
+  /// acceso | rectificacion | cancelacion | oposicion | revocacion (CHECK en la base).
+  tipo             String
+  descripcion      String?
+  /// recibida | en_proceso | respondida | atendida | rechazada (CHECK en la base).
+  estado           String    @default("recibida")
+  creadaEn         DateTime  @default(now()) @map("creada_en") @db.Timestamptz(6)
+  /// sumarDiasHabiles(creadaEn, 20).
+  venceRespuesta   DateTime  @map("vence_respuesta") @db.Timestamptz(6)
+  respuesta        String?
+  respondidaEn     DateTime? @map("respondida_en") @db.Timestamptz(6)
+  /// sumarDiasHabiles(respondidaEn, 15) cuando la solicitud procede.
+  venceEfectividad DateTime? @map("vence_efectividad") @db.Timestamptz(6)
+  atendidaEn       DateTime? @map("atendida_en") @db.Timestamptz(6)
+  atendidaPorId    String?   @map("atendida_por_id")
+  actualizadoEn    DateTime  @default(now()) @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+
+  usuario     Usuario  @relation("SolicitudesArcoTitular", fields: [usuarioId], references: [id], onDelete: Restrict)
+  atendidaPor Usuario? @relation("SolicitudesArcoAtendidas", fields: [atendidaPorId], references: [id], onDelete: SetNull)
+
+  @@index([usuarioId])
+  @@index([estado, venceRespuesta])
+  @@map("solicitudes_arco")
+}
+
+/// Observaciones del personal sobre una clienta, cada una con su autor.
+model ObservacionCliente {
+  id        Int      @id @default(autoincrement())
+  clienteId String   @map("cliente_id")
+  autorId   String   @map("autor_id")
+  texto     String
+  creadoEn  DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  cliente Usuario @relation("ObservacionesDelCliente", fields: [clienteId], references: [id], onDelete: Cascade)
+  autor   Usuario @relation("ObservacionesDelAutor", fields: [autorId], references: [id], onDelete: Restrict)
+
+  @@index([clienteId])
+  @@map("observaciones_cliente")
+}
+
+/// Cambio de correo pendiente de verificar con un código. Solo se guarda el hash del código, nunca el código.
+model SolicitudCambioCorreo {
+  id          Int       @id @default(autoincrement())
+  usuarioId   String    @map("usuario_id")
+  correoNuevo String    @map("correo_nuevo")
+  codigoHash  String    @map("codigo_hash")
+  expiraEn    DateTime  @map("expira_en") @db.Timestamptz(6)
+  intentos    Int       @default(0)
+  usadoEn     DateTime? @map("usado_en") @db.Timestamptz(6)
+  creadoEn    DateTime  @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@map("solicitudes_cambio_correo")
 }

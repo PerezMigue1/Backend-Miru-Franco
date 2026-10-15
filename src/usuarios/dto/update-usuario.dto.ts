@@ -13,6 +13,7 @@ import {
 import { Type } from 'class-transformer';
 import { ROLES_DB } from '../../common/constants/roles.constants';
 import { ConsentimientoDatosSensibles } from './consentimiento-datos-sensibles';
+import { BooleanoEstricto } from '../../common/utils/booleano-estricto.util';
 import { MAX_TRATAMIENTOS } from '../tratamientos';
 
 /** Roles permitidos en BD: cliente, becario, empleado, estilista, admin. Solo admin puede asignar. */
@@ -119,13 +120,30 @@ export class UpdateUsuarioDto {
   @MaxLength(MAX_TRATAMIENTOS)
   tratamientos?: string | null;
 
-  /** Obligatorio (true) si alergias (o perfilCapilar.alergias) trae texto. No se guarda. */
+  /**
+   * Obligatorio (true) si el guardado pone alergias con texto distintas de las guardadas: lo exige el servicio
+   * (400 con errors.consienteDatosSensibles). No se guarda.
+   */
   @ConsentimientoDatosSensibles()
   consienteDatosSensibles?: boolean;
 
-  @IsBoolean()
+  /**
+   * Booleano real. Si cambia, queda su fila de consentimiento (aceptado o revocado). El personal solo puede
+   * ponerlo en false; de false a true lo decide solo la persona (400).
+   */
   @IsOptional()
+  @BooleanoEstricto()
+  @IsBoolean({ message: 'El campo recibePromociones debe ser verdadero o falso' })
   recibePromociones?: boolean;
+
+  /**
+   * Pantalla del panel que guarda (ruta_origen de los consentimientos que registra el personal). No se guarda en la
+   * cuenta. Sin ella: "/admin/usuarios-roles". En el perfil de la titular siempre es "/perfil".
+   */
+  @IsOptional()
+  @IsString({ message: 'La ruta de origen debe ser texto' })
+  @MaxLength(300, { message: 'La ruta de origen no puede pasar de 300 caracteres' })
+  rutaOrigen?: string;
 
   /**
    * URL de la foto de perfil. Envía `null` o cadena vacía para quitarla.

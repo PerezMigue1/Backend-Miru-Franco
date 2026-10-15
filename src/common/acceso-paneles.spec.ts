@@ -242,7 +242,109 @@ describe('Paneles /admin y /operacion: guards reales con las claves de producci�
     }
     expect(indebidos).toEqual([]);
   });
+
+  it('privacidad (consentimientos y ARCO): la bandeja es solo del admin; la clienta usa las suyas', async () => {
+    const DEL_ADMIN = [
+      'GET /consentimientos/admin',
+      'GET /consentimientos/admin/export',
+      'GET /arco/solicitudes',
+      'PATCH /arco/solicitudes/:id',
+      'POST /arco/solicitudes/:id/ejecutar-cancelacion',
+    ];
+    const DE_LA_CLIENTA = [
+      'POST /consentimientos',
+      'GET /consentimientos/mios',
+      'GET /consentimientos/pendientes',
+      'POST /arco/solicitudes',
+      'GET /arco/mias',
+      'GET /arco/mis-datos',
+      'POST /arco/oposicion',
+      'POST /auth/google/completar',
+    ];
+    const clave = (e: EndpointPanel) => `${e.metodo} ${e.ruta}`;
+    const de = (rol: string) => FIXTURE.filter((e) => e.rol === rol);
+    expect(de('admin').filter((e) => !e.esperado).map(clave)).toEqual(expect.arrayContaining(DEL_ADMIN));
+    expect(de('cliente').filter((e) => e.esperado === 'denegado').map(clave)).toEqual(expect.arrayContaining(DEL_ADMIN));
+    expect(de('cliente').filter((e) => !e.esperado).map(clave)).toEqual(expect.arrayContaining(DE_LA_CLIENTA));
+    // La bandeja exige la clave "*": el fixture trae a los 5 roles (los que no entran, denegados con motivo)
+    expect(revisarFixture(FIXTURE, DEL_ADMIN.map((ruta) => ({ ruta, permitidos: ['admin'] })))).toEqual({ faltan: [], distintos: [] });
+    // Con los guards reales: a la bandeja entra el admin; ni la clienta ni el resto del personal
+    for (const ruta of DEL_ADMIN) {
+      const [metodo, path] = ruta.split(' ');
+      const par = emparejar(rutas, metodo, path);
+      expect(par).not.toBeNull();
+      expect(await evaluarGuards(par!.r, par!.params, 'admin')).toBe('permitido');
+      for (const rol of ['estilista', 'empleado', 'becario', 'cliente']) {
+        expect(await evaluarGuards(par!.r, par!.params, rol)).not.toBe('permitido');
+      }
+    }
+  });
+
+  /**
+   * Endpoints nuevos de la ola 2: quién entra según los guards reales y las claves de producción. Los de "solo
+   * sesión" dejan pasar a cualquier rol; POST /pedidos/:id/revocar además responde 404 a quien no es la dueña, y eso
+   * lo prueba el servicio (pedidos-revocar.spec.ts: "el pedido de otra persona responde 404, aunque quien pida sea personal").
+   */
+  const TODOS = ['admin', 'estilista', 'empleado', 'becario', 'cliente'];
+  const OLA_2: ReadonlyArray<{ ruta: string; permitidos: string[] }> = [
+    { ruta: 'GET /clientes/:id/observaciones', permitidos: ['admin', 'estilista', 'empleado', 'becario'] },
+    { ruta: 'POST /clientes/:id/observaciones', permitidos: ['admin', 'estilista', 'empleado'] },
+    { ruta: 'POST /auth/me/correo/solicitar', permitidos: TODOS },
+    { ruta: 'POST /auth/me/correo/confirmar', permitidos: TODOS },
+    { ruta: 'GET /inventario/prediccion', permitidos: ['admin', 'estilista', 'empleado', 'becario'] },
+    { ruta: 'POST /pedidos/:id/revocar', permitidos: TODOS },
+    { ruta: 'POST /devoluciones/:id/recibir-revocacion', permitidos: ['admin', 'estilista'] },
+  ];
+
+  it.each(OLA_2.map((e) => [e.ruta, e.permitidos] as const))('ola 2, %s: entran %j; el resto, denegado', async (ruta, permitidos) => {
+    const [metodo, path] = ruta.split(' ');
+    const par = emparejar(rutas, metodo, path);
+    expect(par).not.toBeNull();
+    const obtenido: Record<string, string> = {};
+    const esperado: Record<string, string> = {};
+    for (const rol of TODOS) {
+      obtenido[rol] = (await evaluarGuards(par!.r, par!.params, rol)) === 'permitido' ? 'permitido' : 'denegado';
+      esperado[rol] = permitidos.includes(rol) ? 'permitido' : 'denegado';
+    }
+    expect(obtenido).toEqual(esperado);
+  });
+
+  it('ola 2: el fixture trae cada endpoint nuevo, con la clienta y con lo que cada rol espera (permitido o denegado con motivo)', () => {
+    expect(revisarFixture(FIXTURE, OLA_2)).toEqual({ faltan: [], distintos: [] });
+  });
+
+  it('revisarFixture detecta que falte la entrada denegada de un rol en una ruta con clave de permiso', () => {
+    const ruta = { ruta: 'POST /clientes/:id/observaciones', permitidos: ['admin', 'estilista', 'empleado'] };
+    const sinBecario = FIXTURE.filter((e) => !(e.metodo === 'POST' && e.ruta === '/clientes/:id/observaciones' && e.rol === 'becario'));
+    expect(revisarFixture(FIXTURE, [ruta]).faltan).toEqual([]);
+    expect(revisarFixture(sinBecario, [ruta]).faltan).toEqual(['POST /clientes/:id/observaciones (becario)']);
+  });
 });
+
+/**
+ * Lo que le falta (o sobra) al fixture para una lista de rutas: la clienta siempre; en las rutas que exigen una
+ * clave de permiso, una entrada por CADA uno de los 5 roles (los que no entran, con esperado 'denegado' y su
+ * motivo), para que borrar una entrada denegada también haga fallar la prueba.
+ */
+function revisarFixture(fixture: EndpointPanel[], lista: ReadonlyArray<{ ruta: string; permitidos: string[] }>) {
+  const TODOS = ['admin', 'estilista', 'empleado', 'becario', 'cliente'];
+  const faltan: string[] = [];
+  const distintos: string[] = [];
+  for (const { ruta, permitidos } of lista) {
+    const [metodo, path] = ruta.split(' ');
+    const delFixture = fixture.filter((e) => e.metodo === metodo && e.ruta === path);
+    if (!delFixture.some((e) => e.rol === 'cliente')) faltan.push(`${ruta} (cliente)`);
+    // Los que exigen una clave de permiso: los 5 roles, con lo que cada uno espera
+    if (permitidos.length < TODOS.length) {
+      for (const rol of TODOS) if (rol !== 'cliente' && !delFixture.some((e) => e.rol === rol)) faltan.push(`${ruta} (${rol})`);
+    }
+    for (const e of delFixture) {
+      const esperado = permitidos.includes(e.rol) ? undefined : 'denegado';
+      if (e.esperado !== esperado || (esperado && !e.motivo)) distintos.push(`${ruta} ${e.rol}: esperado ${e.esperado ?? 'permitido'}`);
+    }
+  }
+  return { faltan, distintos };
+}
 
 // ---------- b) Chequeos dentro de los servicios ----------
 function servicios() {
@@ -331,10 +433,10 @@ describe('Subrecursos del pedido: la lectura sigue la regla de GET /pedidos/:id'
 });
 
 describe('Datos de otras personas con clientes:lectura (quejas, notificaciones, direcciones)', () => {
-  it.each(['admin', 'estilista', 'empleado', 'becario'])('%s ve los de una clienta y los de otro miembro del personal', async (rol) => {
+  it.each(['admin', 'estilista', 'empleado', 'becario'])('%s ve los de una clienta; los de otro miembro del personal solo el admin', async (rol) => {
     const prisma = prismaFalso();
     expect(await puedeVerDatosDeClientes(prisma, rol, 'otra-clienta', `${rol}-yo`)).toBe(true);
-    expect(await puedeVerDatosDeClientes(prisma, rol, 'otra-estilista', `${rol}-yo`)).toBe(true);
+    expect(await puedeVerDatosDeClientes(prisma, rol, 'otra-estilista', `${rol}-yo`)).toBe(rol === 'admin');
   });
 
   it('la clienta (sin clientes:lectura) no ve datos ajenos; los suyos sí', async () => {
@@ -344,19 +446,22 @@ describe('Datos de otras personas con clientes:lectura (quejas, notificaciones, 
     expect(await puedeVerDatosDeClientes(prisma, 'cliente', 'cliente-yo', 'cliente-yo')).toBe(true);
   });
 
-  it('GET /quejas/cliente/:id del fixture: la estilista abre las de una clienta y las de otra estilista', async () => {
+  it('GET /quejas/cliente/:id del fixture: la estilista abre las de una clienta; las de otra estilista ya no (403)', async () => {
     expect(FIXTURE.some((e) => e.rol === 'estilista' && e.ruta === '/quejas/cliente/:id')).toBe(true);
     const s = servicios();
     await expect(s.quejas.listarPorCliente('otra-clienta', 'estilista-yo')).resolves.toMatchObject({ success: true });
-    await expect(s.quejas.listarPorCliente('otra-estilista', 'estilista-yo')).resolves.toMatchObject({ success: true });
+    await expect(s.quejas.listarPorCliente('otra-estilista', 'estilista-yo')).rejects.toMatchObject({ status: 403 });
     await expect(s.quejas.listarPorCliente('otra-estilista', 'cliente-yo')).rejects.toMatchObject({ status: 403 });
+    await expect(s.quejas.listarPorCliente('otra-estilista', 'admin-yo')).resolves.toMatchObject({ success: true });
   });
 
-  it('notificaciones y direcciones de otra persona: el personal con clientes:lectura sí; la clienta, 403', async () => {
+  it('notificaciones y direcciones de otra persona: el personal con clientes:lectura solo las de una clienta; las de otro personal y la clienta, 403', async () => {
     const s = servicios();
     for (const rol of ['estilista', 'empleado', 'becario']) {
-      await expect(s.notificaciones.listar(`${rol}-yo`, { usuarioId: 'otra-estilista' })).resolves.toMatchObject({ success: true });
-      await expect(s.direcciones.listar(`${rol}-yo`, 'otra-estilista')).resolves.toMatchObject({ success: true });
+      await expect(s.notificaciones.listar(`${rol}-yo`, { usuarioId: 'otra-clienta' })).resolves.toMatchObject({ success: true });
+      await expect(s.direcciones.listar(`${rol}-yo`, 'otra-clienta')).resolves.toMatchObject({ success: true });
+      await expect(s.notificaciones.listar(`${rol}-yo`, { usuarioId: 'otra-estilista' })).rejects.toMatchObject({ status: 403 });
+      await expect(s.direcciones.listar(`${rol}-yo`, 'otra-estilista')).rejects.toMatchObject({ status: 403 });
     }
     await expect(s.notificaciones.listar('cliente-yo', { usuarioId: 'otra-clienta' })).rejects.toMatchObject({ status: 403 });
     await expect(s.direcciones.listar('cliente-yo', 'otra-clienta')).rejects.toMatchObject({ status: 403 });

@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import type { AddressInfo } from 'node:net';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermisosGuard } from '../common/guards/permisos.guard';
+import { SesionOpcionalGuard } from '../auth/sesion-opcional.guard';
 import { ProductosController } from './productos.controller';
 import { ProductosService } from './productos.service';
 
@@ -17,6 +18,7 @@ function prismaEnMemoria() {
         const { presentaciones, ...resto } = data;
         const fila = {
           id,
+          activo: true, // DEFAULT true de la columna
           ...resto,
           presentaciones: (presentaciones?.create ?? []).map((p: any, i: number) => ({ id: i + 1, productoId: id, ...p })),
         };
@@ -80,6 +82,8 @@ describe('/api/productos/:id: un id que no es número responde 400, no 500', () 
       .useValue({ canActivate: () => true })
       .overrideGuard(PermisosGuard)
       .useValue({ canActivate: () => true })
+      .overrideGuard(SesionOpcionalGuard)
+      .useValue({ canActivate: () => true })
       .compile();
     app = modulo.createNestApplication({ logger: false });
     app.setGlobalPrefix('api');
@@ -111,7 +115,7 @@ describe('/api/productos/:id: un id que no es número responde 400, no 500', () 
 
   it('con un id numérico llega como número al servicio', async () => {
     expect((await pedir('GET', '5')).status).toBe(200);
-    expect(productos.obtenerPorId).toHaveBeenCalledWith(5);
+    expect(productos.obtenerPorId).toHaveBeenCalledWith(5, undefined);
     expect((await pedir('DELETE', '5')).status).toBe(200);
     expect(productos.eliminar).toHaveBeenCalledWith(5);
   });

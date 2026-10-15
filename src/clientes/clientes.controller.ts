@@ -1,8 +1,11 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermisosGuard, Permisos } from '../common/guards/permisos.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClientesService } from './clientes.service';
 import { ListClientesDto } from './dto/list-clientes.dto';
+import { CrearObservacionDto } from './dto/crear-observacion.dto';
+import { ObservacionesClienteService } from './observaciones-cliente.service';
 import { SegmentacionClientesService } from './segmentacion-clientes.service';
 
 @Controller('clientes')
@@ -12,6 +15,7 @@ export class ClientesController {
   constructor(
     private readonly clientesService: ClientesService,
     private readonly segmentacionService: SegmentacionClientesService,
+    private readonly observacionesService: ObservacionesClienteService,
   ) {}
 
   @Get()
@@ -52,5 +56,21 @@ export class ClientesController {
   @Get(':id/historial-citas')
   historialCitas(@Param('id') id: string) {
     return this.clientesService.historialCitas(id);
+  }
+
+  /** Observaciones del CRM, de la más reciente a la más antigua, con autor y fecha. */
+  @Get(':id/observaciones')
+  listarObservaciones(@Param('id') id: string, @CurrentUser() user: { id: string; rol: string | null }) {
+    return this.observacionesService.listar(id, { id: user.id, rol: user.rol });
+  }
+
+  @Post(':id/observaciones')
+  @Permisos('clientes:escritura')
+  crearObservacion(
+    @Param('id') id: string,
+    @Body() dto: CrearObservacionDto,
+    @CurrentUser() user: { id: string; rol: string | null },
+  ) {
+    return this.observacionesService.crear(id, dto.texto, { id: user.id, rol: user.rol });
   }
 }

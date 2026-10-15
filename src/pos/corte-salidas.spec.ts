@@ -28,20 +28,34 @@ function coincide(fila: any, where: any): boolean {
         case 'isNot': return x === null ? v !== null && v !== undefined : v !== x;
         case 'gte': return v != null && t(v) >= t(x);
         case 'lte': return v != null && t(v) <= t(x);
-        default: throw new Error(`Operador no soportado en la prueba: ${op}`);
+        case 'some': return Array.isArray(v) && v.some((fila2) => coincide(fila2, x));
+        default:
+          // Filtro de una relación (p. ej. pedido: { devoluciones: ... }) sobre la vista ya resuelta; sin relación, no coincide.
+          if (v === null) return false;
+          if (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)) return coincide(v, { [op]: x });
+          throw new Error(`Operador no soportado en la prueba: ${op}`);
       }
     });
   });
 }
 
-function caja(inicial: { pagos?: any[]; citas?: any[]; ventas?: any[] } = {}) {
+function caja(inicial: { pagos?: any[]; citas?: any[]; ventas?: any[]; devoluciones?: any[]; movimientos?: any[] } = {}) {
   const pagos: any[] = inicial.pagos ?? [];
   const citas: any[] = inicial.citas ?? [];
   const ventas: any[] = inicial.ventas ?? [];
-  const movimientos: any[] = [];
+  const devoluciones: any[] = inicial.devoluciones ?? [];
+  const movimientos: any[] = inicial.movimientos ?? [];
   const cortes: any[] = [];
-  // Relación 1 a 1 pago → salida, como la resolvería Prisma.
-  const conSalida = (p: any) => ({ ...p, salidaCaja: movimientos.find((m) => m.pagoId === p.id) ?? null });
+  // Relaciones como las resolvería Prisma: pago → salida (1 a 1) y pago → pedido → devoluciones → salida.
+  const conSalida = (p: any) => ({
+    ...p,
+    salidaCaja: movimientos.find((m) => m.pagoId === p.id) ?? null,
+    pedido: p.pedidoId == null ? null : {
+      devoluciones: devoluciones
+        .filter((d) => d.pedidoId === p.pedidoId)
+        .map((d) => ({ ...d, salidaCaja: movimientos.find((m) => m.devolucionId === d.id) ?? null })),
+    },
+  });
   const actualizar = (filas: any[], where: any, data: any, vista: (f: any) => any = (f) => f) => {
     const r = filas.filter((f) => coincide(vista(f), where));
     r.forEach((f) => Object.assign(f, data));
@@ -181,6 +195,35 @@ describe('Corte de caja con salidas de efectivo', () => {
     expect(Number(c.cortes[0].totalSalidas)).toBe(0);
     expect(Number(c.cortes[1].totalSalidas)).toBe(0);
     expect(c.movimientos[0].corteId).toBeNull();
+  });
+
+  it('un cobro de pedido que una revocación en efectivo reembolsó por completo (salida por la devolución) sigue contando: entra y sale, y el corte cuadra', async () => {
+    jest.useFakeTimers({ now: DIA_4 });
+    const c = caja({
+      pagos: [{ id: 5, pedidoId: 12, citaId: null, estado: 'reembolsado', monto: d(350), metodo: 'efectivo', cobradoPorId: 'cajera-1', pagadoEn: DIA_4, corteId: null }],
+      devoluciones: [{ id: 60, pedidoId: 12, origen: 'revocacion_art56', estado: 'aprobada', monto: d(350) }],
+      movimientos: [{ id: 1, tipo: 'salida', concepto: 'reembolso_devolucion', monto: d(350), registradoPorId: 'cajera-1', devolucionId: 60, pagoId: null, corteId: null, creadoEn: DIA_4 }],
+    });
+
+    // La cajera cobró 350 y los devolvió el mismo día: en el cajón queda el fondo (500).
+    await c.pos.crearCorte(corteDel('2026-10-04', 500, 500), 'cajera-1');
+
+    const corte = c.cortes[0];
+    expect(Number(corte.totalEfectivo)).toBe(350);
+    expect(Number(corte.totalSalidas)).toBe(350);
+    expect(Number(corte.diferencia)).toBe(0);
+    expect(c.pagos[0].corteId).toBe(corte.id);
+  });
+
+  it('un cobro reembolsado sin ninguna salida de caja (tarjeta devuelta en la terminal) no cuenta como cobro', async () => {
+    jest.useFakeTimers({ now: DIA_4 });
+    const c = caja({
+      pagos: [{ id: 5, pedidoId: 12, citaId: null, estado: 'reembolsado', monto: d(350), metodo: 'tarjeta_terminal', cobradoPorId: 'cajera-1', pagadoEn: DIA_4, corteId: null }],
+      devoluciones: [{ id: 60, pedidoId: 12, origen: 'revocacion_art56', estado: 'aprobada', monto: d(350) }],
+    });
+    await c.pos.crearCorte(corteDel('2026-10-04', 500, 500), 'cajera-1');
+    expect(Number(c.cortes[0].totalTarjeta)).toBe(0);
+    expect(c.pagos[0].corteId).toBeNull();
   });
 
   it('un pago reembolsado sin salida (anterior a este cambio) no cuenta como cobro del corte', async () => {

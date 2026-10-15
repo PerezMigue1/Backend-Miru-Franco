@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -7,8 +8,10 @@ import {
   Logger,
   NotFoundException,
   ParseIntPipe,
+  PayloadTooLargeException,
   ServiceUnavailableException,
   UnauthorizedException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -133,7 +136,7 @@ describe('HttpExceptionFilter', () => {
     const { status, body } = responder(new BadRequestException('Nombre de tabla no válido'));
 
     expect(status).toBe(400);
-    expect(body).toMatchObject({ error: 'Bad Request', message: 'Nombre de tabla no válido' });
+    expect(body).toMatchObject({ error: 'Solicitud inválida', message: 'Nombre de tabla no válido' });
     expect(body).not.toHaveProperty('referencia');
     expect(warnLog).toHaveBeenCalled();
     expect(errorLog).not.toHaveBeenCalled();
@@ -156,7 +159,28 @@ describe('HttpExceptionFilter', () => {
     const { status, body } = responder(new UnauthorizedException('Token revocado. Por favor inicia sesión nuevamente.'));
 
     expect(status).toBe(401);
-    expect(body).toMatchObject({ error: 'Unauthorized', message: 'Token revocado. Por favor inicia sesión nuevamente.' });
+    expect(body).toMatchObject({ error: 'No autenticado', message: 'Token revocado. Por favor inicia sesión nuevamente.' });
+  });
+
+  describe('el campo error sale en español según el código de estado', () => {
+    it.each([
+      [400, new BadRequestException('Nombre de tabla no válido'), 'Solicitud inválida'],
+      [401, new UnauthorizedException('Token revocado. Por favor inicia sesión nuevamente.'), 'No autenticado'],
+      [403, new ForbiddenException('No puedes corregir tu propio registro de asistencia'), 'Sin permiso'],
+      [404, new NotFoundException('Cita no encontrada'), 'No encontrado'],
+      [409, new ConflictException('El email ya está registrado'), 'Conflicto'],
+    ] as const)('%s responde error en español en vez del texto en inglés de Nest', (esperado, exception, error) => {
+      const { status, body } = responder(exception);
+      expect(status).toBe(esperado);
+      expect(body.error).toBe(error);
+      expect(JSON.stringify(body)).not.toMatch(/Bad Request|Unauthorized|Forbidden|Not Found|\bConflict\b/);
+    });
+
+    it('un 500 responde error "Error interno"', () => {
+      const { status, body } = responder(new TypeError('x'));
+      expect(status).toBe(500);
+      expect(body.error).toBe('Error interno');
+    });
   });
   describe('mensajes por defecto de Nest en español', () => {
     /** Lo que hace Nest con un cuerpo JSON mal formado: BadRequestException con el mensaje del parser. */
@@ -203,6 +227,59 @@ describe('HttpExceptionFilter', () => {
     it('un mensaje propio en español que menciona JSON no cambia', () => {
       const { body } = responder(new BadRequestException('El archivo no contiene un JSON válido'));
       expect(body.message).toBe('El archivo no contiene un JSON válido');
+    });
+  });
+
+  describe('413, 422 y 429 en español', () => {
+    it('archivo de más del límite (multer → PayloadTooLargeException("File too large")) responde 413 en español', () => {
+      const { status, body } = responder(new PayloadTooLargeException('File too large'), '/api/subidas/imagen');
+      expect(status).toBe(413);
+      expect(body).toMatchObject({ error: 'Contenido demasiado grande', message: 'El archivo es demasiado grande' });
+      expect(JSON.stringify(body)).not.toMatch(/too large|Payload/i);
+    });
+
+    it('413 sin mensaje propio sale en español', () => {
+      const { status, body } = responder(new PayloadTooLargeException());
+      expect(status).toBe(413);
+      expect(body).toMatchObject({ error: 'Contenido demasiado grande', message: 'El contenido enviado es demasiado grande' });
+    });
+
+    it('un cuerpo JSON de más del límite (body-parser, entity.too.large) responde 413 en español, no 500', () => {
+      const deBodyParser = Object.assign(new Error('request entity too large'), {
+        type: 'entity.too.large', status: 413, statusCode: 413, expose: true, expected: 200000, length: 200000, limit: 102400,
+      });
+      const { status, body } = responder(deBodyParser, '/api/db/import');
+      expect(status).toBe(413);
+      expect(body).toMatchObject({ error: 'Contenido demasiado grande', message: 'El contenido enviado es demasiado grande' });
+      expect(body).not.toHaveProperty('referencia');
+      expect(errorLog).not.toHaveBeenCalled();
+    });
+
+    it('422 sin mensaje propio sale en español; uno propio se conserva', () => {
+      const sinMensaje = responder(new UnprocessableEntityException());
+      expect(sinMensaje.status).toBe(422);
+      expect(sinMensaje.body).toMatchObject({ error: 'No se puede procesar', message: 'No se pudo procesar la solicitud' });
+      const propio = responder(new UnprocessableEntityException('La cita ya no admite cambios'));
+      expect(propio.body).toMatchObject({ error: 'No se puede procesar', message: 'La cita ya no admite cambios' });
+    });
+
+    it.each([
+      ['sin mensaje propio', new HttpException('Too Many Requests', HttpStatus.TOO_MANY_REQUESTS)],
+      ['del throttler de Nest', new HttpException('ThrottlerException: Too Many Requests', HttpStatus.TOO_MANY_REQUESTS)],
+    ])('429 %s sale en español', (_caso, exception) => {
+      const { status, body } = responder(exception);
+      expect(status).toBe(429);
+      expect(body).toMatchObject({ error: 'Demasiadas solicitudes', message: 'Demasiadas solicitudes. Espera un momento e intenta de nuevo.' });
+      expect(JSON.stringify(body)).not.toMatch(/Too Many|Throttler/);
+    });
+
+    it('el 429 del límite de intentos tiene error en español y conserva su mensaje', () => {
+      const limite = new HttpException(
+        { success: false, message: 'Demasiadas solicitudes. Intenta de nuevo en 42 segundos.', retryAfter: 42 },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+      const { body } = responder(limite);
+      expect(body).toMatchObject({ error: 'Demasiadas solicitudes', message: 'Demasiadas solicitudes. Intenta de nuevo en 42 segundos.' });
     });
   });
 });

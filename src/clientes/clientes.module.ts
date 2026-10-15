@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ClientesController } from './clientes.controller';
 import { ClientesService } from './clientes.service';
 import { ModeloClusteringService } from './modelo-clustering.service';
+import { ObservacionesClienteService } from './observaciones-cliente.service';
 import { SegmentacionClientesService } from './segmentacion-clientes.service';
 
 @Module({
@@ -12,6 +13,7 @@ import { SegmentacionClientesService } from './segmentacion-clientes.service';
     ClientesService,
     ModeloClusteringService,
     SegmentacionClientesService,
+    ObservacionesClienteService,
   ],
   exports: [ClientesService, SegmentacionClientesService],
 })

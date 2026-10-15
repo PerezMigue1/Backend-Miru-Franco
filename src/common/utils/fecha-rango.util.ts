@@ -12,9 +12,9 @@ const REGEX_FECHA_SOLO = /^\d{4}-\d{2}-\d{2}$/;
  *   Así "hoy" para el usuario cubre su día completo.
  * - Si el valor ya es un datetime ISO completo (como lo envía el frontend de
  *   cola-atencion/ejecucion-servicios), se respeta tal cual, sin expandirlo.
- * - Valores inválidos se ignoran silenciosamente (mismo comportamiento previo: el llamador
- *   decide si validar el formato antes de pasarlo aquí). Un día imposible con formato válido
- *   (2026-02-30) se desborda al mes siguiente, como antes.
+ * - Un valor que no se puede interpretar como fecha ('desde=xx') responde 400 "Fecha inválida"
+ *   (antes se ignoraba en silencio y el filtro salía sin acotar). Un día imposible con formato
+ *   válido (2026-02-30) se desborda al mes siguiente, como antes.
  * - `desde` posterior a `hasta` responde 400 (antes devolvía un rango vacío sin avisar).
  */
 export function normalizarRangoFechas(desde?: string, hasta?: string): { gte?: Date; lte?: Date } {
@@ -22,12 +22,14 @@ export function normalizarRangoFechas(desde?: string, hasta?: string): { gte?: D
 
   if (desde) {
     const d = REGEX_FECHA_SOLO.test(desde) ? rangoDiaMexico(desde).desde : new Date(desde);
-    if (!Number.isNaN(d.getTime())) rango.gte = d;
+    if (Number.isNaN(d.getTime())) throw new BadRequestException('Fecha inválida');
+    rango.gte = d;
   }
 
   if (hasta) {
     const h = REGEX_FECHA_SOLO.test(hasta) ? rangoDiaMexico(hasta).hasta : new Date(hasta);
-    if (!Number.isNaN(h.getTime())) rango.lte = h;
+    if (Number.isNaN(h.getTime())) throw new BadRequestException('Fecha inválida');
+    rango.lte = h;
   }
 
   if (rango.gte && rango.lte && rango.gte > rango.lte) {

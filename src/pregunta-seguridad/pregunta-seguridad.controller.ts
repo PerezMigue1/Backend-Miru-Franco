@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   Query,
+  Req,
   HttpCode,
   HttpStatus,
   UseGuards,
@@ -14,9 +15,11 @@ import {
 } from '@nestjs/common';
 import { PreguntaSeguridadService } from './pregunta-seguridad.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { CreatePreguntaDto } from './dto/create-pregunta.dto';
 import { UpdatePreguntaDto } from './dto/update-pregunta.dto';
+import { EliminarPreguntaDto } from './dto/eliminar-pregunta.dto';
 import { VerificarRespuestaDto } from './dto/verificar-respuesta.dto';
 
 @Controller('pregunta-seguridad')
@@ -46,14 +49,23 @@ export class PreguntaSeguridadController {
     return this.preguntaSeguridadService.obtenerPorId(id);
   }
 
+  /**
+   * Establece o actualiza la pregunta y respuesta de recuperación del usuario autenticado (la
+   * respuesta se guarda hasheada con bcrypt). El email del DTO se ignora: cada quien solo puede
+   * cambiar su propia pregunta. Pide passwordActual (cuentas con contraseña); las de Google no usan pregunta.
+   */
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(JwtAuthGuard)
-  async crearPregunta(@Body() createPreguntaDto: CreatePreguntaDto) {
+  @UseGuards(JwtAuthGuard, new RateLimitGuard(5, 60000))
+  async crearPregunta(
+    @Req() req: { user?: { id?: string } },
+    @Body() createPreguntaDto: CreatePreguntaDto,
+  ) {
     return this.preguntaSeguridadService.crearPregunta(
+      req.user?.id,
       createPreguntaDto.pregunta,
-      createPreguntaDto.email,
       createPreguntaDto.respuesta,
+      createPreguntaDto.passwordActual,
     );
   }
 
@@ -68,19 +80,35 @@ export class PreguntaSeguridadController {
     );
   }
 
+  /**
+   * Gestión del catálogo preguntas_disponibles (solo admin): renombrar o activar/desactivar una
+   * pregunta; con un id nuevo, la crea. La web no usa esta ruta: queda para el panel de admin.
+   * Pide passwordActual de quien hace el cambio (cuentas con contraseña).
+   */
   @Put(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, new RateLimitGuard(5, 60000))
+  @Roles('admin')
   async actualizarPregunta(
+    @Req() req: { user?: { id?: string } },
     @Param('id') id: string,
     @Body() updatePreguntaDto: UpdatePreguntaDto,
   ) {
-    return this.preguntaSeguridadService.actualizarPregunta(id, updatePreguntaDto);
+    return this.preguntaSeguridadService.actualizarPregunta(id, updatePreguntaDto, req.user?.id);
   }
 
+  /**
+   * Desactiva una pregunta del catálogo preguntas_disponibles (solo admin, soft delete). Pide passwordActual en el
+   * cuerpo (cuentas con contraseña).
+   */
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
-  async eliminarPregunta(@Param('id') id: string) {
-    return this.preguntaSeguridadService.eliminarPregunta(id);
+  @UseGuards(JwtAuthGuard, RolesGuard, new RateLimitGuard(5, 60000))
+  @Roles('admin')
+  async eliminarPregunta(
+    @Req() req: { user?: { id?: string } },
+    @Param('id') id: string,
+    @Body() eliminarPreguntaDto: EliminarPreguntaDto,
+  ) {
+    return this.preguntaSeguridadService.eliminarPregunta(id, req.user?.id, eliminarPreguntaDto?.passwordActual);
   }
 }
 

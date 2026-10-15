@@ -23,9 +23,11 @@ import {
   IMPORT_BLOCKED_TABLES,
   IMPORT_ALLOWED_TABLE_REGEX,
   TABLAS_PERMITIDAS,
+  confirmacionImportacion,
 } from './db.constants';
 import { ExportDirectService } from './export-direct.service';
 import { TruncateTableDto } from './dto/truncate-table.dto';
+import { ImportTableDto } from './dto/import-table.dto';
 
 @Controller('db')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -62,11 +64,12 @@ export class DbController {
   )
   async importar(
     @UploadedFile() archivo: { buffer: Buffer; originalname?: string; size: number },
-    @Body() body: { tabla?: string; formato?: string; modo?: string },
+    @Body() body: ImportTableDto,
   ): Promise<ImportResult> {
     const tabla = this.normalizeImportTable(body?.tabla);
     const formato = body?.formato;
     const modo = body?.modo;
+    this.exigirConfirmacionImportacion(tabla, body?.confirmacion);
     if (!archivo || !archivo.buffer) {
       throw new BadRequestException('El archivo es requerido');
     }
@@ -146,6 +149,27 @@ export class DbController {
   @Post('truncate')
   async truncate(@Body() dto: TruncateTableDto) {
     return this.dbService.truncateTable(dto);
+  }
+
+  /**
+   * Respaldo completo de la base (solo admin, por el guard de la clase): el único lugar donde
+   * salen los datos de salud del perfil capilar; las columnas secretas no salen ni aquí.
+   */
+  @Get('backup')
+  async respaldoCompleto(@Res() res: Response): Promise<void> {
+    const { buffer, filename, contentType } = await this.dbService.respaldoCompleto();
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
+  /** La importación escribe en la base: exige el texto exacto "IMPORTAR <tabla>" (400 sin él). */
+  private exigirConfirmacionImportacion(tabla: string, confirmacion?: string): void {
+    const esperada = confirmacionImportacion(tabla);
+    if (String(confirmacion ?? '').trim() !== esperada) {
+      const mensaje = `Confirmación requerida: escribe exactamente "${esperada}" en el campo confirmacion`;
+      throw new BadRequestException({ success: false, error: mensaje, message: mensaje });
+    }
   }
 
   private normalizeImportTable(tabla?: string): string {

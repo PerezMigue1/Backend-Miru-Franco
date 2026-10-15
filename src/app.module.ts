@@ -34,6 +34,8 @@ import { ConfiguracionModule } from './configuracion/configuracion.module';
 import { AsistenciaModule } from './asistencia/asistencia.module';
 import { HorasExtraModule } from './horas-extra/horas-extra.module';
 import { NotificacionesModule } from './notificaciones/notificaciones.module';
+import { ConsentimientosModule } from './consentimientos/consentimientos.module';
+import { ArcoModule } from './arco/arco.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -81,6 +83,8 @@ import { AppController } from './app.controller';
     AsistenciaModule,
     HorasExtraModule,
     NotificacionesModule,
+    ConsentimientosModule,
+    ArcoModule,
   ],
   controllers: [AppController],
 })

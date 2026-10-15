@@ -16,16 +16,23 @@ const REGISTRO = {
   fechaNacimiento: '1995-03-10',
   preguntaSeguridad: { pregunta: '¿Color favorito?', respuesta: 'azul' },
   perfilCapilar: { tipoCabello: 'liso' },
+  // Ahora también son obligatorios los términos (registro-consentimientos.spec.ts).
+  aceptaTerminos: true,
   aceptaAvisoPrivacidad: true,
 };
 
 function escenario(usuario: Record<string, unknown> | null = null) {
-  const prisma = {
+  const prisma: any = {
     usuario: {
       findUnique: jest.fn().mockResolvedValue(usuario),
       create: jest.fn(async ({ data }: any) => ({ id: 'u-nuevo', rol: 'cliente', ...data })),
       update: jest.fn().mockResolvedValue({}),
     },
+    // El alta ahora va en una transacción (registro-consentimientos.spec.ts) y también la del admin registra
+    // términos y aviso de privacidad con la versión vigente (consentimientos-edicion.spec.ts).
+    versionDocumentoLegal: { findFirst: jest.fn(async ({ where }: any) => ({ slug: where.slug, version: '2.0', hashTexto: 'a'.repeat(64), vigenteDesde: new Date('2026-10-14') })) },
+    consentimiento: { createMany: jest.fn(async ({ data }: any) => ({ count: data.length })) },
+    $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
   const emailService = { sendOTPEmail: jest.fn().mockResolvedValue(undefined) };
   return { servicio: new UsuariosService(prisma as any, emailService as any, {} as any, {} as any), prisma };
@@ -39,7 +46,7 @@ describe('Registro sin respuesta de seguridad real', () => {
 
   const crear = async (extra: Record<string, unknown>) => {
     const { servicio, prisma } = escenario();
-    await servicio.crearUsuario({ ...REGISTRO, ...extra } as any, { permitirConfirmado: true });
+    await servicio.crearUsuario({ ...REGISTRO, ...extra } as any, { permitirConfirmado: true, registradoPorId: 'admin-1' });
     return prisma.usuario.create.mock.calls[0][0].data;
   };
 

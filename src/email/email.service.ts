@@ -58,7 +58,6 @@ export class EmailService {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
     const fromName = this.configService.get<string>('RESEND_FROM_NAME') || 'Miru Franco Salón Beauty';
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://miru-franco.vercel.app';
 
     if (!apiKey || !fromEmail || !this.resend) {
       throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
@@ -151,6 +150,29 @@ export class EmailService {
     );
   }
 
+  /**
+   * Código para confirmar el correo nuevo de la cuenta (se envía al correo nuevo). El código solo va
+   * en el HTML: nunca en los logs.
+   */
+  async sendCodigoCambioCorreoEmail(correoNuevo: string, codigo: string, vigenciaMinutos: number): Promise<void> {
+    await this.enviarCorreoCuenta(
+      correoNuevo,
+      'Código para cambiar tu correo - Miru Franco',
+      `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #710014;">Cambio de correo</h2>
+            <p>Para usar este correo en tu cuenta de Miru Franco, ingresa este código:</p>
+            <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
+              <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${escaparHtml(codigo)}</h1>
+            </div>
+            <p style="color: #666; font-size: 12px;">Este código vence en ${vigenciaMinutos} minutos y solo sirve una vez.</p>
+            <p style="color: #666; font-size: 12px;">Si no fuiste tú, ignora este correo: tu cuenta no cambia.</p>
+          </div>
+        `,
+      'código de cambio de correo',
+    );
+  }
+
   /** Aviso después de cambiar la contraseña: fecha y hora, y cómo recuperar la cuenta. Sin datos sensibles. */
   async sendAvisoPasswordCambiadaEmail(correo: string, fechaHora: string): Promise<void> {
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://miru-franco.vercel.app';
@@ -220,6 +242,81 @@ export class EmailService {
       console.error('Error enviando correo de notificación:', err.response?.body || err.message);
       throw new Error('No se pudo enviar el correo de notificación');
     }
+  }
+
+  /**
+   * ARCO: aviso a la titular cuando el salón responde, atiende o rechaza su solicitud (folio, tipo, estado y la
+   * respuesta). El log no lleva destinatario ni contenido (ver enviarCorreoCuenta).
+   */
+  async sendRespuestaArcoEmail(
+    correo: string,
+    datos: { folio: string; tipo: string; estado: string; respuesta: string },
+  ): Promise<void> {
+    const tipos: Record<string, string> = {
+      acceso: 'Acceso a tus datos',
+      rectificacion: 'Rectificación',
+      cancelacion: 'Cancelación',
+      oposicion: 'Oposición',
+      revocacion: 'Revocación del consentimiento',
+    };
+    const estados: Record<string, string> = { respondida: 'Respondida', atendida: 'Atendida', rechazada: 'Rechazada', en_proceso: 'En proceso' };
+    const respuesta = escaparHtml(datos.respuesta).replace(/\r?\n/g, '<br>');
+    await this.enviarCorreoCuenta(
+      correo,
+      `Respuesta a tu solicitud ${datos.folio} - Miru Franco`,
+      `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #710014;">Respuesta a tu solicitud de derechos ARCO</h2>
+            <p><strong>Folio:</strong> ${escaparHtml(datos.folio)}</p>
+            <p><strong>Tipo:</strong> ${escaparHtml(tipos[datos.tipo] ?? datos.tipo)}</p>
+            <p><strong>Estado:</strong> ${escaparHtml(estados[datos.estado] ?? datos.estado)}</p>
+            <div style="background-color: #f2f1ed; padding: 16px; margin: 20px 0; border-radius: 8px;">${respuesta}</div>
+            <p style="color: #666; font-size: 12px;">También puedes ver tus solicitudes en tu perfil, en la sección de privacidad.</p>
+          </div>
+        `,
+      'respuesta ARCO',
+    );
+  }
+
+  /**
+   * ARCO: confirmación de la cancelación de la cuenta. Se manda al correo que la titular tenía ANTES de anonimizarla
+   * (después de anonimizar la cuenta ya no tiene correo). Nombra lo que se conserva por obligación legal.
+   */
+  async sendCancelacionCuentaArcoEmail(correo: string, datos: { folio: string; fecha: Date }): Promise<void> {
+    const fecha = new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', dateStyle: 'long', timeStyle: 'short' }).format(datos.fecha);
+    await this.enviarCorreoCuenta(
+      correo,
+      'Cancelamos tu cuenta - Miru Franco',
+      `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #710014;">Cancelamos tu cuenta</h2>
+            <p>Atendimos tu solicitud de cancelación con folio <strong>${escaparHtml(datos.folio)}</strong> el ${escaparHtml(fecha)} (hora del centro de México).</p>
+            <p>Anonimizamos tus datos personales: tu nombre, correo, teléfono, direcciones, datos de salud y de tu cabello, tarjetas guardadas y notas ya no están en tu cuenta, y ya no puedes iniciar sesión con ella.</p>
+            <p>Por obligación legal conservamos tus pedidos, pagos, facturas y ventas durante 5 años (artículo 30 del Código Fiscal de la Federación), y también tus citas, quejas y valoraciones sin tu nombre, la constancia de tus consentimientos y tus solicitudes ARCO.</p>
+            <p style="color: #666; font-size: 12px;">Si no pediste esta cancelación, comunícate con el salón lo antes posible.</p>
+          </div>
+        `,
+      'cancelación ARCO',
+    );
+  }
+
+  /**
+   * Cambio de correo de la cuenta: aviso al correo ANTERIOR con la fecha y hora. No lleva el correo nuevo. El log no
+   * lleva destinatario ni contenido (ver enviarCorreoCuenta).
+   */
+  async sendAvisoCorreoCambiadoEmail(correoAnterior: string, fechaHora: string): Promise<void> {
+    await this.enviarCorreoCuenta(
+      correoAnterior,
+      'Tu correo cambió - Miru Franco',
+      `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #710014;">Tu correo cambió</h2>
+            <p>El correo de tu cuenta de Miru Franco se cambió el ${escaparHtml(fechaHora)} (hora del centro de México). Desde ahora, este correo ya no sirve para entrar ni para recuperar tu cuenta.</p>
+            <p style="color: #666;">Si no fuiste tú, comunícate con el salón lo antes posible para recuperar tu cuenta.</p>
+          </div>
+        `,
+      'aviso de cambio de correo',
+    );
   }
 }
 

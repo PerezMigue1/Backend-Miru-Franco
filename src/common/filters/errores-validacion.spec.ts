@@ -1,19 +1,28 @@
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   ArrayNotEmpty,
+  Equals,
   IsArray,
   IsBoolean,
+  IsDate,
   IsDateString,
+  IsDefined,
   IsEmail,
   IsEnum,
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsNotEmptyObject,
   IsNumber,
+  IsNumberString,
+  IsObject,
   IsOptional,
   IsPositive,
   IsString,
+  IsUrl,
   IsUUID,
   Matches,
   Max,
@@ -22,6 +31,8 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { CompletarRegistroGoogleDto } from '../../usuarios/dto/completar-registro-google.dto';
+import { VerificarRespuestaDto } from '../../pregunta-seguridad/dto/verificar-respuesta.dto';
 import { crearErrorDeValidacion } from './errores-validacion';
 
 /**
@@ -119,3 +130,74 @@ describe('Errores de validación en español', () => {
     for (const m of Object.values(r)) expect(m).not.toMatch(/\b(should|must|property)\b/);
   });
 });
+
+describe('Respaldo para más restricciones sin mensaje propio', () => {
+  class Extra {
+    @IsOptional() @IsObject() datos?: unknown;
+    @IsDefined() requerido?: unknown;
+    @IsOptional() @ArrayMinSize(2) pocos?: string[];
+    @IsOptional() @ArrayMaxSize(1) muchos?: string[];
+    @IsOptional() @IsNumberString() folio?: unknown;
+    @IsOptional() @IsUrl() sitio?: string;
+    @IsOptional() @Equals(true) acepta?: unknown;
+    @IsOptional() @IsDate() dia?: unknown;
+    @IsOptional() @IsNotEmptyObject() lleno?: unknown;
+  }
+
+  it.each([
+    ['isObject', { requerido: 1, datos: 'x' }, 'datos', 'El campo datos debe ser un objeto'],
+    ['isDefined', {}, 'requerido', 'El campo requerido es obligatorio'],
+    ['arrayMinSize', { requerido: 1, pocos: ['a'] }, 'pocos', 'El campo pocos debe tener al menos 2 elementos'],
+    ['arrayMaxSize', { requerido: 1, muchos: ['a', 'b'] }, 'muchos', 'El campo muchos debe tener como máximo 1 elementos'],
+    ['isNumberString', { requerido: 1, folio: 'abc' }, 'folio', 'El campo folio debe contener solo números'],
+    ['isUrl', { requerido: 1, sitio: 'no es url' }, 'sitio', 'El campo sitio debe ser una URL válida'],
+    ['equals', { requerido: 1, acepta: false }, 'acepta', 'El campo acepta no tiene el valor esperado'],
+    ['isDate', { requerido: 1, dia: 'x' }, 'dia', 'El campo dia debe ser una fecha válida'],
+    ['isNotEmptyObject', { requerido: 1, lleno: {} }, 'lleno', 'El campo lleno no puede estar vacío'],
+  ])('%s sin mensaje propio sale en español', async (_c, cuerpo, campo, mensaje) => {
+    const r = await erroresDe(Extra, cuerpo, pipe);
+    expect(r[campo]).toBe(mensaje);
+  });
+});
+
+describe('Con la configuración de producción de main.ts (disableErrorMessages) y DTO reales', () => {
+  const pipeProduccion = new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+    transformOptions: { enableImplicitConversion: true },
+    disableErrorMessages: true,
+    exceptionFactory: crearErrorDeValidacion,
+  });
+
+  it('forbidNonWhitelisted ("property X should not exist") sale en español también en producción', async () => {
+    const r = await erroresDe(Formulario, { sobra: 1, otro: 'x' }, pipeProduccion);
+    expect(r).toEqual({ sobra: 'El campo sobra no está permitido', otro: 'El campo otro no está permitido' });
+  });
+
+  it('VerificarRespuestaDto (recuperación por pregunta) sin mensajes propios: todo en español', async () => {
+    const r = await erroresDe(VerificarRespuestaDto, { email: 'no-es-correo', answers: 'texto', extra: 1 }, pipeProduccion);
+    expect(r).toEqual({
+      email: 'El campo email debe ser un correo válido',
+      answers: 'El campo answers debe ser un objeto',
+      extra: 'El campo extra no está permitido',
+    });
+    for (const m of Object.values(r)) expect(m).not.toMatch(/\b(should|must|property|value)\b/);
+  });
+
+  it('CompletarRegistroGoogleDto: recibePromociones no booleano sale en español', async () => {
+    const r = await erroresDe(CompletarRegistroGoogleDto, { token: 't', aceptaTerminos: true, aceptaAvisoPrivacidad: true, recibePromociones: 'quiza' }, pipeProduccion);
+    expect(r.recibePromociones).toMatch(/^El campo recibePromociones debe ser verdadero o falso/);
+    for (const m of Object.values(r)) expect(m).not.toMatch(/\b(should|must|property|boolean)\b/);
+  });
+});
+
+async function erroresDe(metatype: new () => object, cuerpo: Record<string, unknown>, conPipe: ValidationPipe): Promise<Record<string, string>> {
+  try {
+    await conPipe.transform(cuerpo, { type: 'body', metatype });
+  } catch (e) {
+    expect(e).toBeInstanceOf(BadRequestException);
+    return ((e as BadRequestException).getResponse() as Record<string, any>).errors;
+  }
+  throw new Error('Se esperaba un 400');
+}

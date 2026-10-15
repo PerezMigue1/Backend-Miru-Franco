@@ -17,6 +17,9 @@ import {
   MAX_FILE_SIZE_BYTES,
   TRUNCATE_ALLOWED_TABLE_REGEX,
   TRUNCATE_BLOCKED_TABLES,
+  confirmacionTruncate,
+  esColumnaExcluidaDeExportacion,
+  esColumnaSecreta,
   neutralizarFormulaCsv,
   type ImportMode,
   type TablaPermitida,
@@ -43,6 +46,28 @@ export interface ImportResult {
   omitidos: number;
   fallidos: number;
   errores: ImportError[];
+  /** Lo que no se importó a propósito (p. ej. datos que exigen el consentimiento de la persona). */
+  avisos?: string[];
+}
+
+/**
+ * Importación de usuarios: las alergias (datos de salud), la aceptación del aviso de privacidad y las promociones
+ * exigen el consentimiento de la persona con evidencia (fecha, ip, casilla y documento), que un archivo no trae.
+ * No se importan: las cuentas quedan con aviso sin aceptar (GET /consentimientos/pendientes se lo pide al entrar),
+ * sin promociones y sin alergias.
+ */
+export const AVISO_IMPORTACION_USUARIOS =
+  'No se importaron las alergias, la aceptación del aviso de privacidad ni las promociones: requieren el consentimiento de la persona con evidencia. Cada persona los acepta desde su cuenta.';
+
+/** true si la fila del archivo trae alguno de los datos que la importación de usuarios no escribe. */
+function traeDatosConConsentimiento(row: Record<string, any>): boolean {
+  const conTexto = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+  const verdadero = (v: unknown) => v === true || (typeof v === 'string' && ['true', '1', 'si', 'sí'].includes(v.trim().toLowerCase()));
+  return (
+    conTexto(row.alergias) ||
+    verdadero(row.aceptaAvisoPrivacidad ?? row.acepta_aviso_privacidad) ||
+    verdadero(row.recibePromociones ?? row.recibe_promociones)
+  );
 }
 
 /** Normaliza clave camelCase o snake_case a camelCase para Prisma */
@@ -81,7 +106,7 @@ function parseCSV(content: string): Record<string, string>[] {
     const values = parseLine(lines[i]);
     const obj: Record<string, string> = {};
     headers.forEach((h, idx) => {
-      let v = values[idx] ?? '';
+      const v = values[idx] ?? '';
       obj[h] = v.replace(/^"|"$/g, '').trim();
     });
     rows.push(obj);
@@ -162,6 +187,14 @@ export class DbService {
       throw new BadRequestException(`No se permite truncar la tabla sensible: ${table}`);
     }
 
+    // Confirmación explícita: sin el texto exacto no se consulta ni se toca la base.
+    const confirmacionEsperada = confirmacionTruncate(table);
+    if (String(dto?.confirmacion ?? '').trim() !== confirmacionEsperada) {
+      throw new BadRequestException(
+        `Confirmación requerida: escribe exactamente "${confirmacionEsperada}" en el campo confirmacion`,
+      );
+    }
+
     const exists = await this.prisma.$queryRawUnsafe<Array<{ exists: boolean }>>(
       `SELECT EXISTS (
          SELECT 1
@@ -177,6 +210,9 @@ export class DbService {
 
     const restartIdentity = dto.restartIdentity !== false;
     const cascade = dto.cascade === true;
+    if (cascade) {
+      await this.rechazarCascadeSobreTablasBloqueadas(table);
+    }
     const sql = `TRUNCATE TABLE "public"."${table}"${restartIdentity ? ' RESTART IDENTITY' : ''}${cascade ? ' CASCADE' : ''};`;
     await this.prisma.$executeRawUnsafe(sql);
 
@@ -187,6 +223,42 @@ export class DbService {
       cascade,
       message: `Se vació la tabla ${table}`,
     };
+  }
+
+  /**
+   * TRUNCATE ... CASCADE vacía, de forma recursiva, toda tabla con llave foránea hacia la truncada
+   * (sin importar su onDelete). Se recorre pg_constraint igual que Postgres y, si la cascada
+   * alcanza alguna tabla bloqueada (citas, pagos, pedidos, caja...), se rechaza sin tocar la base.
+   */
+  private async rechazarCascadeSobreTablasBloqueadas(table: string): Promise<void> {
+    const dependientes = await this.prisma.$queryRawUnsafe<Array<{ esquema: string; tabla: string }>>(
+      `WITH RECURSIVE dependientes(oid) AS (
+         SELECT c.conrelid
+         FROM pg_constraint c
+         WHERE c.contype = 'f'
+           AND c.confrelid = to_regclass(format('%I.%I', 'public', $1::text))
+         UNION
+         SELECT c.conrelid
+         FROM pg_constraint c
+         JOIN dependientes d ON c.confrelid = d.oid
+         WHERE c.contype = 'f'
+       )
+       SELECT DISTINCT n.nspname AS esquema, r.relname AS tabla
+       FROM dependientes d
+       JOIN pg_class r ON r.oid = d.oid
+       JOIN pg_namespace n ON n.oid = r.relnamespace
+       ORDER BY r.relname`,
+      table,
+    );
+    const bloqueadas = new Set<string>(TRUNCATE_BLOCKED_TABLES as readonly string[]);
+    const alcanzadas = (dependientes ?? [])
+      .map((d) => d.tabla)
+      .filter((t) => bloqueadas.has(t));
+    if (alcanzadas.length > 0) {
+      throw new BadRequestException(
+        `No se permite vaciar ${table} con cascade: también vaciaría tablas protegidas (${alcanzadas.join(', ')}). Desmarca cascade.`,
+      );
+    }
   }
 
   async importar(
@@ -324,6 +396,7 @@ export class DbService {
       }
     }
 
+    const avisos = tabla === 'usuarios' && registros.some(traeDatosConConsentimiento) ? [AVISO_IMPORTACION_USUARIOS] : undefined;
     return {
       success: errores.length === 0,
       modo: 'append',
@@ -335,6 +408,7 @@ export class DbService {
       omitidos: 0,
       fallidos: errores.length,
       errores: errores.slice(0, MAX_IMPORT_ERROR_DETAILS),
+      ...(avisos ? { avisos } : {}),
     };
   }
 
@@ -1011,8 +1085,9 @@ export class DbService {
         telefono: this.optStr(row.telefono) ?? '',
         password: hashedPassword,
         fechaNacimiento: this.optDate(row.fechaNacimiento),
-        aceptaAvisoPrivacidad: this.toBool(row.aceptaAvisoPrivacidad, false),
-        recibePromociones: this.toBool(row.recibePromociones, false),
+        // Sin evidencia del consentimiento (AVISO_IMPORTACION_USUARIOS): siempre false
+        aceptaAvisoPrivacidad: false,
+        recibePromociones: false,
         confirmado: this.toBool(row.confirmado, false),
         activo: this.toBool(row.activo, true),
         rol: this.optStr(row.rol) ?? 'cliente',
@@ -1020,7 +1095,7 @@ export class DbService {
         colorNatural: this.optStr(row.colorNatural),
         colorActual: this.optStr(row.colorActual),
         productosUsados: this.optStr(row.productosUsados),
-        alergias: this.optStr(row.alergias),
+        // Las alergias (datos de salud) no se importan: exigen el consentimiento expreso de la persona
         preguntaSeguridad: this.optStr(row.preguntaSeguridad),
         respuestaSeguridad: this.optStr(row.respuestaSeguridad),
       },
@@ -1157,22 +1232,77 @@ export class DbService {
         include: { presentaciones: true },
         orderBy: { id: 'asc' },
       });
-      return list.map((p) => this.sanitizeProducto(p));
+      return list.map((p) => this.quitarColumnasDeExportacion(this.sanitizeProducto(p)));
     }
     if (tabla === 'usuarios') {
       const list = await this.prisma.usuario.findMany({
         orderBy: { creadoEn: 'asc' },
       });
-      return list.map((u) => this.sanitizeUsuario(u));
+      return list.map((u) => this.quitarColumnasDeExportacion(this.sanitizeUsuario(u)));
     }
     if (tabla === 'servicios') {
       const list = await this.prisma.servicio.findMany({
         include: { productosAsociados: { include: { producto: true } }, especialistas: { include: { usuario: { select: { id: true, nombre: true, email: true } } } } },
         orderBy: { id: 'asc' },
       });
-      return list.map((s) => this.sanitizeServicio(s));
+      return list.map((s) => this.quitarColumnasDeExportacion(this.sanitizeServicio(s)));
     }
     throw new BadRequestException(`Tabla no implementada: ${tabla}`);
+  }
+
+  /** Red de seguridad de las exportaciones por tabla: fuera columnas secretas y de salud. */
+  private quitarColumnasDeExportacion(fila: Record<string, any>): Record<string, any> {
+    const limpia: Record<string, any> = {};
+    for (const [k, v] of Object.entries(fila)) {
+      if (!esColumnaExcluidaDeExportacion(k)) limpia[k] = v;
+    }
+    return limpia;
+  }
+
+  /** En el respaldo completo solo se quitan los secretos; los datos de salud sí se respaldan. */
+  private quitarColumnasSecretas(fila: Record<string, any>): Record<string, any> {
+    const limpia: Record<string, any> = {};
+    for (const [k, v] of Object.entries(fila ?? {})) {
+      if (!esColumnaSecreta(k)) limpia[k] = v;
+    }
+    return limpia;
+  }
+
+  /**
+   * Respaldo completo de la base (GET /db/backup, solo admin por el guard del controlador): todas
+   * las tablas del schema public en un JSON { tabla: filas[] } reimportable desde la pantalla de
+   * importación. Incluye los datos de salud del perfil capilar (solo aquí) y NUNCA columnas
+   * secretas (password, codigoOTP, respuesta de seguridad, tokens).
+   */
+  async respaldoCompleto(): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+    const tablas = await this.prisma.$queryRawUnsafe<Array<{ table_name: string }>>(
+      `SELECT table_name
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_type = 'BASE TABLE'
+       ORDER BY table_name ASC`,
+    );
+
+    const datos: Record<string, Record<string, any>[]> = {};
+    for (const { table_name: tabla } of tablas) {
+      if (tabla === '_prisma_migrations' || !/^[a-zA-Z0-9_]+$/.test(tabla)) continue;
+      const filas = await this.prisma.$queryRawUnsafe<Record<string, any>[]>(
+        `SELECT * FROM "public"."${tabla}"`,
+      );
+      datos[tabla] = (filas ?? []).map((fila) => this.quitarColumnasSecretas(fila));
+    }
+
+    const json = JSON.stringify(
+      datos,
+      (_clave, valor: unknown) => (typeof valor === 'bigint' ? valor.toString() : valor),
+      2,
+    );
+    const fecha = new Date().toISOString().slice(0, 10);
+    return {
+      buffer: Buffer.from(json, 'utf-8'),
+      filename: `respaldo_completo_${fecha}.json`,
+      contentType: 'application/json',
+    };
   }
 
   private sanitizeProducto(p: any): Record<string, any> {
@@ -1216,11 +1346,10 @@ export class DbService {
       activo: u.activo,
       confirmado: u.confirmado,
       creadoEn: u.creadoEn?.toISOString?.(),
-      tipoCabello: u.tipoCabello,
-      colorNatural: u.colorNatural,
-      colorActual: u.colorActual,
     };
-    // No exportar: password, codigoOTP, otpExpira, resetPasswordToken, tokensRevocadosDesde, etc.
+    // No exportar: password, codigoOTP, otpExpira, resetPasswordToken, respuestaSeguridad, ni los
+    // datos de salud del perfil capilar (tipoCabello, colores, alergias, tratamientos, productos):
+    // esos solo salen en el respaldo completo (respaldoCompleto, solo admin).
   }
 
   private sanitizeServicio(s: any): Record<string, any> {

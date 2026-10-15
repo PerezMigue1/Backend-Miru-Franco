@@ -33,3 +33,11 @@ export const JWT_TTL_MOVIL_SEGUNDOS = 15 * 60;
  * completar el login en Google. No es un token de sesión: va firmado con otra llave y otro payload.
  */
 export const JWT_TTL_STATE_GOOGLE_SEGUNDOS = 10 * 60;
+
+/**
+ * Token del alta pendiente con Google en la web (/auth/completar-registro?token=..., ver AuthService): 15 min
+ * para aceptar términos y aviso. No es un token de sesión: va firmado con otra llave y otro payload.
+ * Vive aquí porque jwt-ttl.spec.ts exige que toda vigencia (`expiresIn`) del código salga de este archivo; su valor
+ * lo prueba google-registro.spec.ts (exp - iat = 15 min y token vencido a los 16 min).
+ */
+export const JWT_TTL_REGISTRO_GOOGLE_SEGUNDOS = 15 * 60;

@@ -25,7 +25,7 @@ jest
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { AuthController } = require('./auth.controller');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { AuthService } = require('./auth.service');
+const { AuthService, leerTokenRegistroGoogle } = require('./auth.service');
 
 const SECRETO = 'secreto-falso-solo-para-pruebas';
 const FRONTEND = 'https://web.falsa.example';
@@ -346,6 +346,23 @@ describe('Google desde la app (PKCE)', () => {
 
       expect(prisma.codigoOAuth.create).toHaveBeenCalledTimes(1);
       expect(prisma.codigoOAuth.create.mock.calls[0][0].data.codigo).toBe(`${code}.${CHALLENGE}`);
+    });
+
+    it('state de app y usuaria nueva: no crea cuenta ni código; va a /auth/completar-registro#token= con origen app y el token no sale en los logs', async () => {
+      const { controller, res, prisma } = montar();
+      const pendiente = { registroGooglePendiente: true, googleId: 'google-9', email: 'nueva@example.com', nombre: 'Nueva', foto: null };
+      await controller.googleAuthRedirect({ query: { state: firmarStateApp(CHALLENGE) }, user: pendiente }, res);
+
+      expect(prisma.codigoOAuth.create).not.toHaveBeenCalled();
+      expect(res.redirect).toHaveBeenCalledTimes(1);
+      const url = new URL(res.redirect.mock.calls[0][0]);
+      expect(`${url.origin}${url.pathname}`).toBe(`${FRONTEND}/auth/completar-registro`);
+      // En el fragmento: el navegador no lo manda al servidor web
+      expect(url.search).toBe('');
+      const token = new URLSearchParams(url.hash.slice(1)).get('token');
+      expect(leerTokenRegistroGoogle(token)).toEqual({ googleId: 'google-9', email: 'nueva@example.com', nombre: 'Nueva', foto: null, origen: 'app' });
+      const salida = [...logEspia.mock.calls, ...errorEspia.mock.calls].map((a) => a.map(String).join(' ')).join('\n');
+      expect(salida).not.toContain(token);
     });
 
     it('state de app sin usuaria: deep link de error, sin message', async () => {

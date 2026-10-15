@@ -58,11 +58,13 @@ describe('Corte de caja con anticipos de citas', () => {
     const c = creados[0];
     expect([c.totalVentas, c.totalEfectivo, c.diferencia].map(Number)).toEqual([900, 900, 0]);
     // Un anticipo cobrado en el salón que pasa a revisión (la clienta canceló) sigue en caja: el corte lo cuenta.
-    // Un reembolsado con salida de caja también: el ingreso y la salida se ven ambos y el neto es 0.
+    // Un reembolsado con salida de caja también (la suya o la de una devolución de su pedido, como una
+    // revocación en efectivo): el ingreso y la salida se ven ambos y el neto es 0.
     expect(prisma.pago.findMany.mock.calls[0][0].where.OR).toEqual([
       { estado: 'aprobado' },
       { estado: 'en_revision', citaId: { not: null } },
       { estado: 'reembolsado', salidaCaja: { isNot: null } },
+      { estado: 'reembolsado', pedido: { devoluciones: { some: { salidaCaja: { isNot: null } } } } },
     ]);
   });
 });

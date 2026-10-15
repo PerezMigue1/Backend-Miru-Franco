@@ -3,7 +3,19 @@ import { PassportStrategy } from '@nestjs/passport';
 import { Strategy, VerifyCallback } from 'passport-google-oauth20';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
-import * as bcrypt from 'bcryptjs';
+
+/** Datos de Google de una persona que todavía no tiene cuenta (req.user del callback en ese caso). */
+export interface RegistroGooglePendiente {
+  registroGooglePendiente: true;
+  googleId: string;
+  email: string;
+  nombre: string;
+  foto: string | null;
+}
+
+export function esRegistroGooglePendiente(usuario: unknown): usuario is RegistroGooglePendiente {
+  return !!usuario && typeof usuario === 'object' && (usuario as { registroGooglePendiente?: unknown }).registroGooglePendiente === true;
+}
 
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
@@ -60,25 +72,17 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       });
 
       if (!usuario) {
-        // Crear nuevo usuario con Google (sin pregunta de seguridad)
-        usuario = await this.prisma.usuario.create({
-          data: {
-            nombre: displayName,
-            email,
-            googleId: id,
-            foto: photos[0]?.value || null,
-            telefono: null,
-            password: null,
-            fechaNacimiento: null,
-            preguntaSeguridad: null, // Usuarios de Google NO tienen pregunta
-            respuestaSeguridad: null, // Usuarios de Google NO tienen respuesta
-            aceptaAvisoPrivacidad: true,
-            recibePromociones: false,
-            confirmado: true,
-            activo: true,
-          },
-        });
-        console.log('✅ Usuario de Google creado sin pregunta de seguridad:', usuario.id);
+        // Cuenta nueva: aquí NO se crea, ni para la web ni para la app. Se crea al aceptar términos y aviso en
+        // /auth/completar-registro (POST /auth/google/completar), con el token de origen web o app.
+        const pendiente: RegistroGooglePendiente = {
+          registroGooglePendiente: true,
+          googleId: id,
+          email,
+          nombre: displayName,
+          foto: photos?.[0]?.value || null,
+        };
+        done(null, pendiente);
+        return;
       } else {
         // Actualizar Google ID y foto si no existen
         const updateData: any = {};

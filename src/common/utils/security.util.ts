@@ -169,7 +169,7 @@ export function containsSQLInjection(input: string): boolean {
       // UNION SELECT completo (no válido en email)
       /union[\s]+select[\s]+/i,
       // SELECT FROM completo (no válido en email)
-      /select[\s]+[\w\*]+[\s]+from[\s]+/i,
+      /select[\s]+[\w*]+[\s]+from[\s]+/i,
       // Comentarios SQL (-- o /*) - no válidos en email
       /--[\s]*$/m,
       /\/\*.*\*\//,
@@ -188,7 +188,7 @@ export function containsSQLInjection(input: string): boolean {
     // UNION SELECT (debe tener ambos)
     /union[\s]+select[\s]+/i,
     // SELECT FROM (debe tener ambos)
-    /select[\s]+[\w\*]+[\s]+from[\s]+/i,
+    /select[\s]+[\w*]+[\s]+from[\s]+/i,
     // INSERT INTO VALUES
     /insert[\s]+into[\s]+\w+[\s]+values/i,
     // DELETE FROM
