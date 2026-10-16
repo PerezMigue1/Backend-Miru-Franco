@@ -3,6 +3,7 @@ import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { EstadoPago, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { reglasDeCita, reglasNegocio } from '../../configuracion-sitio/reglas-negocio';
 import { MercadoPagoClient, PagoMercadoPago } from '../../ecommerce/mercadopago/mercadopago.client';
 import {
   buscarUltimoPagoEnReferencias,
@@ -67,6 +68,9 @@ export class AnticiposCitasService {
     if (!vigente(cita.estado)) throw new ConflictException('Esta cita ya no está vigente');
     if (!cita.anticipoVenceEn || ahora >= cita.anticipoVenceEn) {
       throw new ConflictException('El plazo para pagar el anticipo terminó: vuelve a agendar tu cita');
+    }
+    if (!reglasNegocio().pagos.mercadoPagoAnticipos) {
+      throw new BadRequestException('El pago del anticipo en línea no está disponible por ahora. Págalo en el salón.');
     }
 
     const confirmacion = `${(process.env.FRONTEND_URL ?? '').replace(/\/+$/, '')}/cliente/servicios-citas/confirmacion?citaId=${cita.id}`;
@@ -209,7 +213,7 @@ export class AnticiposCitasService {
     const hay = (e: EstadoPago) => pagos.some((p) => p.estado === e);
     const aprobado = pagos.find((p) => p.estado === EstadoPago.aprobado && !p.retenidoEn);
     if (cita.anticipoPagadoEn && aprobado && vigente(cita.estado)) {
-      cancelacion = politicaCancelacionAnticipo(aprobado.pagadoEn ?? cita.anticipoPagadoEn, cita.fechaHoraInicio, ahora);
+      cancelacion = politicaCancelacionAnticipo(aprobado.pagadoEn ?? cita.anticipoPagadoEn, cita.fechaHoraInicio, ahora, reglasDeCita((cita as { reglas?: unknown }).reglas));
     }
     if (cita.anticipoPagadoEn && hay(EstadoPago.aprobado)) return respuesta('aprobado', cita);
     if (hay(EstadoPago.en_revision)) return respuesta('revision', cita);
@@ -268,11 +272,15 @@ export class AnticiposCitasService {
   async reembolsar(citaId: number, solicitanteId: string, opciones: { soloMercadoPago?: boolean; nota?: string } = {}) {
     const cita = await this.prisma.cita.findUnique({ where: { id: citaId } });
     if (!cita) throw new NotFoundException('Cita no encontrada');
+    // El anticipo aprobado se devuelve si la cita se canceló, o si no llegó y la regla con que se creó la cita dice que
+    // no lo pierde (citas.noAsistio.pierdeAnticipo apagada).
+    const devolvible =
+      cita.estado === 'cancelada' || (cita.estado === 'no_asistio' && !reglasDeCita((cita as { reglas?: unknown }).reglas).pierdeAnticipoSiNoAsiste);
     const pago = await this.prisma.pago.findFirst({
       where: {
         citaId,
         // Un anticipo retenido es una decisión firme: ya no se reembolsa.
-        OR: [{ estado: EstadoPago.en_revision }, ...(cita.estado === 'cancelada' ? [{ estado: EstadoPago.aprobado, retenidoEn: null }] : [])],
+        OR: [{ estado: EstadoPago.en_revision }, ...(devolvible ? [{ estado: EstadoPago.aprobado, retenidoEn: null }] : [])],
       },
       orderBy: { id: 'desc' },
     });
@@ -336,12 +344,14 @@ export class AnticiposCitasService {
    * para el personal. En los dos casos se avisa a quien maneja la caja (EVENTO_ANTICIPO_POR_DEVOLVER).
    */
   @OnEvent(EVENTO_ANTICIPO_REEMBOLSABLE)
-  async alCancelarConReembolso(payload: { citaId: number; solicitanteId: string }): Promise<void> {
+  async alCancelarConReembolso(payload: { citaId: number; solicitanteId: string; noAsistio?: boolean }): Promise<void> {
     let porDevolver: MotivoAnticipoPorDevolver | null = null;
     try {
       const r = await this.reembolsar(payload.citaId, payload.solicitanteId, {
         soloMercadoPago: true,
-        nota: 'Reembolsado al cancelar la clienta dentro del plazo de la política de anticipos (art. 56 LFPC)',
+        nota: payload.noAsistio
+          ? 'Reembolsado al marcar "no asistió": la regla con que se creó la cita no retiene el anticipo'
+          : 'Reembolsado al cancelar la clienta dentro del plazo de la política de anticipos (art. 56 LFPC)',
       });
       // Pagado en el salón: reembolsar no lo toca (lo entrega el personal).
       if (r.data.estado !== EstadoPago.reembolsado) porDevolver = 'pagado_en_salon';

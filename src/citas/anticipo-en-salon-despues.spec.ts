@@ -193,3 +193,26 @@ describe('Ruta PATCH /api/citas/:id/anticipo-en-salon', () => {
     expect(servicio.pagarAnticipoEnSalon).toHaveBeenCalledWith(7, expect.objectContaining({ id: 'cli-1', rol: 'cliente' }));
   });
 });
+
+describe('Revisión: con el pago en línea de anticipos apagado, la cita ya agendada siempre puede pasar al salón', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../configuracion-sitio/reglas-negocio');
+  beforeEach(() => jest.useFakeTimers({ now: AHORA }));
+  afterEach(() => {
+    jest.useRealTimers();
+    establecerReglasNegocio(null);
+  });
+
+  it('aunque tenga faltas o ya tenga otra cita por pagar en el salón (si no, la barrida la liberaría sin forma de pagar)', async () => {
+    establecerReglasNegocio({ pagos: { mercadoPagoAnticipos: false } });
+    const { servicio, cita } = montar({}, { faltas: 2, otrasEnSalon: 1 });
+    await servicio.pagarAnticipoEnSalon(7, CLIENTA);
+    expect(cita.anticipoEnSalon).toBe(true);
+  });
+
+  it('con el pago en línea activo, las faltas siguen pidiendo pago en línea (como hoy)', async () => {
+    const { servicio, cita } = montar({}, { faltas: 1 });
+    await expect(servicio.pagarAnticipoEnSalon(7, CLIENTA)).rejects.toThrow('el anticipo se paga en línea');
+    expect(cita.anticipoEnSalon).toBe(false);
+  });
+});

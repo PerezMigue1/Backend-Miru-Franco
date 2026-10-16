@@ -2,16 +2,16 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { EstadoPedido } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DEFINICIONES_REGLAS, reglasDePedido, reglasNegocio } from '../../configuracion-sitio/reglas-negocio';
 import { esDiaValido, inicioDiaMexico } from '../../common/utils/zona-mexico';
 import { incrementarStockPorLineas } from '../common/pedido-inventario.util';
-import { METODO_PAGO_EN_SALON, METODO_PAGO_MERCADOPAGO, VIGENCIA_PEDIDO_EN_LINEA_MS } from './flujo-pedido';
+import { METODO_PAGO_EN_SALON, METODO_PAGO_MERCADOPAGO } from './flujo-pedido';
 
 const DIA_MS = 24 * 60 * 60 * 1000;
-/** Apartado (pago al recoger) que nadie preparó: se cancela a los 3 días. */
-const DIAS_APARTADO_SIN_PREPARAR = 3;
-/** Listo para recoger: recordatorio al día 3 y cancelación al día 7. */
-const DIAS_RECORDATORIO_RECOGER = 3;
-const DIAS_CANCELAR_NO_RECOGIDO = 7;
+const HORA_MS = 60 * 60 * 1000;
+/** Plazos más cortos que permite el panel: la consulta parte de ellos y cada pedido se revisa con el suyo. */
+const MIN_DIAS_PREPARAR = DEFINICIONES_REGLAS.find((d) => d.ruta === 'tienda.diasPrepararApartado')?.min ?? 1;
+const MIN_HORAS_PAGO_LINEA = DEFINICIONES_REGLAS.find((d) => d.ruta === 'tienda.plazoPagoLineaHoras')?.min ?? 1;
 /** Pedidos por consulta: se recorren de 50 en 50 por id hasta terminar cada grupo. */
 const LOTE = 50;
 export const TIPO_RECORDATORIO_RECOGER = 'pedido_recordatorio_recoger';
@@ -51,9 +51,12 @@ export class ApartadosService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  /** APARTADOS_DESDE: 'YYYY-MM-DD' (inicio de ese día en México) o fecha ISO completa. */
+  /**
+   * Inicio de la barrida: la fecha de Configuración del sitio > Reglas (tienda.apartadosDesde) y, si no hay,
+   * APARTADOS_DESDE (respaldo). 'YYYY-MM-DD' (inicio de ese día en México) o fecha ISO completa.
+   */
   private desde(): Date | null {
-    const valor = (process.env.APARTADOS_DESDE ?? '').trim();
+    const valor = (reglasNegocio().tienda.apartadosDesde || process.env.APARTADOS_DESDE || '').trim();
     if (!valor) return null;
     if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) return esDiaValido(valor) ? inicioDiaMexico(valor) : null;
     const fecha = new Date(valor);
@@ -79,21 +82,25 @@ export class ApartadosService {
     const cancelados: number[] = [];
     const recordatorios: number[] = [];
     const antesDe = (ms: number) => ({ gte: desde, lte: new Date(ahora.getTime() - ms) });
+    // Cada pedido vence con las reglas que se guardaron al crearlo (reglasDePedido; los anteriores, con las de hoy).
+    // La consulta usa el plazo más corto posible y cada pedido se revisa contra el suyo.
+    const vencido = (creadoEn: Date, plazoMs: number) => ahora.getTime() - new Date(creadoEn).getTime() >= plazoMs;
 
     const apartados = porLotes((idDespuesDe) =>
       this.prisma.pedido.findMany({
         where: {
           metodoPago: METODO_PAGO_EN_SALON,
           estado: EstadoPedido.pendiente_pago,
-          creadoEn: antesDe(DIAS_APARTADO_SIN_PREPARAR * DIA_MS),
+          creadoEn: antesDe(MIN_DIAS_PREPARAR * DIA_MS),
           ...despuesDe(idDespuesDe),
         },
-        select: { id: true, usuarioId: true },
+        select: { id: true, usuarioId: true, creadoEn: true, reglas: true },
         orderBy: { id: 'asc' },
         take: LOTE,
       }),
     );
     for await (const p of apartados) {
+      if (!vencido(p.creadoEn, reglasDePedido(p.reglas).diasPrepararApartado * DIA_MS)) continue;
       await this.aislado(p.id, async () => {
         if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'apartado_sin_preparar')) cancelados.push(p.id);
       });
@@ -104,15 +111,16 @@ export class ApartadosService {
         where: {
           metodoPago: METODO_PAGO_MERCADOPAGO,
           estado: EstadoPedido.pendiente_pago,
-          creadoEn: antesDe(VIGENCIA_PEDIDO_EN_LINEA_MS),
+          creadoEn: antesDe(MIN_HORAS_PAGO_LINEA * HORA_MS),
           ...despuesDe(idDespuesDe),
         },
-        select: { id: true, usuarioId: true },
+        select: { id: true, usuarioId: true, creadoEn: true, reglas: true },
         orderBy: { id: 'asc' },
         take: LOTE,
       }),
     );
     for await (const p of enLinea) {
+      if (!vencido(p.creadoEn, reglasDePedido(p.reglas).plazoPagoLineaHoras * HORA_MS)) continue;
       await this.aislado(p.id, async () => {
         if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.pendiente_pago, 'pago_en_linea_vencido')) cancelados.push(p.id);
       });
@@ -130,6 +138,7 @@ export class ApartadosService {
           id: true,
           usuarioId: true,
           creadoEn: true,
+          reglas: true,
           historialEstado: {
             where: { estadoNuevo: EstadoPedido.listo_recoger },
             orderBy: { creadoEn: 'desc' },
@@ -145,9 +154,10 @@ export class ApartadosService {
       await this.aislado(p.id, async () => {
         const listoDesde = p.historialEstado[0]?.creadoEn ?? p.creadoEn;
         const dias = (ahora.getTime() - new Date(listoDesde).getTime()) / DIA_MS;
-        if (dias >= DIAS_CANCELAR_NO_RECOGIDO) {
+        const reglas = reglasDePedido(p.reglas);
+        if (dias >= reglas.diasCancelarNoRecogido) {
           if (await this.cancelar(p.id, p.usuarioId, EstadoPedido.listo_recoger, 'no_recogido')) cancelados.push(p.id);
-        } else if (dias >= DIAS_RECORDATORIO_RECOGER) {
+        } else if (dias >= reglas.diaRecordatorioRecoger) {
           const yaAvisado = await this.prisma.notificacion.findFirst({
             where: { entidadTipo: 'pedido', entidadId: String(p.id), tipo: TIPO_RECORDATORIO_RECOGER },
             select: { id: true },

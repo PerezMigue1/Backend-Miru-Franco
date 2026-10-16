@@ -108,3 +108,11 @@ describe('POST /devoluciones con tipo y causa', () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe('Cambios con los días guardados en el pedido', () => {
+  it('con 10 días guardados, un cambio al día 8 sí procede; con los de hoy (7), no', () => {
+    const p = entregado('2026-10-12');
+    expect(validarPoliticaDevolucion({ tipo: 'cambio', causa: 'sellado_sin_abrir', sellado: true, pedidoItemId: 3, pedido: { ...p, diasCambioProducto: 10 } }, AHORA)).toBeNull();
+    expect(validarPoliticaDevolucion({ tipo: 'cambio', causa: 'sellado_sin_abrir', sellado: true, pedidoItemId: 3, pedido: p }, AHORA)).toMatch(/7 días/);
+  });
+});

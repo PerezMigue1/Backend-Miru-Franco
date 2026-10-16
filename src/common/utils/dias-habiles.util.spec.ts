@@ -217,3 +217,20 @@ describe('diasHabilesEntre: días hábiles después del día de "desde" hasta el
     expect(() => diasHabilesEntre(mx('2026-10-14'), new Date('xx'))).toThrow(RangeError);
   });
 });
+
+describe('Revisión: plazos de ley sin los días inhábiles del salón', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../../configuracion-sitio/reglas-negocio');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { SOLO_DIAS_DE_LEY } = require('./dias-habiles.util');
+  afterEach(() => establecerReglasNegocio(null));
+
+  it('ARCO (SOLO_DIAS_DE_LEY) no se alarga con días inhábiles del salón; sin lista, sí cuentan los vigentes', () => {
+    const desde = new Date('2026-11-09T12:00:00-06:00');
+    const deLey = sumarDiasHabiles(desde, 20, SOLO_DIAS_DE_LEY);
+    establecerReglasNegocio({ diasInhabiles: [{ fecha: '2026-11-10', motivo: '' }, { fecha: '2026-11-11', motivo: '' }] });
+    expect(sumarDiasHabiles(desde, 20, SOLO_DIAS_DE_LEY)).toEqual(deLey);
+    expect(sumarDiasHabiles(desde, 20).getTime()).toBeGreaterThan(deLey.getTime());
+    expect(diasHabilesEntre(desde, deLey, ['2026-11-10'])).toBe(19);
+  });
+});

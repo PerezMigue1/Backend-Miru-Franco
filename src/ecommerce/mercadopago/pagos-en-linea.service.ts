@@ -12,9 +12,10 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPago, EstadoPedido } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { reglasDePedido } from '../../configuracion-sitio/reglas-negocio';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { puedeVerPedidosDeOtros } from '../common/permisos-pedido.util';
-import { METODO_PAGO_MERCADOPAGO, VIGENCIA_PEDIDO_EN_LINEA_MS } from '../pedidos/flujo-pedido';
+import { METODO_PAGO_MERCADOPAGO } from '../pedidos/flujo-pedido';
 import { MercadoPagoClient, PagoMercadoPago } from './mercadopago.client';
 import { AnticiposCitasService } from '../../citas/anticipos/anticipos-citas.service';
 import { RUTA_RETORNO_APP_PEDIDO } from '../../citas/anticipos/anticipos.util';
@@ -66,7 +67,7 @@ export class PagosEnLineaService {
     if (pedido.estado !== EstadoPedido.pendiente_pago) {
       throw new ConflictException('Este pedido ya no está pendiente de pago');
     }
-    const vence = new Date(new Date(pedido.creadoEn).getTime() + VIGENCIA_PEDIDO_EN_LINEA_MS);
+    const vence = new Date(new Date(pedido.creadoEn).getTime() + reglasDePedido(pedido.reglas).plazoPagoLineaHoras * 60 * 60_000);
     if (ahora >= vence) throw new ConflictException('Este pedido venció: vuelve a hacer tu compra');
 
     const items = pedido.items.map((i) => ({

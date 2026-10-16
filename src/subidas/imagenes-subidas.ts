@@ -20,6 +20,16 @@ export const PERMISO_POR_USO: Record<UsoImagen, string> = {
   usuarios: 'usuarios:gestionar',
 };
 
+/** Permisos que además dejan firmar un uso (Operaciones > Equipo en el sitio sube la foto del equipo). */
+export const PERMISOS_EXTRA_POR_USO: Partial<Record<UsoImagen, readonly string[]>> = {
+  equipo: ['equipo:publico'],
+};
+
+/** ¿Estas claves dejan firmar el uso? (admin con '*'). */
+export function puedeFirmarUso(claves: readonly string[], uso: UsoImagen): boolean {
+  return claves.includes('*') || claves.includes(PERMISO_POR_USO[uso]) || (PERMISOS_EXTRA_POR_USO[uso] ?? []).some((c) => claves.includes(c));
+}
+
 /** Usos donde se puede marcar la imagen como ilustrativa (va a <carpeta>/ilustrativas/ y nunca pasa por trabajo real). */
 export const USOS_CON_ILUSTRATIVA: readonly UsoImagen[] = ['galeria', 'servicios', 'sitio'];
 

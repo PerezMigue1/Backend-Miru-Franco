@@ -316,3 +316,38 @@ describe('/api/envios: solo admin crea, edita o borra', () => {
     expect((await pedir('POST', '', 'admin-1')).status).toBe(201);
   });
 });
+
+describe('Pedidos con las reglas de negocio', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../../configuracion-sitio/reglas-negocio');
+  afterEach(() => establecerReglasNegocio(null));
+
+  it('el pedido guarda las reglas con que se creó (plazos de pago, apartado, cambios y revocación)', async () => {
+    establecerReglasNegocio({ tienda: { plazoPagoLineaHoras: 48 } });
+    const { servicio, tx } = montar({ estado: EstadoPedido.borrador });
+    await servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pendiente_pago, metodoPago: 'mercado_pago' } as any);
+    expect(tx.pedido.create.mock.calls[0][0].data.reglas).toMatchObject({ plazoPagoLineaHoras: 48, diasHabilesRevocacion: 5, diasCambioProducto: 7 });
+  });
+
+  it('con el pago en línea de la tienda apagado, la clienta no puede elegirlo (400 en español, sin claves internas)', async () => {
+    establecerReglasNegocio({ pagos: { mercadoPagoTienda: false } });
+    const { servicio, tx } = montar({ estado: EstadoPedido.borrador });
+    const intento = servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pendiente_pago, metodoPago: 'mercado_pago' } as any);
+    await expect(intento).rejects.toMatchObject({ status: 400 });
+    await expect(intento).rejects.toThrow(/en línea no está disponible/);
+    expect(tx.pedido.create).not.toHaveBeenCalled();
+  });
+
+  it('sin ningún método de pago en el salón activo, no se puede apartar para pagar al recoger', async () => {
+    establecerReglasNegocio({ pagos: { salon: { efectivo: false, tarjeta: false, transferencia: false } } });
+    const { servicio } = montar({ estado: EstadoPedido.borrador });
+    await expect(servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pendiente_pago, metodoPago: 'pago_en_salon' } as any)).rejects.toThrow(/al recoger no está disponible/);
+  });
+
+  it('el error de método de pago ya no muestra las claves internas (mercado_pago o pago_en_salon)', async () => {
+    const { servicio } = montar({ estado: EstadoPedido.borrador });
+    const error = await servicio.crear(CLIENTA, { items: item, estado: EstadoPedido.pendiente_pago, metodoPago: 'efectivo' } as any).catch((e: Error) => e);
+    expect((error as Error).message).not.toMatch(/mercado_pago|pago_en_salon/);
+    expect((error as Error).message).toMatch(/en línea o al recoger/);
+  });
+});

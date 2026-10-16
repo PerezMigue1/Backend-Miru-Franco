@@ -294,7 +294,9 @@ describe('POST /pregunta-seguridad: guarda de verdad la pregunta del usuario aut
       expect(email.sendNotificationEmail).toHaveBeenCalledTimes(1);
       const [destino, asunto, html] = email.sendNotificationEmail.mock.calls[0] as unknown as [string, string, string];
       expect(destino).toBe('clienta@example.com');
-      expect(asunto).toBe('Tu pregunta de seguridad cambió - Miru Franco');
+      // El nombre del salón va como marcador: EmailService lo cambia por el de Configuración del sitio.
+      expect(asunto).toBe('Tu pregunta de seguridad cambió - {{salon}}');
+      expect(html).not.toContain('Miru Franco');
       expect(html).toContain('hora del centro de México');
       expect(html).toMatch(/Si no fuiste tú/);
       expect(html).not.toContain(PREGUNTA);

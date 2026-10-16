@@ -94,3 +94,29 @@ describe('Mensaje del plazo terminado', () => {
     );
   });
 });
+
+describe('Revocación con los días hábiles guardados en el pedido (mínimo de ley 5)', () => {
+  it('con 7 días hábiles guardados, el plazo llega al séptimo día hábil', () => {
+    // vie 13 (1), sáb 14 (2), mar 17 (3), mié 18 (4), jue 19 (5), vie 20 (6), sáb 21 (7)
+    const r = plazoRevocacion(pedido({ diasHabiles: 7 }), ENTREGA);
+    expect(r.revocableHasta).toEqual(new Date('2026-11-21T23:59:59.999-06:00'));
+  });
+
+  it('nunca menos de 5 aunque el pedido diga otra cosa (piso de ley)', () => {
+    expect(plazoRevocacion(pedido({ diasHabiles: 3 }), ENTREGA).revocableHasta).toEqual(VENCE);
+  });
+});
+
+describe('Días inhábiles del salón (Reglas) en el cálculo de días hábiles', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../../configuracion-sitio/reglas-negocio');
+  afterEach(() => establecerReglasNegocio(null));
+  it('un día inhábil guardado en el pedido (mié 18) recorre el vencimiento al viernes 20', () => {
+    expect(plazoRevocacion(pedido({ diasInhabiles: ['2026-11-18'] }), ENTREGA).revocableHasta).toEqual(new Date('2026-11-20T23:59:59.999-06:00'));
+  });
+
+  it('un día inhábil agregado después de crear el pedido no mueve su plazo', () => {
+    establecerReglasNegocio({ diasInhabiles: [{ fecha: '2026-11-18', motivo: 'Inventario' }] });
+    expect(plazoRevocacion(pedido({ diasInhabiles: [] }), ENTREGA).revocableHasta).toEqual(VENCE);
+  });
+});

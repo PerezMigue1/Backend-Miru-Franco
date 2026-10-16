@@ -40,6 +40,10 @@ export interface DatosPlazoRevocacion {
   enviadoEn?: Date | null;
   /** Ya tiene una revocación pendiente o aprobada. */
   yaRevocado: boolean;
+  /** Días hábiles guardados en el pedido al crearlo (reglasDePedido); sin dato, los de ley. Nunca menos de 5. */
+  diasHabiles?: number;
+  /** Días inhábiles del salón guardados en el pedido; sin dato, solo los de ley. */
+  diasInhabiles?: string[];
 }
 
 /**
@@ -49,7 +53,7 @@ export interface DatosPlazoRevocacion {
 export function plazoRevocacion(p: DatosPlazoRevocacion, ahora: Date = new Date()): { revocableHasta: Date | null; puedeRevocar: boolean } {
   const inicio = (p.estado === EstadoPedido.enviado ? p.enviadoEn : p.entregadoEn) ?? p.pagadoEn;
   if (!ESTADOS_REVOCABLES.includes(p.estado as EstadoPedido) || !inicio) return { revocableHasta: null, puedeRevocar: false };
-  const revocableHasta = sumarDiasHabiles(inicio, DIAS_HABILES_REVOCACION);
+  const revocableHasta = sumarDiasHabiles(inicio, Math.max(DIAS_HABILES_REVOCACION, p.diasHabiles ?? DIAS_HABILES_REVOCACION), p.diasInhabiles ?? []);
   return { revocableHasta, puedeRevocar: !p.yaRevocado && ahora.getTime() <= revocableHasta.getTime() };
 }
 

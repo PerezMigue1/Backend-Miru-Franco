@@ -8,6 +8,8 @@ import { OutboxService } from './outbox.service';
 import { ResolverDestinatariosService } from './resolver-destinatarios.service';
 import { DespachadorService } from './despachador.service';
 import { esPagoEnSalon } from '../ecommerce/pedidos/flujo-pedido';
+import { reglasDeCita, reglasDePedido, reglasNegocio } from '../configuracion-sitio/reglas-negocio';
+import { plantillaTexto, textoSitio, variablesDeTexto } from '../textos-sitio/textos-sitio.util';
 import {
   EVENTO_ARCO_RESPONDIDA,
   EVENTO_ARCO_SOLICITUD_CREADA,
@@ -52,7 +54,7 @@ export interface VentaLocalPagadaEvent {
 }
 
 /** Común a los 4 eventos de pedidos online: un solo destinatario (el dueño del
- *  pedido), sin cascada a otros roles — a diferencia de citas, aquí no hay un
+ *  pedido), sin cascada a otros roles: a diferencia de citas, aquí no hay un
  *  segundo actor (especialista) que notificar. */
 export interface PagoRevisionEvent {
   /** Pago de un pedido o del anticipo de una cita (uno de los dos). */
@@ -126,10 +128,30 @@ const formatoMonto = (monto: number) =>
   `$${monto.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** Tipo usado tanto al programar los 2 recordatorios en `onCitaCreada` como al
- *  identificarlos para descartarlos en la cascada de `onCitaCancelada` —
+ *  identificarlos para descartarlos en la cascada de `onCitaCancelada`:
  *  cambiarlo en un solo lado rompe esa cascada silenciosamente. */
 const TIPO_RECORDATORIO_CITA = 'cita_recordatorio';
-const RECORDATORIOS_ANTES_MS = [24 * 60 * 60_000, 60 * 60_000]; // 24h, 1h
+/** Variables de reglas que guarda cada cita (reglasDeCita): en sus avisos ganan a las reglas de hoy. */
+const VARIABLES_DE_CITA: ReadonlySet<string> = new Set([
+  'plazoAnticipoHoras',
+  'minutosAntesPagoSalon',
+  'horasAvisoCancelarReagendar',
+  'diasHabilesExcepcionAnticipo',
+  'diasHabilesCancelarConReembolso',
+]);
+/** Variables de reglas que guarda cada pedido (variablesDePedido): en sus avisos ganan a las reglas de hoy. */
+const VARIABLES_DE_PEDIDO: ReadonlySet<string> = new Set([
+  'plazoPagoLineaHoras',
+  'diasPrepararApartado',
+  'diaRecordatorioRecoger',
+  'diasCancelarNoRecogido',
+  'diasRestantesRecoger',
+  'diasResguardo',
+  'diasCambioProducto',
+  'diasHabilesRevocacion',
+]);
+/** Horas antes de la cita de Configuración del sitio > Reglas (hoy 24 y 1). */
+const recordatoriosAntesMs = () => reglasNegocio().citas.recordatoriosHorasAntes.map((h) => h * 60 * 60_000);
 
 @Injectable()
 export class NotificacionesListener {
@@ -157,14 +179,17 @@ export class NotificacionesListener {
     const envioIds: string[] = [];
 
     const clienteId = payload.clienteId;
+    const contextoCita = { servicio: payload.servicioNombre, fecha, cita: payload.citaId };
+    const mensajeCreada = await this.textoDeCita('avisos.citaCreada.mensaje', payload.citaId, contextoCita);
+    const mensajeRecordatorio = await this.textoDeCita('avisos.citaRecordatorio.mensaje', payload.citaId, contextoCita);
     await this.enOutbox(async (tx) => {
       if (clienteId) {
         const canalesCliente = await this.resolver.resolverCanales(clienteId, 'cita_creada', ['in_app']);
         const { envios: enviosCliente } = await this.outbox.encolar(tx, {
           usuarioId: clienteId,
           tipo: 'cita_creada',
-          titulo: 'Cita agendada',
-          mensaje: `Tu cita de ${payload.servicioNombre} quedó agendada para el ${fecha}`,
+          titulo: textoSitio('avisos.citaCreada.titulo'),
+          mensaje: mensajeCreada,
           entidadTipo: 'cita',
           entidadId: String(payload.citaId),
           urlAccion: rutaMiCita(payload.citaId),
@@ -179,8 +204,8 @@ export class NotificacionesListener {
       const { envios: enviosEspecialista } = await this.outbox.encolar(tx, {
         usuarioId: payload.especialistaId,
         tipo: 'cita_asignada',
-        titulo: 'Nueva cita asignada',
-        mensaje: `Se te asignó una cita de ${payload.servicioNombre} para el ${fecha}`,
+        titulo: textoSitio('avisos.citaAsignada.titulo'),
+        mensaje: textoSitio('avisos.citaAsignada.mensaje', { servicio: payload.servicioNombre, fecha }),
         entidadTipo: 'cita',
         entidadId: String(payload.citaId),
         urlAccion: RUTA_GESTION_CITAS,
@@ -188,13 +213,13 @@ export class NotificacionesListener {
       });
       envioIds.push(...enviosEspecialista.map((e) => e.id));
 
-      // Recordatorios (24h y 1h antes): NO se agregan a `envioIds` — deben
+      // Recordatorios (horas antes de la regla): NO se agregan a `envioIds`: deben
       // quedar 'pendiente' hasta que el barrido (`BarridoService`, cada 5 min)
       // los recoja cuando venza su `programadoPara`. Si se pasaran a
       // `drenarInmediatas` de abajo, `drenar()` los despacharía ahora mismo
       // (no filtra por `programadoPara`), rompiendo el propósito de programarlos.
       const ahora = Date.now();
-      for (const antesMs of clienteId ? RECORDATORIOS_ANTES_MS : []) {
+      for (const antesMs of clienteId ? recordatoriosAntesMs() : []) {
         const programadoPara = new Date(payload.fechaHoraInicio.getTime() - antesMs);
         if (programadoPara.getTime() <= ahora) continue; // la cita se creó con menos antelación que este recordatorio
 
@@ -206,8 +231,8 @@ export class NotificacionesListener {
         await this.outbox.encolar(tx, {
           usuarioId: clienteId as string,
           tipo: TIPO_RECORDATORIO_CITA,
-          titulo: 'Recordatorio de cita',
-          mensaje: `Tu cita de ${payload.servicioNombre} es el ${fecha}`,
+          titulo: textoSitio('avisos.citaRecordatorio.titulo'),
+          mensaje: mensajeRecordatorio,
           entidadTipo: 'cita',
           entidadId: String(payload.citaId),
           urlAccion: rutaMiCita(payload.citaId),
@@ -231,8 +256,8 @@ export class NotificacionesListener {
         const { envios: enviosCliente } = await this.outbox.encolar(tx, {
           usuarioId: clienteId,
           tipo: 'cita_cancelada',
-          titulo: 'Cita cancelada',
-          mensaje: `Tu cita fue cancelada. Motivo: ${payload.motivo}`,
+          titulo: textoSitio('avisos.citaCancelada.titulo'),
+          mensaje: textoSitio('avisos.citaCancelada.mensajeClienta', { motivo: payload.motivo }),
           entidadTipo: 'cita',
           entidadId: String(payload.citaId),
           urlAccion: rutaMiCita(payload.citaId),
@@ -249,8 +274,8 @@ export class NotificacionesListener {
       const { envios: enviosEspecialista } = await this.outbox.encolar(tx, {
         usuarioId: payload.especialistaId,
         tipo: 'cita_cancelada',
-        titulo: 'Cita cancelada',
-        mensaje: `La cita que tenías asignada fue cancelada. Motivo: ${payload.motivo}`,
+        titulo: textoSitio('avisos.citaCancelada.titulo'),
+        mensaje: textoSitio('avisos.citaCancelada.mensajeEspecialista', { motivo: payload.motivo }),
         entidadTipo: 'cita',
         entidadId: String(payload.citaId),
         urlAccion: RUTA_GESTION_CITAS,
@@ -281,10 +306,13 @@ export class NotificacionesListener {
     const fecha = this.formatearFecha(payload.fechaHoraInicioNueva);
     const envioIds: string[] = [];
     const clienteId = payload.clienteId;
+    const contextoCita = { servicio: payload.servicioNombre, fecha, cita: payload.citaId };
+    const mensajeReprogramada = await this.textoDeCita('avisos.citaReprogramada.mensajeClienta', payload.citaId, contextoCita);
+    const mensajeRecordatorio = await this.textoDeCita('avisos.citaRecordatorio.mensaje', payload.citaId, contextoCita);
 
     await this.enOutbox(async (tx) => {
       // (a) Cancelar primero los recordatorios viejos (apuntan a la hora
-      // anterior) — debe ir ANTES de programar los nuevos de (c), o este mismo
+      // anterior): debe ir ANTES de programar los nuevos de (c), o este mismo
       // updateMany también los descartaría a ellos.
       await tx.notificacionEnvio.updateMany({
         where: {
@@ -298,15 +326,15 @@ export class NotificacionesListener {
         data: { estado: 'descartada' },
       });
 
-      // (b) Notificación inmediata a cliente + especialista — sí entran a
+      // (b) Notificación inmediata a cliente + especialista: sí entran a
       // envioIds → drenarInmediatas, deben llegar ya.
       if (clienteId) {
         const canalesCliente = await this.resolver.resolverCanales(clienteId, 'cita_reprogramada', ['in_app']);
         const { envios: enviosCliente } = await this.outbox.encolar(tx, {
           usuarioId: clienteId,
           tipo: 'cita_reprogramada',
-          titulo: 'Cita reprogramada',
-          mensaje: `Tu cita de ${payload.servicioNombre} fue reprogramada para el ${fecha}`,
+          titulo: textoSitio('avisos.citaReprogramada.titulo'),
+          mensaje: mensajeReprogramada,
           entidadTipo: 'cita',
           entidadId: String(payload.citaId),
           urlAccion: rutaMiCita(payload.citaId),
@@ -323,8 +351,8 @@ export class NotificacionesListener {
       const { envios: enviosEspecialista } = await this.outbox.encolar(tx, {
         usuarioId: payload.especialistaId,
         tipo: 'cita_reprogramada',
-        titulo: 'Cita reprogramada',
-        mensaje: `La cita de ${payload.servicioNombre} que tenías asignada fue reprogramada para el ${fecha}`,
+        titulo: textoSitio('avisos.citaReprogramada.titulo'),
+        mensaje: textoSitio('avisos.citaReprogramada.mensajeEspecialista', { servicio: payload.servicioNombre, fecha }),
         entidadTipo: 'cita',
         entidadId: String(payload.citaId),
         urlAccion: RUTA_GESTION_CITAS,
@@ -332,10 +360,10 @@ export class NotificacionesListener {
       });
       envioIds.push(...enviosEspecialista.map((e) => e.id));
 
-      // (c) Recordatorios nuevos con la fecha nueva — mismo guard de
+      // (c) Recordatorios nuevos con la fecha nueva: mismo guard de
       // antelación que onCitaCreada, y mismo cuidado: NO entran a envioIds.
       const ahora = Date.now();
-      for (const antesMs of clienteId ? RECORDATORIOS_ANTES_MS : []) {
+      for (const antesMs of clienteId ? recordatoriosAntesMs() : []) {
         const programadoPara = new Date(payload.fechaHoraInicioNueva.getTime() - antesMs);
         if (programadoPara.getTime() <= ahora) continue;
 
@@ -347,8 +375,8 @@ export class NotificacionesListener {
         await this.outbox.encolar(tx, {
           usuarioId: clienteId as string,
           tipo: TIPO_RECORDATORIO_CITA,
-          titulo: 'Recordatorio de cita',
-          mensaje: `Tu cita de ${payload.servicioNombre} es el ${fecha}`,
+          titulo: textoSitio('avisos.citaRecordatorio.titulo'),
+          mensaje: mensajeRecordatorio,
           entidadTipo: 'cita',
           entidadId: String(payload.citaId),
           urlAccion: rutaMiCita(payload.citaId),
@@ -381,8 +409,8 @@ export class NotificacionesListener {
         const { envios } = await this.outbox.encolar(tx, {
           usuarioId: payload.clienteId,
           tipo: 'venta',
-          titulo: 'Tu ticket de compra',
-          mensaje: `Folio ${payload.folio} · Total ${totalFmt} · ${fecha}`,
+          titulo: textoSitio('avisos.venta.titulo'),
+          mensaje: textoSitio('avisos.venta.mensaje', { folio: payload.folio, monto: totalFmt, fecha }),
           metadata: { ventaId: payload.ventaId, folio: payload.folio, total: payload.total },
           entidadTipo: 'venta_local',
           entidadId: String(payload.ventaId),
@@ -403,27 +431,28 @@ export class NotificacionesListener {
   /** La barrida canceló un apartado o un pedido en línea sin pagar (ApartadosService). */
   @OnEvent('pedido.vencido')
   async onPedidoVencido(payload: PedidoEvent & { motivo: 'apartado_sin_preparar' | 'no_recogido' | 'pago_en_linea_vencido' }): Promise<void> {
-    const mensajes = {
-      apartado_sin_preparar: `Tu apartado #${payload.pedidoId} se canceló porque no se preparó en 3 días. Puedes volver a pedirlo en la tienda.`,
-      no_recogido: `Cancelamos tu apartado #${payload.pedidoId} porque no se recogió en 7 días.`,
-      pago_en_linea_vencido: `Tu pedido #${payload.pedidoId} se canceló porque el pago no se completó en 24 horas.`,
+    // Los plazos son los que se guardaron en el pedido al crearlo (no los de hoy).
+    const claves = {
+      apartado_sin_preparar: 'avisos.pedidoVencido.sinPreparar',
+      no_recogido: 'avisos.pedidoVencido.noRecogido',
+      pago_en_linea_vencido: 'avisos.pedidoVencido.pagoVencido',
     };
     await this.notificarPedido(
       payload,
-      { tipo: 'pedido_cancelado', titulo: 'Pedido cancelado', mensaje: mensajes[payload.motivo] },
+      { tipo: 'pedido_cancelado', titulo: textoSitio('avisos.pedidoCancelado.titulo'), mensaje: await this.textoDePedido(claves[payload.motivo], payload.pedidoId) },
       ['in_app', 'email'],
     );
   }
 
-  /** Listo para recoger desde hace 3 días: recordatorio (la barrida no lo repite). */
+  /** Listo para recoger desde hace unos días (regla del pedido): recordatorio (la barrida no lo repite). */
   @OnEvent('pedido.recordatorio_recoger')
   async onPedidoRecordatorioRecoger(payload: PedidoEvent): Promise<void> {
     await this.notificarPedido(
       payload,
       {
         tipo: 'pedido_recordatorio_recoger',
-        titulo: 'Tu pedido te espera en el salón',
-        mensaje: `Recuerda pasar por tu pedido #${payload.pedidoId}. Si no lo recoges en 4 días más, se cancelará.`,
+        titulo: textoSitio('avisos.recordatorioRecoger.titulo'),
+        mensaje: await this.textoDePedido('avisos.recordatorioRecoger.mensaje', payload.pedidoId),
       },
       ['in_app', 'email'],
     );
@@ -433,12 +462,14 @@ export class NotificacionesListener {
   @OnEvent('pago.requiere_revision')
   async onPagoRequiereRevision(payload: PagoRevisionEvent): Promise<void> {
     if (payload.citaId) return this.avisarAnticipoEnRevision(payload);
-    const mensaje =
+    const mensaje = textoSitio(
       payload.motivo === 'monto_distinto'
-        ? `Pago con un monto distinto al del pedido #${payload.pedidoId}: revisar devolución`
+        ? 'avisos.pagoRevision.montoDistinto'
         : payload.estadoPedido === 'cancelado'
-          ? `Pago recibido de un pedido cancelado #${payload.pedidoId}: revisar devolución`
-          : `Pago recibido de un pedido que ya estaba pagado #${payload.pedidoId}: revisar devolución`;
+          ? 'avisos.pagoRevision.pedidoCancelado'
+          : 'avisos.pagoRevision.yaPagado',
+      { pedido: payload.pedidoId },
+    );
     let envioIds: string[] = [];
     try {
       // Quien gestiona reembolsos (permiso del rol) y los admin, sin repetir.
@@ -449,7 +480,7 @@ export class NotificacionesListener {
           const { envios } = await this.outbox.encolar(tx, {
             usuarioId,
             tipo: 'pago_revision',
-            titulo: 'Pago por revisar',
+            titulo: textoSitio('avisos.pagoRevision.titulo'),
             mensaje,
             metadata: { referencia: payload.referencia, motivo: payload.motivo },
             entidadTipo: 'pedido',
@@ -472,12 +503,14 @@ export class NotificacionesListener {
    * aviso a quien maneja la caja (estilista y admin) para reembolsar o retener desde Gestión de citas.
    */
   private async avisarAnticipoEnRevision(payload: PagoRevisionEvent): Promise<void> {
-    const mensaje =
+    const mensaje = textoSitio(
       payload.motivo === 'cita_cancelada_por_clienta'
-        ? `La clienta canceló la cita #${payload.citaId} con anticipo pagado: decidir si se reembolsa o se retiene`
+        ? 'avisos.anticipoRevision.canceladaPorClienta'
         : payload.motivo === 'monto_distinto'
-          ? `Anticipo con un monto distinto en la cita #${payload.citaId}: revisar devolución`
-          : `Anticipo pagado de una cita que ya se liberó o canceló (#${payload.citaId}): revisar devolución`;
+          ? 'avisos.anticipoRevision.montoDistinto'
+          : 'avisos.anticipoRevision.citaLiberada',
+      { cita: payload.citaId },
+    );
     let envioIds: string[] = [];
     try {
       const destinatarios = await this.resolver.resolverUsuariosPorPermiso('caja:escritura');
@@ -487,7 +520,7 @@ export class NotificacionesListener {
           const { envios } = await this.outbox.encolar(tx, {
             usuarioId,
             tipo: 'pago_revision',
-            titulo: 'Anticipo por revisar',
+            titulo: textoSitio('avisos.anticipoRevision.titulo'),
             mensaje,
             metadata: { referencia: payload.referencia, motivo: payload.motivo },
             entidadTipo: 'cita',
@@ -512,10 +545,11 @@ export class NotificacionesListener {
   @OnEvent('pedido.cancelado_pagado')
   async onPedidoCanceladoPagado(payload: PedidoCanceladoPagadoEvent): Promise<void> {
     const monto = `$${payload.monto.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const mensaje =
-      payload.reembolso === 'reembolsado'
-        ? `${payload.clienta} canceló el pedido #${payload.pedidoId} ya pagado (${monto}): el reembolso en Mercado Pago ya salió`
-        : `${payload.clienta} canceló el pedido #${payload.pedidoId} ya pagado (${monto}): el reembolso quedó en revisión, reembolsar a mano`;
+    const mensaje = textoSitio(payload.reembolso === 'reembolsado' ? 'avisos.canceladoPagado.reembolsado' : 'avisos.canceladoPagado.revision', {
+      clienta: payload.clienta,
+      pedido: payload.pedidoId,
+      monto,
+    });
     let envioIds: string[] = [];
     try {
       const destinatarios = await this.resolver.resolverUsuariosPorPermiso('caja:escritura');
@@ -525,7 +559,7 @@ export class NotificacionesListener {
           const { envios } = await this.outbox.encolar(tx, {
             usuarioId,
             tipo: 'pedido_cancelado_pagado',
-            titulo: payload.reembolso === 'reembolsado' ? 'Pedido pagado cancelado' : 'Reembolso por revisar',
+            titulo: textoSitio(payload.reembolso === 'reembolsado' ? 'avisos.canceladoPagado.tituloReembolsado' : 'avisos.canceladoPagado.tituloRevision'),
             mensaje,
             metadata: { monto: payload.monto, reembolso: payload.reembolso },
             entidadTipo: 'pedido',
@@ -553,8 +587,8 @@ export class NotificacionesListener {
   async onRevocacionPorRecibir(payload: RevocacionPorRecibirEvent): Promise<void> {
     await this.avisarPorPermiso(PERMISO_GESTIONAR_DEVOLUCIONES, {
       tipo: 'revocacion_por_recibir',
-      titulo: 'Revocación por recibir',
-      mensaje: `La clienta revocó la compra del pedido #${payload.pedidoId}: recibe el producto en el salón y reembolsa.`,
+      titulo: textoSitio('avisos.revocacion.titulo'),
+      mensaje: textoSitio('avisos.revocacion.mensaje', { pedido: payload.pedidoId, monto: formatoMonto(payload.monto) }),
       metadata: { devolucionId: payload.devolucionId, monto: payload.monto },
       entidadTipo: 'pedido',
       entidadId: String(payload.pedidoId),
@@ -568,13 +602,12 @@ export class NotificacionesListener {
    */
   @OnEvent(EVENTO_ANTICIPO_POR_DEVOLVER)
   async onAnticipoPorDevolver(payload: AnticipoPorDevolverEvent): Promise<void> {
-    const mensaje =
-      payload.motivo === 'pagado_en_salon'
-        ? `La clienta canceló a tiempo la cita #${payload.citaId}: devuélvele el anticipo que pagó en el salón.`
-        : `La clienta canceló a tiempo la cita #${payload.citaId} y el reembolso automático del anticipo no salió: reembólsalo a mano.`;
+    const mensaje = textoSitio(payload.motivo === 'pagado_en_salon' ? 'avisos.anticipoPorDevolver.salon' : 'avisos.anticipoPorDevolver.fallo', {
+      cita: payload.citaId,
+    });
     await this.avisarPorPermiso(PERMISO_CAJA, {
       tipo: 'anticipo_por_devolver',
-      titulo: 'Anticipo por devolver',
+      titulo: textoSitio('avisos.anticipoPorDevolver.titulo'),
       mensaje,
       metadata: { motivo: payload.motivo },
       entidadTipo: 'cita',
@@ -656,8 +689,8 @@ export class NotificacionesListener {
       PERMISO_CITAS,
       {
         tipo: 'cita_nueva',
-        titulo: 'Cita nueva',
-        mensaje: `Nueva cita de ${payload.servicioNombre} para el ${this.formatearFecha(payload.fechaHoraInicio)}`,
+        titulo: textoSitio('avisos.citaNueva.titulo'),
+        mensaje: textoSitio('avisos.citaNueva.mensaje', { servicio: payload.servicioNombre, fecha: this.formatearFecha(payload.fechaHoraInicio) }),
         entidadTipo: 'cita',
         entidadId: String(payload.citaId),
         urlAccion: RUTA_GESTION_CITAS,
@@ -673,8 +706,8 @@ export class NotificacionesListener {
       PERMISO_CAJA,
       {
         tipo: 'anticipo_pagado',
-        titulo: 'Anticipo pagado',
-        mensaje: `Se recibió el anticipo de la cita #${payload.citaId}: quedó confirmada.`,
+        titulo: textoSitio('avisos.anticipoPagadoPersonal.titulo'),
+        mensaje: textoSitio('avisos.anticipoPagadoPersonal.mensaje', { cita: payload.citaId }),
         entidadTipo: 'cita',
         entidadId: String(payload.citaId),
         urlAccion: RUTA_GESTION_CITAS,
@@ -690,8 +723,8 @@ export class NotificacionesListener {
       PERMISO_PEDIDOS,
       {
         tipo: 'pedido_nuevo',
-        titulo: 'Pedido nuevo',
-        mensaje: `El pedido #${payload.pedidoId} ya está pagado: prepáralo para recoger en el salón.`,
+        titulo: textoSitio('avisos.pedidoNuevo.titulo'),
+        mensaje: textoSitio('avisos.pedidoNuevo.pagado', { pedido: payload.pedidoId }),
         entidadTipo: 'pedido',
         entidadId: String(payload.pedidoId),
         urlAccion: RUTA_PEDIDOS_ONLINE,
@@ -721,8 +754,8 @@ export class NotificacionesListener {
       PERMISO_PEDIDOS,
       {
         tipo: 'pedido_nuevo',
-        titulo: 'Pedido nuevo',
-        mensaje: `Nuevo apartado #${payload.pedidoId}: se paga al recogerlo en el salón.`,
+        titulo: textoSitio('avisos.pedidoNuevo.titulo'),
+        mensaje: textoSitio('avisos.pedidoNuevo.apartado', { pedido: payload.pedidoId }),
         entidadTipo: 'pedido',
         entidadId: String(payload.pedidoId),
         urlAccion: RUTA_PEDIDOS_ONLINE,
@@ -740,10 +773,8 @@ export class NotificacionesListener {
       payload.usuarioId,
       {
         tipo: 'reembolso',
-        titulo: hecho ? 'Reembolso realizado' : 'Reembolso en proceso',
-        mensaje: hecho
-          ? `Te reembolsamos ${monto} del pedido #${payload.pedidoId}. Puede tardar unos días en verse en tu cuenta.`
-          : `Estamos procesando el reembolso de ${monto} del pedido #${payload.pedidoId}.`,
+        titulo: textoSitio(hecho ? 'avisos.reembolso.tituloHecho' : 'avisos.reembolso.tituloProceso'),
+        mensaje: textoSitio(hecho ? 'avisos.reembolso.cancelacionHecho' : 'avisos.reembolso.cancelacionProceso', { monto, pedido: payload.pedidoId }),
         entidadTipo: 'pedido',
         entidadId: String(payload.pedidoId),
         urlAccion: rutaMiPedido(payload.pedidoId),
@@ -763,10 +794,10 @@ export class NotificacionesListener {
       payload.usuarioId,
       {
         tipo: 'reembolso',
-        titulo: 'Reembolso realizado',
+        titulo: textoSitio('avisos.reembolso.tituloHecho'),
         mensaje: esPedido
-          ? `Te reembolsamos ${monto} del pedido #${payload.entidadId}.`
-          : `Te reembolsamos ${monto} del anticipo de tu cita #${payload.entidadId}.`,
+          ? textoSitio('avisos.reembolso.pedido', { monto, pedido: payload.entidadId })
+          : textoSitio('avisos.reembolso.anticipo', { monto, cita: payload.entidadId }),
         entidadTipo: payload.entidadTipo,
         entidadId: String(payload.entidadId),
         urlAccion: esPedido ? rutaMiPedido(payload.entidadId) : rutaMiCita(payload.entidadId),
@@ -781,8 +812,8 @@ export class NotificacionesListener {
   async onArcoSolicitudCreada(payload: ArcoSolicitudCreadaEvent): Promise<void> {
     await this.avisarPorPermiso(PERMISO_ADMIN, {
       tipo: 'arco_solicitud',
-      titulo: 'Solicitud ARCO nueva',
-      mensaje: `Nueva solicitud de ${ETIQUETA_TIPO_ARCO[payload.tipo] ?? payload.tipo} con folio ${payload.folio}.`,
+      titulo: textoSitio('avisos.arcoNueva.titulo'),
+      mensaje: textoSitio('avisos.arcoNueva.mensaje', { tipoArco: ETIQUETA_TIPO_ARCO[payload.tipo] ?? payload.tipo, folio: payload.folio }),
       entidadTipo: 'solicitud_arco',
       entidadId: String(payload.solicitudId),
       urlAccion: RUTA_SOLICITUDES_ARCO,
@@ -796,8 +827,8 @@ export class NotificacionesListener {
       payload.usuarioId,
       {
         tipo: 'arco_respuesta',
-        titulo: 'Respuesta a tu solicitud ARCO',
-        mensaje: `Tu solicitud con folio ${payload.folio} ${MENSAJE_ESTADO_ARCO[payload.estado] ?? 'cambió de estado'}.`,
+        titulo: textoSitio('avisos.arcoRespuesta.titulo'),
+        mensaje: textoSitio('avisos.arcoRespuesta.mensaje', { folio: payload.folio, estadoArco: MENSAJE_ESTADO_ARCO[payload.estado] ?? 'cambió de estado' }),
         entidadTipo: 'solicitud_arco',
         entidadId: String(payload.solicitudId),
         urlAccion: RUTA_MIS_SOLICITUDES_ARCO,
@@ -811,14 +842,15 @@ export class NotificacionesListener {
   async onAnticipoPagado(payload: { citaId: number; clienteId: string | null }): Promise<void> {
     if (!payload.clienteId) return;
     let envioIds: string[] = [];
+    const mensaje = await this.textoDeCita('avisos.anticipoRecibido.mensaje', payload.citaId, { cita: payload.citaId });
     try {
       await this.enOutbox(async (tx) => {
         const canales = await this.resolver.resolverCanales(payload.clienteId as string, 'cita_confirmada', ['in_app']);
         const { envios } = await this.outbox.encolar(tx, {
           usuarioId: payload.clienteId as string,
           tipo: 'cita_confirmada',
-          titulo: 'Anticipo recibido',
-          mensaje: 'Recibimos tu anticipo: tu cita quedó confirmada.',
+          titulo: textoSitio('avisos.anticipoRecibido.titulo'),
+          mensaje,
           entidadTipo: 'cita',
           entidadId: String(payload.citaId),
           urlAccion: `/cliente/servicios-citas/mis-citas/${payload.citaId}`,
@@ -837,8 +869,8 @@ export class NotificacionesListener {
   async onPedidoCreado(payload: PedidoEvent): Promise<void> {
     await this.notificarPedido(payload, {
       tipo: 'pedido_creado',
-      titulo: 'Pedido recibido',
-      mensaje: `Recibimos tu pedido #${payload.pedidoId}, pendiente de pago`,
+      titulo: textoSitio('avisos.pedidoRecibido.titulo'),
+      mensaje: await this.textoDePedido('avisos.pedidoRecibido.mensaje', payload.pedidoId),
     });
   }
 
@@ -846,8 +878,8 @@ export class NotificacionesListener {
   async onPedidoPagado(payload: PedidoEvent): Promise<void> {
     await this.notificarPedido(payload, {
       tipo: 'pedido_confirmado',
-      titulo: 'Pedido confirmado',
-      mensaje: `Tu pedido #${payload.pedidoId} fue confirmado — pago recibido`,
+      titulo: textoSitio('avisos.pedidoConfirmado.titulo'),
+      mensaje: await this.textoDePedido('avisos.pedidoConfirmado.mensaje', payload.pedidoId),
     });
   }
 
@@ -858,8 +890,8 @@ export class NotificacionesListener {
       payload,
       {
         tipo: 'pedido_listo_recoger',
-        titulo: 'Tu pedido está listo para recoger',
-        mensaje: `Tu pedido #${payload.pedidoId} está listo para recoger en el salón`,
+        titulo: textoSitio('avisos.pedidoListo.titulo'),
+        mensaje: await this.textoDePedido('avisos.pedidoListo.mensaje', payload.pedidoId),
       },
       ['in_app', 'email'],
     );
@@ -869,8 +901,8 @@ export class NotificacionesListener {
   async onPedidoEntregado(payload: PedidoEvent): Promise<void> {
     await this.notificarPedido(payload, {
       tipo: 'pedido_entregado',
-      titulo: 'Pedido entregado en el salón',
-      mensaje: `Tu pedido #${payload.pedidoId} fue entregado en el salón`,
+      titulo: textoSitio('avisos.pedidoEntregado.titulo'),
+      mensaje: await this.textoDePedido('avisos.pedidoEntregado.mensaje', payload.pedidoId),
     });
   }
 
@@ -878,13 +910,13 @@ export class NotificacionesListener {
   async onPedidoCancelado(payload: PedidoEvent): Promise<void> {
     await this.notificarPedido(payload, {
       tipo: 'pedido_cancelado',
-      titulo: 'Pedido cancelado',
-      mensaje: `Tu pedido #${payload.pedidoId} fue cancelado`,
+      titulo: textoSitio('avisos.pedidoCancelado.titulo'),
+      mensaje: await this.textoDePedido('avisos.pedidoCancelado.mensaje', payload.pedidoId),
     });
   }
 
   /** Encolado común a los eventos de pedidos online: mismo destinatario único
-   *  (usuarioId dueño del pedido), misma entidad — cambian tipo/título/mensaje
+   *  (usuarioId dueño del pedido), misma entidad: cambian tipo/título/mensaje
    *  y, para "listo para recoger", los canales. Igual criterio de fallo que venta_local.pagada: un
    *  error aquí nunca debe afectar el pedido, que ya está comprometido en BD. */
   private async notificarPedido(
@@ -917,6 +949,64 @@ export class NotificacionesListener {
     }
 
     this.despachador.drenarInmediatas(envioIds);
+  }
+
+  /**
+   * Plazos de la regla guardada en el pedido al crearlo ({diasPrepararApartado}, {diasCancelarNoRecogido}...), con los
+   * mismos nombres que las variables de reglas para que ganen a las de hoy. Si el pedido no se puede leer, los valores
+   * por omisión (los que regían antes de guardar reglas en el pedido). Nunca lanza.
+   */
+  private async variablesDePedido(pedidoId: number): Promise<Record<string, string>> {
+    let guardadas: unknown = null;
+    try {
+      guardadas = (await this.prisma.pedido.findUnique({ where: { id: pedidoId }, select: { reglas: true } }))?.reglas ?? null;
+    } catch {
+      guardadas = null;
+    }
+    const r = reglasDePedido(guardadas);
+    return {
+      plazoPagoLineaHoras: String(r.plazoPagoLineaHoras),
+      diasPrepararApartado: String(r.diasPrepararApartado),
+      diaRecordatorioRecoger: String(r.diaRecordatorioRecoger),
+      diasCancelarNoRecogido: String(r.diasCancelarNoRecogido),
+      diasRestantesRecoger: String(r.diasCancelarNoRecogido - r.diaRecordatorioRecoger),
+      diasResguardo: String(r.diasResguardoPagado),
+      diasCambioProducto: String(r.diasCambioProducto),
+      diasHabilesRevocacion: String(r.diasHabilesRevocacion),
+    };
+  }
+
+  /**
+   * Aviso a la clienta sobre su pedido: si el texto usa un plazo ({diasPrepararApartado}, {diasResguardo}...), se lee
+   * la regla guardada en el pedido; si no, no se consulta la base.
+   */
+  private async textoDePedido(clave: string, pedidoId: number): Promise<string> {
+    const usaPlazos = variablesDeTexto(plantillaTexto(clave)).some((v) => VARIABLES_DE_PEDIDO.has(v));
+    return textoSitio(clave, { pedido: pedidoId, ...(usaPlazos ? await this.variablesDePedido(pedidoId) : {}) });
+  }
+
+  /**
+   * Aviso a la clienta sobre su cita: si el texto usa un plazo del anticipo ({plazoAnticipoHoras},
+   * {diasHabilesCancelarConReembolso}...), se toma la regla guardada en la cita al crearla. Nunca lanza.
+   */
+  private async textoDeCita(clave: string, citaId: number, contexto: Record<string, string | number>): Promise<string> {
+    const usaPlazos = variablesDeTexto(plantillaTexto(clave)).some((v) => VARIABLES_DE_CITA.has(v));
+    if (!usaPlazos) return textoSitio(clave, contexto);
+    let guardadas: unknown = null;
+    try {
+      guardadas = (await this.prisma.cita.findUnique({ where: { id: citaId }, select: { reglas: true } }))?.reglas ?? null;
+    } catch {
+      guardadas = null;
+    }
+    const r = reglasDeCita(guardadas);
+    return textoSitio(clave, {
+      plazoAnticipoHoras: String(r.plazoAnticipoHoras),
+      minutosAntesPagoSalon: String(r.minutosAntesPagoSalon),
+      horasAvisoCancelarReagendar: String(r.horasAvisoCancelarReagendar),
+      diasHabilesExcepcionAnticipo: String(r.diasHabilesExcepcionAnticipo),
+      diasHabilesCancelarConReembolso: String(r.diasHabilesCancelarConReembolso),
+      ...contexto,
+    });
   }
 
   private formatearFecha(fecha: Date): string {

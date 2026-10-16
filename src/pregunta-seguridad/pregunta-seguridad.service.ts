@@ -2,8 +2,9 @@ import { Injectable, NotFoundException, BadRequestException, Logger, Unauthorize
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcryptjs';
 import { DATOS_NO_COINCIDEN, SIN_PREGUNTA_RECUPERACION, esRespuestaPorDefinir } from '../usuarios/usuarios.service';
-import { sanitizeInput, containsSQLInjection, escaparHtml } from '../common/utils/security.util';
+import { sanitizeInput, containsSQLInjection } from '../common/utils/security.util';
 import { EmailService } from '../email/email.service';
+import { correoPreguntaCambiada } from '../email/plantillas-correo';
 import { fechaHoraMexico } from '../usuarios/cambio-password';
 
 // 400 y no 401: la web y la app tratan el 401 como sesión vencida y la cierran.
@@ -168,17 +169,9 @@ export class PreguntaSeguridadService {
   /** Aviso a la cuenta de que su pregunta cambió (sin la pregunta ni la respuesta). El log no lleva el correo. */
   private async avisarCambioPregunta(usuario: { id: string; email: string }) {
     try {
-      await this.emailService.sendNotificationEmail(
-        usuario.email,
-        'Tu pregunta de seguridad cambió - Miru Franco',
-        `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Tu pregunta de seguridad cambió</h2>
-            <p>La pregunta de seguridad de tu cuenta de Miru Franco se cambió el ${escaparHtml(fechaHoraMexico(new Date()))} (hora del centro de México).</p>
-            <p style="color: #666;">Si no fuiste tú, cambia tu contraseña desde tu perfil y comunícate con el salón lo antes posible.</p>
-          </div>
-        `,
-      );
+      // Asunto y texto del catálogo (Admin > Textos del sitio); el nombre del salón lo pone EmailService.
+      const { asunto, html } = correoPreguntaCambiada(fechaHoraMexico(new Date()));
+      await this.emailService.sendNotificationEmail(usuario.email, asunto, html);
     } catch {
       this.logger.warn(`No se pudo enviar el aviso de cambio de pregunta de seguridad (${usuario.id})`);
     }

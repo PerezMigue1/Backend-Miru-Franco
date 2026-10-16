@@ -2,7 +2,8 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AnticiposCitasService, type ResultadoPagoCita } from './anticipos-citas.service';
-import { ESTADOS_CITA_LIBERABLE, MINUTOS_ANTES_PAGO_SALON, MOTIVO_ANTICIPO_NO_PAGADO, anticiposDesde } from './anticipos.util';
+import { ESTADOS_CITA_LIBERABLE, MOTIVO_ANTICIPO_NO_PAGADO, anticiposDesde } from './anticipos.util';
+import { reglasDeCita, reglasNegocio } from '../../configuracion-sitio/reglas-negocio';
 
 /** Citas por consulta: se recorren de 50 en 50 por id hasta terminar. */
 const LOTE = 50;
@@ -62,7 +63,7 @@ export class AnticiposBarridaService {
         where: { ...vencidas, ...(ultimo === undefined ? {} : { id: { gt: ultimo } }) },
         orderBy: { id: 'asc' },
         take: LOTE,
-        select: { id: true, clienteId: true, especialistaId: true, anticipoEnSalon: true, anticipoVenceEn: true },
+        select: { id: true, clienteId: true, especialistaId: true, anticipoEnSalon: true, anticipoVenceEn: true, reglas: true },
       });
       for (const cita of lote) {
         try {
@@ -97,7 +98,9 @@ export class AnticiposBarridaService {
             especialistaId: cita.especialistaId,
             // Anticipo en el salón: el plazo vence minutos antes de la cita, no al pasar el plazo en línea.
             motivo: cita.anticipoEnSalon
-              ? `No recibimos tu anticipo ${MINUTOS_ANTES_PAGO_SALON} minutos antes de tu cita y el horario quedó libre. Tus próximas citas se apartan pagando el anticipo en línea.`
+              ? `No recibimos tu anticipo ${reglasDeCita(cita.reglas).minutosAntesPagoSalon} minutos antes de tu cita y el horario quedó libre.${
+                  reglasNegocio().citas.noAsistio.mesesSoloPagoEnLinea > 0 ? ' Tus próximas citas se apartan pagando el anticipo en línea.' : ''
+                }`
               : 'No recibimos el anticipo a tiempo y el horario quedó libre',
           });
         } catch (e) {

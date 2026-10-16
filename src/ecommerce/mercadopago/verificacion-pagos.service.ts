@@ -3,7 +3,8 @@ import { Interval } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AnticiposCitasService } from '../../citas/anticipos/anticipos-citas.service';
 import { ESTADOS_CITA_VIGENTE, anticiposDesde } from '../../citas/anticipos/anticipos.util';
-import { METODO_PAGO_MERCADOPAGO, VIGENCIA_PEDIDO_EN_LINEA_MS } from '../pedidos/flujo-pedido';
+import { METODO_PAGO_MERCADOPAGO } from '../pedidos/flujo-pedido';
+import { DEFINICIONES_REGLAS } from '../../configuracion-sitio/reglas-negocio';
 import { PagosEnLineaService } from './pagos-en-linea.service';
 import { avisoEntornoPagos } from './referencia-pago';
 
@@ -13,11 +14,16 @@ export const MINUTOS_MINIMOS_PENDIENTE = 5;
 const LOTE = 50;
 /** Margen tras la vigencia del pedido en línea para un pago que se acreditó al final. */
 const MARGEN_VIGENCIA_MS = 60 * 60_000;
+function maxHoras(ruta: string): number {
+  return DEFINICIONES_REGLAS.find((d) => d.ruta === ruta)?.max ?? 24;
+}
 /**
- * Citas que se revisan: creadas en las últimas 24 h más el margen. El plazo en línea es de 2 h y la preferencia
+ * Citas que se revisan: creadas dentro del plazo en línea más largo que permite el panel, más el margen. La preferencia
  * vence con él, así que después ya no llega un pago nuevo; esto acota la consulta.
  */
-const VENTANA_ANTICIPO_MS = 24 * 60 * 60_000 + MARGEN_VIGENCIA_MS;
+const VENTANA_ANTICIPO_MS = Math.max(24, maxHoras('citas.plazoAnticipoHoras')) * 60 * 60_000 + MARGEN_VIGENCIA_MS;
+/** Pedidos: el plazo más largo que permite el panel (cada pedido guarda el suyo). */
+const VENTANA_PEDIDO_MS = Math.max(24, maxHoras('tienda.plazoPagoLineaHoras')) * 60 * 60_000 + MARGEN_VIGENCIA_MS;
 
 /**
  * Verificación activa periódica de los pagos en línea: cada 10 minutos consulta en Mercado Pago los pedidos y
@@ -62,7 +68,7 @@ export class VerificacionPagosService implements OnModuleInit {
       where: {
         estado: 'pendiente_pago',
         metodoPago: METODO_PAGO_MERCADOPAGO,
-        creadoEn: { lte: hace5, gte: new Date(ahora.getTime() - VIGENCIA_PEDIDO_EN_LINEA_MS - MARGEN_VIGENCIA_MS) },
+        creadoEn: { lte: hace5, gte: new Date(ahora.getTime() - VENTANA_PEDIDO_MS) },
       },
       select: { id: true },
       orderBy: { id: 'asc' },

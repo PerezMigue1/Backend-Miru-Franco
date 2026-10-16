@@ -3,7 +3,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoCita, EstadoPedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
-import { sumarDiasHabiles } from '../common/utils/dias-habiles.util';
+import { SOLO_DIAS_DE_LEY, sumarDiasHabiles } from '../common/utils/dias-habiles.util';
+import { reglasNegocio } from '../configuracion-sitio/reglas-negocio';
 import { sanitizeInput } from '../common/utils/security.util';
 import { CAMPOS_SALUD_EN_NULL } from '../consentimientos/consentimientos.constants';
 import { ContextoPeticion, filaConsentimiento, serializarConsentimiento } from '../consentimientos/documentos-legales';
@@ -21,6 +22,9 @@ import { ocultarFotosDeTitular } from '../galeria/ocultar-fotos';
 /** Plazos de la Ley Federal de Protección de Datos Personales en Posesión de los Particulares (días hábiles). */
 export const DIAS_HABILES_RESPUESTA = 20;
 export const DIAS_HABILES_EFECTIVIDAD = 15;
+/** Los de Configuración del sitio > Reglas; el panel no deja bajarlos de los de ley. */
+const diasRespuesta = () => Math.max(DIAS_HABILES_RESPUESTA, reglasNegocio().arco.diasHabilesRespuesta);
+const diasEfectividad = () => Math.max(DIAS_HABILES_EFECTIVIDAD, reglasNegocio().arco.diasHabilesEfectividad);
 
 /** Lo que la titular ve de sus solicitudes (sin quién la atendió del personal). */
 const SELECT_SOLICITUD_PROPIA = {
@@ -337,7 +341,8 @@ export class ArcoService {
         tipo: dto.tipo,
         descripcion: dto.descripcion ? sanitizeInput(dto.descripcion) || null : null,
         creadaEn: ahora,
-        venceRespuesta: sumarDiasHabiles(ahora, DIAS_HABILES_RESPUESTA),
+        // Plazo de ley: solo domingos y festivos de ley (los inhábiles del salón no lo alargan).
+        venceRespuesta: sumarDiasHabiles(ahora, diasRespuesta(), SOLO_DIAS_DE_LEY),
       },
       select: SELECT_SOLICITUD_PROPIA,
     });
@@ -482,7 +487,7 @@ export class ArcoService {
           descripcion: 'Oposición al uso de mis datos para enviarme promociones.',
           estado: 'atendida',
           creadaEn: ahora,
-          venceRespuesta: sumarDiasHabiles(ahora, DIAS_HABILES_RESPUESTA),
+          venceRespuesta: sumarDiasHabiles(ahora, diasRespuesta(), SOLO_DIAS_DE_LEY),
           respuesta: 'Aplicada de inmediato: ya no recibirás promociones.',
           respondidaEn: ahora,
           atendidaEn: ahora,
@@ -592,7 +597,7 @@ export class ArcoService {
     if (dto.estado === 'respondida') {
       // La primera respuesta fija el plazo de efectividad; volver a responder no lo reinicia
       if (!actual.respondidaEn) data.respondidaEn = ahora;
-      if (!actual.venceEfectividad) data.venceEfectividad = sumarDiasHabiles(actual.respondidaEn ?? ahora, DIAS_HABILES_EFECTIVIDAD);
+      if (!actual.venceEfectividad) data.venceEfectividad = sumarDiasHabiles(actual.respondidaEn ?? ahora, diasEfectividad(), SOLO_DIAS_DE_LEY);
     }
     if ((dto.estado === 'rechazada' || dto.estado === 'atendida') && !actual.respondidaEn) data.respondidaEn = ahora;
     if (dto.estado === 'atendida') {

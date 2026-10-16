@@ -1,13 +1,18 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, OnModuleInit, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, OnModuleInit, Optional, ServiceUnavailableException, ConflictException } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ImagenesSubidasService } from '../subidas/imagenes-subidas.service';
-import { anticiposDesde, establecerAnticiposDesdeConfiguracion } from '../citas/anticipos/anticipos.util';
-import { esDiaValido } from '../common/utils/zona-mexico';
+import { anticiposDesde } from '../citas/anticipos/anticipos.util';
+import { DEFINICIONES_REGLAS, establecerReglasNegocio, metodosSalonActivos, reglasNegocio, validarReglas, type ReglasNegocio, variablesDeReglas, reglasDesdeGuardado } from './reglas-negocio';
 import { erroresHorario } from './horario.util';
+import { textosPublicos } from '../textos-sitio/textos-sitio.util';
 
 export const PERMISO_CONFIGURACION = 'configuracion:editar';
+/** Operaciones > Horario y días inhábiles (el admin lo asigna en Permisos por rol; semilla: estilista). */
+export const PERMISO_HORARIO = 'horario:editar';
+/** Operaciones > Equipo en el sitio: foto, presentación y orden del equipo (semilla: estilista). */
+export const PERMISO_EQUIPO_PUBLICO = 'equipo:publico';
 
 /** Secciones públicas (GET /api/configuracion-publica) y las que solo ve el admin. */
 const SECCIONES = ['salon', 'redes', 'horario', 'contenido_inicio', 'contenido_sobre_nosotros', 'contenido_contacto', 'reglas'] as const;
@@ -42,6 +47,8 @@ export const CATALOGO_PERMISOS: readonly { clave: string; descripcion: string; g
   { clave: 'servicios:escritura', descripcion: 'Servicios: crear y editar', grupo: 'Servicios' },
   { clave: 'galeria:lectura', descripcion: 'Galería: ver todas las fotos', grupo: 'Galería' },
   { clave: 'galeria:gestionar', descripcion: 'Galería: subir, publicar, ordenar y eliminar fotos', grupo: 'Galería' },
+  { clave: 'horario:editar', descripcion: 'Sitio: horario del salón y días inhábiles', grupo: 'Sitio' },
+  { clave: 'equipo:publico', descripcion: 'Sitio: foto, presentación y orden del equipo', grupo: 'Sitio' },
   { clave: 'empleados:lectura', descripcion: 'Personal: consultar', grupo: 'Personal' },
   { clave: 'asistencia:gestionar', descripcion: 'Personal: asistencia', grupo: 'Personal' },
   { clave: 'solicitudes:gestionar', descripcion: 'Personal: permisos y vacaciones', grupo: 'Personal' },
@@ -178,12 +185,11 @@ export function validarSeccion(clave: string, valor: unknown): unknown {
       break;
     }
     case 'reglas': {
-      const v = soloCampos(valor, ['anticiposDesde'], errores);
-      const fecha = v.anticiposDesde;
-      if (fecha !== null && fecha !== undefined && fecha !== '' && (typeof fecha !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !esDiaValido(fecha))) {
-        errores.push('La fecha de inicio de los anticipos debe ser una fecha válida (AAAA-MM-DD).');
-      }
-      limpio = { anticiposDesde: typeof fecha === 'string' && fecha ? fecha : null };
+      // Reglas de negocio completas (reglas-negocio.ts): rangos, mensajes en español y pisos de ley. Lo que no viene
+      // se completa con las reglas vigentes, así un guardado parcial no regresa nada a su valor por omisión.
+      const r = validarReglas(valor, reglasNegocio());
+      errores.push(...r.errores);
+      limpio = r.limpio;
       break;
     }
     default:
@@ -239,15 +245,43 @@ export class ConfiguracionSitioService implements OnModuleInit {
     await this.refrescarReglas();
   }
 
-  /** La fecha de anticipos guardada aquí manda sobre ANTICIPOS_DESDE (respaldo). Se relee cada minuto. */
+  /**
+   * Las reglas de negocio guardadas aquí mandan en todo el backend (las variables de entorno quedan de respaldo). Se
+   * cargan al arrancar, cada minuto y al guardar. Si la lectura falla se conservan las vigentes.
+   */
   @Interval(TIEMPO_CACHE_MS)
   async refrescarReglas(): Promise<void> {
     try {
       const reglas = await this.prisma.configuracionSitio.findUnique({ where: { clave: 'reglas' } });
-      establecerAnticiposDesdeConfiguracion((reglas?.valor as { anticiposDesde?: string | null } | undefined)?.anticiposDesde ?? null);
+      establecerReglasNegocio(reglas?.valor ?? null);
     } catch (e) {
-      this.logger.warn(`No se pudo leer la fecha de anticipos de la configuración (${e instanceof Error ? e.message : e})`);
+      this.logger.warn(`No se pudieron leer las reglas de negocio de la configuración (${e instanceof Error ? e.message : e})`);
     }
+  }
+
+  /**
+   * Reglas que puede ver cualquiera (web y app): plazos, políticas y métodos de pago activos. Los datos de transferencia
+   * solo si la transferencia está activa y completa. Nada de datos personales ni secretos.
+   */
+  private reglasPublicas(r: ReglasNegocio) {
+    const t = r.pagos.transferencia;
+    return {
+      citas: r.citas,
+      tienda: { ...r.tienda, apartadosDesde: undefined },
+      revocacion: r.revocacion,
+      garantia: r.garantia,
+      facturacion: r.facturacion,
+      arco: { diasHabilesRespuesta: r.arco.diasHabilesRespuesta, diasHabilesEfectividad: r.arco.diasHabilesEfectividad, diasAvisoVencePronto: r.arco.diasAvisoVencePronto },
+      pagos: {
+        mercadoPagoTienda: r.pagos.mercadoPagoTienda,
+        mercadoPagoAnticipos: r.pagos.mercadoPagoAnticipos,
+        metodosSalon: metodosSalonActivos(r),
+        transferencia: r.pagos.salon.transferencia && t.banco && t.titular && t.clabe ? { banco: t.banco, titular: t.titular, clabe: t.clabe } : null,
+      },
+      diasInhabiles: r.diasInhabiles,
+      // Para los textos del sitio: {plazoAnticipoHoras}, {diasResguardo}... ya con el valor vigente.
+      variables: variablesDeReglas(r),
+    };
   }
 
   private async filas(): Promise<Record<string, unknown>> {
@@ -269,9 +303,17 @@ export class ConfiguracionSitioService implements OnModuleInit {
       },
       // Sin fecha de anticipos (ni aquí ni en la variable), el sitio no promete anticipo en ningún lado.
       anticiposActivos: anticiposDesde() !== null,
+      reglas: this.reglasPublicas(reglasNegocio()),
+      // Textos del sitio (Admin > Textos del sitio): solo los públicos, con las variables de reglas ya llenas.
+      textos: textosPublicos(variablesDeReglas(reglasNegocio())),
     };
     this.cache = { valor, vence: ahora + TIEMPO_CACHE_MS };
     return valor;
+  }
+
+  /** Al guardar un texto del sitio (TextosSitioService): la próxima lectura pública ya lo trae. */
+  invalidarCachePublica(): void {
+    this.cache = null;
   }
 
   async obtenerTodo() {
@@ -282,16 +324,30 @@ export class ConfiguracionSitioService implements OnModuleInit {
       ),
       camposEnDocumentosLegales: CAMPOS_EN_DOCUMENTOS_LEGALES,
       anticiposDesdeRespaldo: (process.env.ANTICIPOS_DESDE ?? '').trim() || null,
+      apartadosDesdeRespaldo: (process.env.APARTADOS_DESDE ?? '').trim() || null,
+      definicionesReglas: DEFINICIONES_REGLAS,
+      reglasVigentes: reglasNegocio(),
     };
   }
 
-  async guardar(clave: string, valor: unknown, usuarioId: string) {
+  /**
+   * `versionBase`: el actualizadoEn que tenía la pantalla al abrir la sección. Si otra persona guardó después, 409 en
+   * vez de pisar su cambio sin aviso. `valor` como función: se arma dentro del candado con lo guardado en la base
+   * (Operaciones cambia solo los días inhábiles sin pisar las demás reglas).
+   */
+  async guardar(clave: string, valor: unknown, usuarioId: string, opciones: { versionBase?: string | null } = {}) {
     if (!(SECCIONES as readonly string[]).includes(clave)) throw new BadRequestException(`La sección "${clave}" no existe.`);
-    const limpio = (await this.resolverImagenesSeccion(clave, validarSeccion(clave, valor) as Record<string, unknown>, usuarioId)) as Prisma.InputJsonValue;
+    const armar = typeof valor === 'function' ? (valor as (guardado: unknown) => unknown) : null;
+    const previo = armar ? null : ((await this.resolverImagenesSeccion(clave, validarSeccion(clave, valor) as Record<string, unknown>, usuarioId)) as Prisma.InputJsonValue);
+    let limpio = previo as Prisma.InputJsonValue;
     const resultado = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`configuracion-sitio:${clave}`}))`;
       const actual = await tx.configuracionSitio.findUnique({ where: { clave } });
-      await tx.configuracionSitio.upsert({
+      if (opciones.versionBase && actual && new Date(actual.actualizadoEn).toISOString() !== new Date(opciones.versionBase).toISOString()) {
+        throw new ConflictException('Otra persona guardó cambios en esta sección mientras la editabas. Recarga la página para ver lo último y vuelve a hacer tus cambios.');
+      }
+      if (armar) limpio = validarSeccion(clave, armar(actual?.valor ?? null)) as Prisma.InputJsonValue;
+      const guardada = await tx.configuracionSitio.upsert({
         where: { clave },
         create: { clave, tipo: clave, valor: limpio, actualizadoPorId: usuarioId },
         update: { valor: limpio, actualizadoPorId: usuarioId },
@@ -299,11 +355,33 @@ export class ConfiguracionSitioService implements OnModuleInit {
       await tx.historialConfiguracionSitio.create({
         data: { clave, valorAnterior: (actual?.valor ?? Prisma.DbNull) as Prisma.InputJsonValue, valorNuevo: limpio, actualizadoPorId: usuarioId },
       });
-      return { afectaDocumentosLegales: cambiaronCamposLegales(clave, actual?.valor, limpio) };
+      return { afectaDocumentosLegales: cambiaronCamposLegales(clave, actual?.valor, limpio), actualizadoEn: guardada.actualizadoEn };
     });
     this.cache = null;
-    if (clave === 'reglas') establecerAnticiposDesdeConfiguracion((limpio as { anticiposDesde: string | null }).anticiposDesde);
+    if (clave === 'reglas') establecerReglasNegocio(limpio);
     return { success: true, clave, valor: limpio, ...resultado };
+  }
+
+  /** Operaciones > Horario y días inhábiles: lo que se edita ahí, con quién lo cambió por última vez. */
+  async operacion() {
+    const filas = await this.prisma.configuracionSitio.findMany({
+      where: { clave: { in: ['horario', 'reglas'] } },
+      select: { clave: true, valor: true, actualizadoEn: true, actualizadoPor: { select: { nombre: true } } },
+    });
+    const horario = filas.find((f) => f.clave === 'horario');
+    const reglas = filas.find((f) => f.clave === 'reglas');
+    return {
+      horario: horario ? { valor: horario.valor, actualizadoEn: horario.actualizadoEn, actualizadoPor: horario.actualizadoPor?.nombre ?? null } : null,
+      diasInhabiles: reglasNegocio().diasInhabiles,
+      definicionDiasInhabiles: DEFINICIONES_REGLAS.find((d) => d.ruta === 'diasInhabiles') ?? null,
+      diasInhabilesActualizado: reglas ? { actualizadoEn: reglas.actualizadoEn, actualizadoPor: reglas.actualizadoPor?.nombre ?? null } : null,
+    };
+  }
+
+  /** Solo los días inhábiles: el resto de las reglas queda igual (se valida y se guarda con historial como siempre). */
+  guardarDiasInhabiles(lista: unknown, usuarioId: string, versionBase?: string | null) {
+    // Se arma dentro del candado con las reglas guardadas en la base (no con la copia en memoria).
+    return this.guardar('reglas', (guardado: unknown) => ({ ...reglasDesdeGuardado(guardado), diasInhabiles: lista }), usuarioId, { versionBase });
   }
 
   async historial(clave?: string) {

@@ -39,6 +39,8 @@ import { ArcoModule } from './arco/arco.module';
 import { ConfiguracionSitioModule } from './configuracion-sitio/configuracion-sitio.module';
 import { GaleriaModule } from './galeria/galeria.module';
 import { ContenidoModule } from './contenido/contenido.module';
+import { TextosSitioModule } from './textos-sitio/textos-sitio.module';
+import { DocumentosLegalesModule } from './documentos-legales/documentos-legales.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -91,6 +93,8 @@ import { AppController } from './app.controller';
     ConfiguracionSitioModule,
     GaleriaModule,
     ContenidoModule,
+    TextosSitioModule,
+    DocumentosLegalesModule,
   ],
   controllers: [AppController],
 })

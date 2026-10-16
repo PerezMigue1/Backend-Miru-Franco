@@ -1,5 +1,6 @@
 import { diasHabilesEntre, sumarDiasHabiles } from '../../common/utils/dias-habiles.util';
 import { esDiaValido, inicioDiaMexico } from '../../common/utils/zona-mexico';
+import { establecerAnticiposDesdeRegla, reglasDeCita, reglasNegocio, type ReglasCita } from '../../configuracion-sitio/reglas-negocio';
 import { leerReferencia, referenciaCitaPago } from '../../ecommerce/mercadopago/referencia-pago';
 
 /**
@@ -7,9 +8,11 @@ import { leerReferencia, referenciaCitaPago } from '../../ecommerce/mercadopago/
  * monto y un plazo para pagarlo. Mientras tanto la cita sigue 'pendiente' y aparta el horario; sin pago,
  * la barrida la cancela y lo libera. No hay un estado nuevo en el enum: "pendiente de anticipo" =
  * anticipo_requerido > 0 y anticipo_pagado_en nulo. Dos plazos según cómo elige pagar la clienta:
- * - En línea (Mercado Pago): HORAS_ANTICIPO_CITA, pero nunca después de MINUTOS_ANTES_PAGO_SALON antes del inicio.
- * - En el salón (anticipo_en_salon): hasta MINUTOS_ANTES_PAGO_SALON antes del inicio.
- * Las horas coinciden con PLAZOS_TERMINOS.horasAnticipoCita del frontend (Términos, sección 6).
+ * - En línea (Mercado Pago): las horas de la regla citas.plazoAnticipoHoras, pero nunca después de los minutos de
+ *   citas.minutosAntesPagoSalon antes del inicio.
+ * - En el salón (anticipo_en_salon): hasta citas.minutosAntesPagoSalon antes del inicio.
+ * Los valores vigentes salen de Configuración del sitio > Reglas (reglasNegocio(); cada cita guarda los suyos). Estas
+ * constantes son los valores de hoy y solo se usan como respaldo y en las pruebas.
  */
 export const HORAS_ANTICIPO_CITA = 2;
 export const PLAZO_ANTICIPO_MS = HORAS_ANTICIPO_CITA * 60 * 60 * 1000;
@@ -60,12 +63,9 @@ export const METODO_PAGO_DE_ANTICIPO: Record<MetodoAnticipoSalon, string> = {
 
 export const centavos = (monto: unknown) => Math.round(Number(monto) * 100);
 
-/** Fecha guardada en Configuración del sitio (reglas.anticiposDesde); null o undefined: se usa la variable. */
-let anticiposDesdeConfiguracion: string | null | undefined;
-
-/** La pone ConfiguracionSitioService al arrancar, cada minuto y al guardar la sección de reglas. */
+/** Compatibilidad: fija solo reglas.anticiposDesde en las reglas vigentes (ver configuracion-sitio/reglas-negocio.ts). */
 export function establecerAnticiposDesdeConfiguracion(valor: string | null | undefined): void {
-  anticiposDesdeConfiguracion = valor;
+  establecerAnticiposDesdeRegla(valor);
 }
 
 /**
@@ -75,7 +75,7 @@ export function establecerAnticiposDesdeConfiguracion(valor: string | null | und
  * quedaría apartada para siempre).
  */
 export function anticiposDesde(): Date | null {
-  const valor = (anticiposDesdeConfiguracion || process.env.ANTICIPOS_DESDE || '').trim();
+  const valor = (reglasNegocio().anticiposDesde || process.env.ANTICIPOS_DESDE || '').trim();
   if (!valor) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) return esDiaValido(valor) ? inicioDiaMexico(valor) : null;
   const fecha = new Date(valor);
@@ -121,15 +121,25 @@ export interface PoliticaCancelacionAnticipo {
 
 const esFecha = (d: Date | null | undefined): d is Date => d instanceof Date && !Number.isNaN(d.getTime());
 
-/** null si falta la fecha de pago o de la cita (entonces el anticipo se retiene como siempre). */
+/**
+ * null si falta la fecha de pago o de la cita (entonces el anticipo se retiene como siempre). `reglas`: las que se
+ * guardaron en la cita al crearla (reglasDeCita); sin ellas, las de hoy. Con aviso mínimo (horas), cancelar con menos
+ * aviso no devuelve el anticipo.
+ */
 export function politicaCancelacionAnticipo(
   pagadoEn: Date | null | undefined,
   inicioCita: Date | null | undefined,
   ahora: Date = new Date(),
+  reglas: Pick<ReglasCita, 'diasHabilesExcepcionAnticipo' | 'diasHabilesCancelarConReembolso'> & { diasInhabiles?: string[] } = reglasDeCita(null),
 ): PoliticaCancelacionAnticipo | null {
   if (!esFecha(pagadoEn) || !esFecha(inicioCita)) return null;
-  const diasHabilesHastaCita = diasHabilesEntre(pagadoEn, inicioCita);
-  if (diasHabilesHastaCita <= DIAS_HABILES_EXCEPCION_SERVICIO) return { reembolsable: false, reembolsableHasta: null, diasHabilesHastaCita };
-  const reembolsableHasta = sumarDiasHabiles(pagadoEn, DIAS_HABILES_CANCELAR_CON_REEMBOLSO);
+  // Los días inhábiles del salón con que se creó la cita (un día agregado después no cambia su política).
+  const inhabiles = reglas.diasInhabiles ?? [];
+  // La excepción nunca pasa de los 10 días hábiles de la política publicada; el reembolso, nunca menos de 5 (ley).
+  const excepcion = Math.min(DIAS_HABILES_EXCEPCION_SERVICIO, reglas.diasHabilesExcepcionAnticipo);
+  const diasReembolso = Math.max(DIAS_HABILES_CANCELAR_CON_REEMBOLSO, reglas.diasHabilesCancelarConReembolso);
+  const diasHabilesHastaCita = diasHabilesEntre(pagadoEn, inicioCita, inhabiles);
+  if (diasHabilesHastaCita <= excepcion) return { reembolsable: false, reembolsableHasta: null, diasHabilesHastaCita };
+  const reembolsableHasta = sumarDiasHabiles(pagadoEn, diasReembolso, inhabiles);
   return { reembolsable: ahora.getTime() <= reembolsableHasta.getTime(), reembolsableHasta, diasHabilesHastaCita };
 }

@@ -11,6 +11,7 @@ import {
   TIPOS_CON_DOCUMENTO_OBLIGATORIO,
 } from './consentimientos.constants';
 import {
+  aceptacionCubreVigente,
   ContextoPeticion,
   DocumentoAceptado,
   documentoVigente,
@@ -118,7 +119,8 @@ export class ConsentimientosService {
 
   /**
    * GET /consentimientos/pendientes: documentos obligatorios cuya versión vigente la usuaria no tiene aceptada
-   * (sin fila, con una versión anterior o revocada). A las cuentas anteriores sin registros les salen todos: no se
+   * (sin fila, con una versión anterior o revocada). Si aceptó una versión anterior y todo lo publicado después son
+   * correcciones menores (sin pedir volver a aceptar), no queda pendiente. A las cuentas anteriores sin registros les salen todos: no se
    * inventan consentimientos pasados.
    */
   async pendientes(usuarioId: string, ahora: Date = new Date()) {
@@ -140,6 +142,8 @@ export class ConsentimientosService {
       });
       const aceptada = ultima?.accion === 'aceptado';
       if (aceptada && ultima?.documentoVersion === vigente.version && ultima?.documentoHash === vigente.hashTexto) continue;
+      // Aceptó una versión anterior y lo publicado después son solo correcciones menores: no se le vuelve a pedir.
+      if (aceptada && (await aceptacionCubreVigente(this.prisma, slug, { version: ultima?.documentoVersion ?? null, hash: ultima?.documentoHash ?? null }, ahora))) continue;
       pendientes.push({
         tipo,
         documentoSlug: slug,

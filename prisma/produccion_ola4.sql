@@ -1,0 +1,871 @@
+-- =====================================================================================================
+-- PRODUCCIÓN, OLA 4: reglas de negocio administrables (con la regla guardada en cada cita y pedido), documentos
+-- legales administrables (texto publicado congelado, borradores y re-aceptación), textos del sitio (catálogo con
+-- historial) y permisos de Operaciones para horario, días inhábiles y equipo en el sitio.
+-- Archivo de entrega SIN APLICAR. Se aplica en el SQL Editor de Neon de PRODUCCIÓN.
+--
+-- CUÁNDO: ANTES del deploy del backend de esta ronda y DESPUÉS de prisma/produccion_ola3.sql (y de sus
+-- migrate resolve). El cliente Prisma nuevo lee las columnas y tablas nuevas: un backend desplegado antes que este
+-- SQL falla al crear citas y pedidos, en los documentos legales y en los textos del sitio.
+--
+-- ORDEN (ya viene así; todo va en UNA transacción: si algo falla, no queda nada a medias):
+--   0. Comprobación previa: que la ola 3 ya esté aplicada.
+--   1. 20261017120000_reglas_negocio
+--   2. 20261017130000_documentos_legales
+--   3. 20261017140000_textos_sitio
+--   4. 20261017150000_permisos_operacion_sitio
+--
+-- DESPUÉS de que el COMMIT termine bien, marca las cuatro como aplicadas (en este orden, con el .env de
+-- producción, desde la carpeta del backend):
+--   npx prisma migrate resolve --applied 20261017120000_reglas_negocio
+--   npx prisma migrate resolve --applied 20261017130000_documentos_legales
+--   npx prisma migrate resolve --applied 20261017140000_textos_sitio
+--   npx prisma migrate resolve --applied 20261017150000_permisos_operacion_sitio
+--
+-- Solo aditivo: agrega columnas sin valor (las citas y pedidos existentes quedan con "reglas" en NULL y el backend
+-- los trata con los valores de hoy), tablas nuevas con sus índices, llaves foráneas y triggers de solo inserción,
+-- siembra las reglas con los valores que hoy usa el código (lo ya guardado gana), los textos del sitio con los de
+-- hoy y el texto exacto de los documentos legales vigentes (un bloque comprueba que su hash sea el registrado y, si
+-- no, revierte todo), y agrega claves de permisos sin quitar las existentes. No modifica ni borra datos existentes.
+-- El contenido de cada bloque es idéntico al migration.sql de su carpeta en prisma/migrations/.
+-- =====================================================================================================
+
+BEGIN;
+
+-- 0. Comprobación previa (solo lectura): la ola 3 (produccion_ola3.sql) ya está aplicada.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'firmas_subida')
+     OR NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'configuracion_sitio')
+     OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'galeria_fotos_public_id_key') THEN
+    RAISE EXCEPTION 'Falta aplicar produccion_ola3.sql antes de este archivo';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'citas' AND column_name = 'reglas') THEN
+    RAISE EXCEPTION 'La ola 4 ya parece aplicada (citas.reglas existe): no se vuelve a correr';
+  END IF;
+END;
+$$;
+
+-- -----------------------------------------------------------------------------------------------------
+-- 1. 20261017120000_reglas_negocio
+-- -----------------------------------------------------------------------------------------------------
+-- Reglas de negocio completas (Admin > Configuración del sitio > Reglas) y la regla con que se creó cada cita y
+-- cada pedido. Semilla: los valores que hoy usa el código, para que nada cambie al desplegar. Lo que ya estaba
+-- guardado en la fila "reglas" (la fecha de inicio de anticipos) se conserva tal cual.
+-- Las citas y pedidos ya creados quedan con "reglas" en NULL: el backend los trata con los valores de hoy.
+
+-- AlterTable
+ALTER TABLE "citas" ADD COLUMN "reglas" JSONB;
+
+-- AlterTable
+ALTER TABLE "pedidos" ADD COLUMN "reglas" JSONB;
+
+-- Semilla: valores de hoy debajo de lo que ya estaba guardado (lo guardado gana).
+INSERT INTO "configuracion_sitio" ("clave", "tipo", "valor")
+VALUES ('reglas', 'reglas', '{}'::jsonb)
+ON CONFLICT ("clave") DO NOTHING;
+
+UPDATE "configuracion_sitio"
+SET "valor" = '{"anticiposDesde":null,"citas":{"plazoAnticipoHoras":2,"minutosAntesPagoSalon":15,"minutosLlegadaAntes":20,"toleranciaLlegadaMinutos":15,"porcentajeAnticipoSugerido":0,"horasAvisoCancelarReagendar":0,"noAsistio":{"pierdeAnticipo":true,"mesesSoloPagoEnLinea":6},"maxCitasPorPagarEnSalon":1,"permitirAnticipoEnSalon":true,"intervaloHorariosMinutos":30,"recordatoriosHorasAntes":[24,1],"diasHabilesExcepcionAnticipo":10,"diasHabilesCancelarConReembolso":5},"tienda":{"apartadosDesde":null,"plazoPagoLineaHoras":24,"diasPrepararApartado":3,"diaRecordatorioRecoger":3,"diasCancelarNoRecogido":7,"diasResguardoPagado":15,"tiempoPreparacionTexto":"Suele estar listo en 24 a 48 horas hábiles","diasCambioProducto":7},"revocacion":{"diasHabiles":5},"garantia":{"diasServicio":7},"facturacion":{"plazoTexto":"dentro del mismo mes de tu compra o servicio"},"arco":{"diasHabilesRespuesta":20,"diasHabilesEfectividad":15,"diasAvisoVencePronto":5},"pagos":{"mercadoPagoTienda":true,"mercadoPagoAnticipos":true,"salon":{"efectivo":true,"tarjeta":true,"transferencia":true},"transferencia":{"banco":"","titular":"","clabe":""}},"diasInhabiles":[]}'::jsonb || "valor"
+WHERE "clave" = 'reglas';
+
+-- -----------------------------------------------------------------------------------------------------
+-- 2. 20261017130000_documentos_legales
+-- -----------------------------------------------------------------------------------------------------
+-- Documentos legales administrables (Admin > Documentos legales). Va DESPUÉS de 20261017120000_reglas_negocio.
+--
+-- contenidos_documentos_legales: el texto publicado de cada versión de versiones_documentos_legales (1 a 1). Es de
+-- SOLO INSERCIÓN, como las versiones: una versión publicada nunca se edita (cambiar el texto es publicar otra versión).
+-- Guarda el html publicado (el <main> de la página, ya limpio), la plantilla en formato sencillo con las variables de
+-- reglas ({diasGarantia}...), el valor de esas variables al publicar, si pide volver a aceptar, el motivo y quién publicó.
+-- borradores_documentos_legales: el borrador editable de cada documento (reembolsos incluye anticipos).
+--
+-- Semilla: el html exacto que pinta hoy cada página legal de la web (el <main> de DocumentoLegal con
+-- renderToStaticMarkup, el mismo de la prueba "Hash del texto publicado" de components/legal/paginasLegales.test.ts)
+-- y su plantilla. Al final se comprueba EN LA BASE que el SHA-256 del texto visible de cada html sembrado es el
+-- hash_texto de su versión: si alguno no coincide, la migración falla y no se aplica nada.
+-- Cookies 1.1 se siembra sin pedir volver a aceptar (así se publicó: migración 20261016150000_politica_cookies_1_1).
+-- Cookies 1.0 no se siembra: su texto ya no existe en la web y no se inventa (queda solo su versión y su hash).
+
+-- CreateTable
+CREATE TABLE "contenidos_documentos_legales" (
+    "id" SERIAL NOT NULL,
+    "version_id" INTEGER NOT NULL,
+    "slug" TEXT NOT NULL,
+    "version" TEXT NOT NULL,
+    "html" TEXT NOT NULL,
+    "plantilla" TEXT NOT NULL,
+    "variables" JSONB NOT NULL DEFAULT '{}',
+    "requiere_aceptacion" BOOLEAN NOT NULL DEFAULT true,
+    "motivo" TEXT NOT NULL,
+    "publicado_por_id" TEXT,
+    "creado_en" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "contenidos_documentos_legales_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "contenidos_documentos_legales_slug_check" CHECK ("slug" IN ('terminos', 'aviso-privacidad', 'cookies', 'reembolsos', 'anticipos')),
+    CONSTRAINT "contenidos_documentos_legales_version_check" CHECK ("version" ~ '^[0-9]+\.[0-9]+$'),
+    CONSTRAINT "contenidos_documentos_legales_html_check" CHECK (char_length("html") > 0),
+    CONSTRAINT "contenidos_documentos_legales_motivo_check" CHECK (char_length(btrim("motivo")) > 0),
+    CONSTRAINT "contenidos_documentos_legales_variables_check" CHECK (jsonb_typeof("variables") = 'object')
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "contenidos_documentos_legales_version_id_key" ON "contenidos_documentos_legales"("version_id");
+
+-- CreateIndex
+CREATE INDEX "contenidos_documentos_legales_slug_idx" ON "contenidos_documentos_legales"("slug");
+
+-- AddForeignKey
+ALTER TABLE "contenidos_documentos_legales" ADD CONSTRAINT "contenidos_documentos_legales_version_id_fkey" FOREIGN KEY ("version_id") REFERENCES "versiones_documentos_legales"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- El contenido lleva el mismo documento y la misma versión que la fila a la que apunta.
+CREATE FUNCTION "contenido_documento_coincide_con_version"() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM "versiones_documentos_legales" v
+    WHERE v."id" = NEW."version_id" AND v."slug" = NEW."slug" AND v."version" = NEW."version"
+  ) THEN
+    RAISE EXCEPTION 'El contenido del documento % versión % no corresponde a la versión publicada con id %.', NEW."slug", NEW."version", NEW."version_id";
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "contenidos_documentos_legales_coincide_version"
+  BEFORE INSERT ON "contenidos_documentos_legales"
+  FOR EACH ROW EXECUTE FUNCTION "contenido_documento_coincide_con_version"();
+
+-- Solo inserción
+CREATE TRIGGER "contenidos_documentos_legales_solo_insercion"
+  BEFORE UPDATE OR DELETE ON "contenidos_documentos_legales"
+  FOR EACH ROW EXECUTE FUNCTION "rechazar_cambios_solo_insercion"();
+
+CREATE TRIGGER "contenidos_documentos_legales_sin_truncate"
+  BEFORE TRUNCATE ON "contenidos_documentos_legales"
+  FOR EACH STATEMENT EXECUTE FUNCTION "rechazar_cambios_solo_insercion"();
+
+-- CreateTable
+CREATE TABLE "borradores_documentos_legales" (
+    "slug" TEXT NOT NULL,
+    "plantilla" TEXT NOT NULL,
+    "basado_en_version" TEXT,
+    "actualizado_en" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "actualizado_por_id" TEXT,
+
+    CONSTRAINT "borradores_documentos_legales_pkey" PRIMARY KEY ("slug"),
+    CONSTRAINT "borradores_documentos_legales_slug_check" CHECK ("slug" IN ('terminos', 'aviso-privacidad', 'cookies', 'reembolsos'))
+);
+
+-- Semilla: el texto vigente de cada documento, tal como lo pinta hoy la web.
+INSERT INTO "contenidos_documentos_legales" ("version_id", "slug", "version", "html", "plantilla", "variables", "requiere_aceptacion", "motivo")
+SELECT v."id", v."slug", v."version", s."html", s."plantilla", s."variables"::jsonb, s."requiere_aceptacion", s."motivo"
+FROM (VALUES
+  ('terminos', '2.0', '<main class="mf-terminos"><div class="mf-terminos__marco layout-gutter-x"><header class="mf-terminos__cabecera"><h1 class="text-elegant-title">Términos y Condiciones de Uso</h1><p class="mf-terminos__marca">Mirú Franco Salón Beauty</p></header><div class="mf-terminos__cuerpo"><nav aria-label="Índice de los términos" class="mf-terminos__indice"><p class="mf-terminos__indice-titulo">En esta página</p><ol class="mf-terminos__indice-lista"><li><a href="#quienes-somos"><span class="mf-terminos__num">1.</span> Quiénes somos</a></li><li><a href="#uso-del-sitio"><span class="mf-terminos__num">2.</span> Uso del sitio y de tu cuenta</a></li><li><a href="#productos-y-precios"><span class="mf-terminos__num">3.</span> Productos y precios</a></li><li><a href="#compras-en-linea"><span class="mf-terminos__num">4.</span> Compras en línea: solo recoger en el salón</a></li><li><a href="#cambios-y-devoluciones"><span class="mf-terminos__num">5.</span> Cambios, devoluciones y cancelaciones</a></li><li><a href="#citas-y-servicios"><span class="mf-terminos__num">6.</span> Citas y servicios</a></li><li><a href="#tratamientos-quimicos"><span class="mf-terminos__num">7.</span> Tratamientos químicos y cuidado posterior</a></li><li><a href="#garantia"><span class="mf-terminos__num">8.</span> Garantía de satisfacción</a></li><li><a href="#fotografias"><span class="mf-terminos__num">9.</span> Fotografías de nuestro trabajo</a></li><li><a href="#facturacion"><span class="mf-terminos__num">10.</span> Facturación</a></li><li><a href="#datos-personales"><span class="mf-terminos__num">11.</span> Datos personales</a></li><li><a href="#propiedad-intelectual"><span class="mf-terminos__num">12.</span> Propiedad intelectual</a></li><li><a href="#cambios-a-estos-terminos"><span class="mf-terminos__num">13.</span> Cambios a estos términos</a></li><li><a href="#quejas"><span class="mf-terminos__num">14.</span> Quejas y legislación aplicable</a></li></ol></nav><details class="mf-terminos__plegable"><summary><span>Índice de secciones</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down mf-terminos__chevron" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></summary><nav aria-label="Índice de los términos"><ol class="mf-terminos__indice-lista"><li><a href="#quienes-somos"><span class="mf-terminos__num">1.</span> Quiénes somos</a></li><li><a href="#uso-del-sitio"><span class="mf-terminos__num">2.</span> Uso del sitio y de tu cuenta</a></li><li><a href="#productos-y-precios"><span class="mf-terminos__num">3.</span> Productos y precios</a></li><li><a href="#compras-en-linea"><span class="mf-terminos__num">4.</span> Compras en línea: solo recoger en el salón</a></li><li><a href="#cambios-y-devoluciones"><span class="mf-terminos__num">5.</span> Cambios, devoluciones y cancelaciones</a></li><li><a href="#citas-y-servicios"><span class="mf-terminos__num">6.</span> Citas y servicios</a></li><li><a href="#tratamientos-quimicos"><span class="mf-terminos__num">7.</span> Tratamientos químicos y cuidado posterior</a></li><li><a href="#garantia"><span class="mf-terminos__num">8.</span> Garantía de satisfacción</a></li><li><a href="#fotografias"><span class="mf-terminos__num">9.</span> Fotografías de nuestro trabajo</a></li><li><a href="#facturacion"><span class="mf-terminos__num">10.</span> Facturación</a></li><li><a href="#datos-personales"><span class="mf-terminos__num">11.</span> Datos personales</a></li><li><a href="#propiedad-intelectual"><span class="mf-terminos__num">12.</span> Propiedad intelectual</a></li><li><a href="#cambios-a-estos-terminos"><span class="mf-terminos__num">13.</span> Cambios a estos términos</a></li><li><a href="#quejas"><span class="mf-terminos__num">14.</span> Quejas y legislación aplicable</a></li></ol></nav></details><article class="mf-legal mf-terminos__texto"><p class="mb-8 flex items-start gap-2 text-sm font-medium" style="color:var(--menu-texto-principal)"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-file-check-corner mt-1 shrink-0" aria-hidden="true" style="color:var(--logo-branding)"><path d="M10.5 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v6"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="m14 20 2 2 4-4"></path></svg><span>Versión 2.0. Vigente desde el <time dateTime="2026-10-14">14 de octubre de 2026</time>.</span></p><p class="mf-terminos__intro">Bienvenida a www.mirufranco.com. Al crear una cuenta, agendar una cita o comprar en nuestra tienda en línea, aceptas estos Términos y Condiciones. Te pedimos leerlos con calma. Si tienes dudas, escríbenos antes de hacer tu compra o cita.</p><section id="quienes-somos" aria-labelledby="quienes-somos-titulo" class="mf-terminos__seccion"><h2 id="quienes-somos-titulo"><span class="mf-terminos__num">1.</span> Quiénes somos</h2><p>Este sitio es operado por Mildred Rubí Franco Martínez, con nombre comercial Mirú Franco Salón Beauty, que es la proveedora de los productos y servicios que ofrecemos aquí. Estos son sus datos de contacto:</p><div class="mf-card p-5 sm:p-8 mf-terminos__contacto" style="background-color:var(--tarjetas-paneles);border:none;box-shadow:var(--mf-sombra-1)"><dl><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin" aria-hidden="true"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"></path><circle cx="12" cy="10" r="3"></circle></svg> Domicilio</dt><dd>Segunda Cerrada de Allende No. 15, Col. Juárez, Huejutla de Reyes, Hidalgo, C.P. 43000.</dd></div><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-phone" aria-hidden="true"><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384"></path></svg> Teléfonos y WhatsApp</dt><dd><a href="tel:+527711867645">771 186 7645</a> y <a href="tel:+527712681432">771 268 1432</a></dd></div><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-mail" aria-hidden="true"><path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"></path><rect x="2" y="4" width="20" height="16" rx="2"></rect></svg> Correo</dt><dd><a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a></dd></div><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-clock" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg> Horario de atención</dt><dd><span class="block">Lunes a viernes de 9:30 a 19:30 h.</span><span class="block">Sábados de 9:30 a 19:00 h.</span><span class="block">Domingos cerrado.</span></dd></div></dl></div></section><section id="uso-del-sitio" aria-labelledby="uso-del-sitio-titulo" class="mf-terminos__seccion"><h2 id="uso-del-sitio-titulo"><span class="mf-terminos__num">2.</span> Uso del sitio y de tu cuenta</h2><ol><li>Para comprar o agendar en línea necesitas una cuenta con datos reales y actualizados.</li><li>Eres responsable de cuidar tu contraseña y de lo que se haga con tu cuenta. Si notas un uso que no reconoces, avísanos de inmediato.</li><li>No está permitido usar el sitio para fines ilícitos, intentar acceder a cuentas ajenas ni afectar su funcionamiento. Podemos suspender cuentas que incumplan estos términos.</li></ol></section><section id="productos-y-precios" aria-labelledby="productos-y-precios-titulo" class="mf-terminos__seccion"><h2 id="productos-y-precios-titulo"><span class="mf-terminos__num">3.</span> Productos y precios</h2><ol><li>Todos los precios son totales: están en pesos mexicanos (MXN) e incluyen IVA.</li><li>Las fotografías son ilustrativas. El empaque puede variar según el lote del fabricante.</li><li>Las existencias se confirman al momento de completar tu pedido. Si por un error un producto no está disponible, te avisaremos y podrás elegir otro producto o recibir el reembolso de lo que hayas pagado por él.</li><li>Podemos actualizar precios y promociones en cualquier momento. El precio que se respeta es el que aparece al confirmar tu pedido.</li></ol></section><section id="compras-en-linea" aria-labelledby="compras-en-linea-titulo" class="mf-terminos__seccion"><h2 id="compras-en-linea-titulo"><span class="mf-terminos__num">4.</span> Compras en línea: solo recoger en el salón</h2><p>No realizamos envíos a domicilio desde la tienda en línea. Todos los pedidos se entregan en el salón, en el domicilio de la sección 1 y dentro del horario de atención. Al hacer tu pedido puedes elegir entre dos formas de pago:</p><h3>4.1 Pagar en línea</h3><ol><li>El pago se procesa por medio de Mercado Pago. Mirú Franco no recibe ni guarda el número completo ni el código de seguridad de tu tarjeta.</li><li>Tu pedido queda confirmado cuando Mercado Pago aprueba el pago. Si el pago no se completa en 24 horas, el pedido se cancela automáticamente y los productos vuelven a estar disponibles.</li><li>Te avisaremos cuando tu pedido esté listo para recoger.</li></ol><h3>4.2 Apartar y pagar al recoger</h3><ol><li>Apartas tus productos en línea y los pagas en el salón al recogerlos, en efectivo, por transferencia o con tarjeta, según los medios disponibles en el salón.</li><li>Si tu pedido no se prepara en 3 días, se cancela automáticamente.</li><li>Cuando esté listo te avisaremos. Al día 3 te enviaremos un recordatorio. Si no lo recoges en 7 días, el apartado se cancela y los productos vuelven a la venta.</li></ol><h3>4.3 Al recoger tu pedido</h3><ol><li>Presenta tu número de pedido y el nombre de la cuenta con la que compraste.</li><li>Si otra persona recoge por ti, avísanos antes por WhatsApp con su nombre completo.</li><li>Revisa tus productos al recibirlos. Cualquier detalle visible repórtalo en ese momento.</li><li>Los pedidos pagados en línea se guardan 15 días a partir del aviso de &quot;listo para recoger&quot;. Si no puedes pasar en ese plazo, escríbenos para acordar una fecha.</li></ol></section><section id="cambios-y-devoluciones" aria-labelledby="cambios-y-devoluciones-titulo" class="mf-terminos__seccion"><h2 id="cambios-y-devoluciones-titulo"><span class="mf-terminos__num">5.</span> Cambios, devoluciones y cancelaciones</h2><ol><li><strong>Tu derecho de revocación:</strong> conforme al artículo 56 de la Ley Federal de Protección al Consumidor, puedes revocar tu compra en línea sin dar razones dentro de los 5 días hábiles siguientes a la entrega de tu pedido en el salón (o desde la compra, si todavía no se te entrega). Avísanos por WhatsApp o por correo, o entréganos el producto en el salón, y te reintegramos el total que pagaste.</li><li><strong>Cambios (beneficio adicional):</strong> además de tu derecho de revocación, aceptamos cambios de producto dentro de los 7 días naturales siguientes a que lo recojas, siempre que esté sellado, sin abrir y en las mismas condiciones en que lo recibiste, con su comprobante.</li><li>Por higiene y seguridad, este beneficio de cambio no aplica a productos abiertos o usados, salvo que tengan un defecto de fábrica. Esto no limita tu derecho de revocación.</li><li><strong>Cambio por otro producto:</strong> el cambio se hace por otro producto. Si el nuevo cuesta más, pagas la diferencia.</li><li><strong>Además de la revocación, también hay reembolso en estos casos:</strong><ul><li>el producto tiene un defecto de fábrica o llegó en mal estado;</li><li>te entregamos un producto distinto al que pediste;</li><li>cancelamos tu pedido por falta de existencias o por causas nuestras;</li><li>cancelas un pedido pagado en línea antes de que lo empecemos a preparar.</li></ul></li><li><strong>Cancelar un pedido pagado en línea:</strong> si cancelas tu pedido antes de que lo empecemos a preparar, te devolvemos el pago completo al mismo medio con el que pagaste. Puede tardar unos días en reflejarse, según tu banco.</li><li>Los reembolsos de pagos en línea se hacen por Mercado Pago, al mismo medio con el que pagaste. El tiempo en que se refleja depende de tu banco.</li><li>Consulta todos los detalles en nuestra <a href="/politica-de-reembolsos">Política de Reembolsos, Cambios y Cancelaciones</a>. Nada de lo anterior limita los derechos que te otorga la Ley Federal de Protección al Consumidor.</li></ol></section><section id="citas-y-servicios" aria-labelledby="citas-y-servicios-titulo" class="mf-terminos__seccion"><h2 id="citas-y-servicios-titulo"><span class="mf-terminos__num">6.</span> Citas y servicios</h2><ol><li><strong>Anticipo:</strong> algunas citas requieren un anticipo para quedar confirmadas. El anticipo se descuenta del total de tu servicio. Lo puedes pagar de dos formas:<ul><li><strong>En línea</strong> con Mercado Pago: tienes 2 horas desde que agendas, pero el plazo nunca pasa de 15 minutos antes de tu cita.</li><li><strong>En el salón</strong> (efectivo, transferencia o tarjeta): llega entre 20 y 15 minutos antes de tu cita y págalo a más tardar 15 minutos antes de que empiece.</li></ul>Si el anticipo no se paga dentro de su plazo, la cita se cancela y el horario queda disponible.</li><li><strong>Confirmación:</strong> te contactaremos un día antes para confirmar tu cita.</li><li><strong>Puntualidad:</strong> te pedimos llegar a tiempo. Contamos con una tolerancia de 15 minutos. Después de ese tiempo, podemos reprogramar tu cita para no afectar a las siguientes clientas.</li><li><strong>Reagendar:</strong> avísanos lo antes posible. Con aviso previo, puedes reagendar sin costo y tu anticipo se respeta para la nueva fecha.</li><li><strong>Cancelar:</strong> si al pagar tu anticipo faltan más de 10 días hábiles para tu cita, puedes cancelarla dentro de los 5 días hábiles siguientes a tu pago y te devolvemos el anticipo completo. Si faltan 10 días hábiles o menos, al cancelar el anticipo no se devuelve, pero puedes reagendar con aviso previo y tu anticipo se respeta. Consulta nuestra <a href="/politica-de-reembolsos#anticipos">Política de Anticipos</a>.</li><li>Si no llegas y no avisas, el anticipo no se devuelve y podríamos limitar tus citas en línea. En ese caso podrás atenderte por turno en el salón.</li><li>Si apartas para pagar en el salón y no llegas a pagar a tiempo sin avisar, tus siguientes citas se apartan pagando el anticipo en línea durante 6 meses.</li><li>Si nosotras tenemos que cancelar tu cita, te devolvemos tu anticipo completo.</li></ol></section><section id="tratamientos-quimicos" aria-labelledby="tratamientos-quimicos-titulo" class="mf-terminos__seccion"><h2 id="tratamientos-quimicos-titulo"><span class="mf-terminos__num">7.</span> Tratamientos químicos y cuidado posterior</h2><ol><li>Antes de un tratamiento químico (alaciados, nanoplastia, keratina, botox capilar y similares) hacemos una valoración de tu cabello.</li><li>Es tu responsabilidad informarnos de alergias, sensibilidad, embarazo, condiciones del cuero cabelludo y tratamientos o tintes previos. Si la información es incompleta, el resultado puede verse afectado.</li><li>Si después de la valoración un tratamiento no es seguro para tu cabello, podemos recomendarte otro o no realizarlo.</li><li>El resultado y la duración dependen del tipo de cabello y de seguir las indicaciones de cuidado y los productos recomendados.</li></ol></section><section id="garantia" aria-labelledby="garantia-titulo" class="mf-terminos__seccion"><h2 id="garantia-titulo"><span class="mf-terminos__num">8.</span> Garantía de satisfacción</h2><p>Queremos que salgas feliz. Si un servicio no te dejó satisfecha, contáctanos dentro de los 7 días siguientes. Revisaremos el caso contigo y, cuando corresponda, haremos un ajuste o corrección sin costo. La garantía aplica cuando se siguieron las indicaciones de cuidado posterior que te dimos.</p></section><section id="fotografias" aria-labelledby="fotografias-titulo" class="mf-terminos__seccion"><h2 id="fotografias-titulo"><span class="mf-terminos__num">9.</span> Fotografías de nuestro trabajo</h2><p>Podemos tomar fotos o videos de tu resultado para compartirlos en nuestra galería y redes sociales, solo con tu autorización. Puedes negarte o pedir que retiremos una publicación en cualquier momento.</p></section><section id="facturacion" aria-labelledby="facturacion-titulo" class="mf-terminos__seccion"><h2 id="facturacion-titulo"><span class="mf-terminos__num">10.</span> Facturación</h2><p>Si necesitas factura, solicítala con tus datos fiscales (RFC, razón social, régimen fiscal, código postal y uso de CFDI) dentro del mismo mes de tu compra o servicio.</p></section><section id="datos-personales" aria-labelledby="datos-personales-titulo" class="mf-terminos__seccion"><h2 id="datos-personales-titulo"><span class="mf-terminos__num">11.</span> Datos personales</h2><p>Tratamos tus datos personales de acuerdo con nuestro <a href="/aviso-de-privacidad">Aviso de Privacidad</a>. Ahí te explicamos qué datos recabamos, para qué los usamos (incluidas las finalidades adicionales, a las que puedes negarte), con quién los compartimos y cómo ejercer tus derechos.</p></section><section id="propiedad-intelectual" aria-labelledby="propiedad-intelectual-titulo" class="mf-terminos__seccion"><h2 id="propiedad-intelectual-titulo"><span class="mf-terminos__num">12.</span> Propiedad intelectual</h2><p>El logotipo, nombre comercial, fotografías y contenidos de este sitio pertenecen a Mirú Franco Salón Beauty o a sus respectivos dueños. Las marcas de los productos que vendemos pertenecen a sus fabricantes. No está permitido copiarlos ni usarlos sin autorización.</p></section><section id="cambios-a-estos-terminos" aria-labelledby="cambios-a-estos-terminos-titulo" class="mf-terminos__seccion"><h2 id="cambios-a-estos-terminos-titulo"><span class="mf-terminos__num">13.</span> Cambios a estos términos</h2><p>Podemos actualizar estos términos. La versión vigente siempre estará publicada en esta página con su número de versión y su fecha de vigencia. Los pedidos y citas confirmados se rigen por los términos vigentes al momento de confirmarlos.</p></section><section id="quejas" aria-labelledby="quejas-titulo" class="mf-terminos__seccion"><h2 id="quejas-titulo"><span class="mf-terminos__num">14.</span> Quejas y legislación aplicable</h2><p>Si tienes una queja, escríbenos primero. Queremos resolverla contigo. Estos términos se rigen por las leyes de los Estados Unidos Mexicanos. Para cualquier controversia, las partes se someten a la Procuraduría Federal del Consumidor (Profeco) en la vía administrativa y a los tribunales competentes de Huejutla de Reyes, Hidalgo.</p><p><strong>Procuraduría Federal del Consumidor (Profeco):</strong> Teléfono del Consumidor <a href="tel:+525555688722">55 5568 8722</a> (CDMX y zona metropolitana) y <a href="tel:+528004688722">800 468 8722</a> (resto del país), sitio <a href="https://www.gob.mx/profeco" target="_blank" rel="noopener noreferrer">www.gob.mx/profeco<span class="sr-only"> (se abre en otra pestaña)</span></a>.</p></section></article></div></div></main>',
+   'Bienvenida a www.mirufranco.com. Al crear una cuenta, agendar una cita o comprar en nuestra tienda en línea, aceptas estos Términos y Condiciones. Te pedimos leerlos con calma. Si tienes dudas, escríbenos antes de hacer tu compra o cita.
+
+## Quiénes somos {#quienes-somos}
+
+Este sitio es operado por Mildred Rubí Franco Martínez, con nombre comercial Mirú Franco Salón Beauty, que es la proveedora de los productos y servicios que ofrecemos aquí. Estos son sus datos de contacto:
+
+<div class="mf-card p-5 sm:p-8 mf-terminos__contacto" style="background-color:var(--tarjetas-paneles);border:none;box-shadow:var(--mf-sombra-1)"><dl><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin" aria-hidden="true"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"></path><circle cx="12" cy="10" r="3"></circle></svg> Domicilio</dt><dd>Segunda Cerrada de Allende No. 15, Col. Juárez, Huejutla de Reyes, Hidalgo, C.P. 43000.</dd></div><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-phone" aria-hidden="true"><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384"></path></svg> Teléfonos y WhatsApp</dt><dd><a href="tel:+527711867645">771 186 7645</a> y <a href="tel:+527712681432">771 268 1432</a></dd></div><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-mail" aria-hidden="true"><path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"></path><rect x="2" y="4" width="20" height="16" rx="2"></rect></svg> Correo</dt><dd><a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a></dd></div><div><dt><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-clock" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg> Horario de atención</dt><dd><span class="block">Lunes a viernes de 9:30 a 19:30 h.</span><span class="block">Sábados de 9:30 a 19:00 h.</span><span class="block">Domingos cerrado.</span></dd></div></dl></div>
+
+## Uso del sitio y de tu cuenta {#uso-del-sitio}
+
+1. Para comprar o agendar en línea necesitas una cuenta con datos reales y actualizados.
+2. Eres responsable de cuidar tu contraseña y de lo que se haga con tu cuenta. Si notas un uso que no reconoces, avísanos de inmediato.
+3. No está permitido usar el sitio para fines ilícitos, intentar acceder a cuentas ajenas ni afectar su funcionamiento. Podemos suspender cuentas que incumplan estos términos.
+
+## Productos y precios {#productos-y-precios}
+
+1. Todos los precios son totales: están en pesos mexicanos (MXN) e incluyen IVA.
+2. Las fotografías son ilustrativas. El empaque puede variar según el lote del fabricante.
+3. Las existencias se confirman al momento de completar tu pedido. Si por un error un producto no está disponible, te avisaremos y podrás elegir otro producto o recibir el reembolso de lo que hayas pagado por él.
+4. Podemos actualizar precios y promociones en cualquier momento. El precio que se respeta es el que aparece al confirmar tu pedido.
+
+## Compras en línea: solo recoger en el salón {#compras-en-linea}
+
+No realizamos envíos a domicilio desde la tienda en línea. Todos los pedidos se entregan en el salón, en el domicilio de la sección 1 y dentro del horario de atención. Al hacer tu pedido puedes elegir entre dos formas de pago:
+
+### 4.1 Pagar en línea
+
+1. El pago se procesa por medio de Mercado Pago. Mirú Franco no recibe ni guarda el número completo ni el código de seguridad de tu tarjeta.
+2. Tu pedido queda confirmado cuando Mercado Pago aprueba el pago. Si el pago no se completa en {plazoPagoLineaHoras} horas, el pedido se cancela automáticamente y los productos vuelven a estar disponibles.
+3. Te avisaremos cuando tu pedido esté listo para recoger.
+
+### 4.2 Apartar y pagar al recoger
+
+1. Apartas tus productos en línea y los pagas en el salón al recogerlos, en efectivo, por transferencia o con tarjeta, según los medios disponibles en el salón.
+2. Si tu pedido no se prepara en {diasPrepararApartado} días, se cancela automáticamente.
+3. Cuando esté listo te avisaremos. Al día {diaRecordatorioRecoger} te enviaremos un recordatorio. Si no lo recoges en {diasCancelarNoRecogido} días, el apartado se cancela y los productos vuelven a la venta.
+
+### 4.3 Al recoger tu pedido
+
+1. Presenta tu número de pedido y el nombre de la cuenta con la que compraste.
+2. Si otra persona recoge por ti, avísanos antes por WhatsApp con su nombre completo.
+3. Revisa tus productos al recibirlos. Cualquier detalle visible repórtalo en ese momento.
+4. Los pedidos pagados en línea se guardan {diasResguardo} días a partir del aviso de "listo para recoger". Si no puedes pasar en ese plazo, escríbenos para acordar una fecha.
+
+## Cambios, devoluciones y cancelaciones {#cambios-y-devoluciones}
+
+<ol><li><strong>Tu derecho de revocación:</strong> conforme al artículo 56 de la Ley Federal de Protección al Consumidor, puedes revocar tu compra en línea sin dar razones dentro de los 5 días hábiles siguientes a la entrega de tu pedido en el salón (o desde la compra, si todavía no se te entrega). Avísanos por WhatsApp o por correo, o entréganos el producto en el salón, y te reintegramos el total que pagaste.</li><li><strong>Cambios (beneficio adicional):</strong> además de tu derecho de revocación, aceptamos cambios de producto dentro de los {diasCambioProducto} días naturales siguientes a que lo recojas, siempre que esté sellado, sin abrir y en las mismas condiciones en que lo recibiste, con su comprobante.</li><li>Por higiene y seguridad, este beneficio de cambio no aplica a productos abiertos o usados, salvo que tengan un defecto de fábrica. Esto no limita tu derecho de revocación.</li><li><strong>Cambio por otro producto:</strong> el cambio se hace por otro producto. Si el nuevo cuesta más, pagas la diferencia.</li><li><strong>Además de la revocación, también hay reembolso en estos casos:</strong><ul><li>el producto tiene un defecto de fábrica o llegó en mal estado;</li><li>te entregamos un producto distinto al que pediste;</li><li>cancelamos tu pedido por falta de existencias o por causas nuestras;</li><li>cancelas un pedido pagado en línea antes de que lo empecemos a preparar.</li></ul></li><li><strong>Cancelar un pedido pagado en línea:</strong> si cancelas tu pedido antes de que lo empecemos a preparar, te devolvemos el pago completo al mismo medio con el que pagaste. Puede tardar unos días en reflejarse, según tu banco.</li><li>Los reembolsos de pagos en línea se hacen por Mercado Pago, al mismo medio con el que pagaste. El tiempo en que se refleja depende de tu banco.</li><li>Consulta todos los detalles en nuestra <a href="/politica-de-reembolsos">Política de Reembolsos, Cambios y Cancelaciones</a>. Nada de lo anterior limita los derechos que te otorga la Ley Federal de Protección al Consumidor.</li></ol>
+
+## Citas y servicios {#citas-y-servicios}
+
+<ol><li><strong>Anticipo:</strong> algunas citas requieren un anticipo para quedar confirmadas. El anticipo se descuenta del total de tu servicio. Lo puedes pagar de dos formas:<ul><li><strong>En línea</strong> con Mercado Pago: tienes {plazoAnticipoHoras} horas desde que agendas, pero el plazo nunca pasa de {minutosAntesPagoSalon} minutos antes de tu cita.</li><li><strong>En el salón</strong> (efectivo, transferencia o tarjeta): llega entre {minutosLlegadaAntes} y {minutosAntesPagoSalon} minutos antes de tu cita y págalo a más tardar {minutosAntesPagoSalon} minutos antes de que empiece.</li></ul>Si el anticipo no se paga dentro de su plazo, la cita se cancela y el horario queda disponible.</li><li><strong>Confirmación:</strong> te contactaremos un día antes para confirmar tu cita.</li><li><strong>Puntualidad:</strong> te pedimos llegar a tiempo. Contamos con una tolerancia de {toleranciaLlegadaMinutos} minutos. Después de ese tiempo, podemos reprogramar tu cita para no afectar a las siguientes clientas.</li><li><strong>Reagendar:</strong> avísanos lo antes posible. Con aviso previo, puedes reagendar sin costo y tu anticipo se respeta para la nueva fecha.</li><li><strong>Cancelar:</strong> si al pagar tu anticipo faltan más de 10 días hábiles para tu cita, puedes cancelarla dentro de los 5 días hábiles siguientes a tu pago y te devolvemos el anticipo completo. Si faltan 10 días hábiles o menos, al cancelar el anticipo no se devuelve, pero puedes reagendar con aviso previo y tu anticipo se respeta. Consulta nuestra <a href="/politica-de-reembolsos#anticipos">Política de Anticipos</a>.</li><li>Si no llegas y no avisas, el anticipo no se devuelve y podríamos limitar tus citas en línea. En ese caso podrás atenderte por turno en el salón.</li><li>Si apartas para pagar en el salón y no llegas a pagar a tiempo sin avisar, tus siguientes citas se apartan pagando el anticipo en línea durante {mesesSoloPagoEnLinea} meses.</li><li>Si nosotras tenemos que cancelar tu cita, te devolvemos tu anticipo completo.</li></ol>
+
+## Tratamientos químicos y cuidado posterior {#tratamientos-quimicos}
+
+1. Antes de un tratamiento químico (alaciados, nanoplastia, keratina, botox capilar y similares) hacemos una valoración de tu cabello.
+2. Es tu responsabilidad informarnos de alergias, sensibilidad, embarazo, condiciones del cuero cabelludo y tratamientos o tintes previos. Si la información es incompleta, el resultado puede verse afectado.
+3. Si después de la valoración un tratamiento no es seguro para tu cabello, podemos recomendarte otro o no realizarlo.
+4. El resultado y la duración dependen del tipo de cabello y de seguir las indicaciones de cuidado y los productos recomendados.
+
+## Garantía de satisfacción {#garantia}
+
+Queremos que salgas feliz. Si un servicio no te dejó satisfecha, contáctanos dentro de los {diasGarantia} días siguientes. Revisaremos el caso contigo y, cuando corresponda, haremos un ajuste o corrección sin costo. La garantía aplica cuando se siguieron las indicaciones de cuidado posterior que te dimos.
+
+## Fotografías de nuestro trabajo {#fotografias}
+
+Podemos tomar fotos o videos de tu resultado para compartirlos en nuestra galería y redes sociales, solo con tu autorización. Puedes negarte o pedir que retiremos una publicación en cualquier momento.
+
+## Facturación {#facturacion}
+
+Si necesitas factura, solicítala con tus datos fiscales (RFC, razón social, régimen fiscal, código postal y uso de CFDI) dentro del mismo mes de tu compra o servicio.
+
+## Datos personales {#datos-personales}
+
+Tratamos tus datos personales de acuerdo con nuestro [Aviso de Privacidad](/aviso-de-privacidad). Ahí te explicamos qué datos recabamos, para qué los usamos (incluidas las finalidades adicionales, a las que puedes negarte), con quién los compartimos y cómo ejercer tus derechos.
+
+## Propiedad intelectual {#propiedad-intelectual}
+
+El logotipo, nombre comercial, fotografías y contenidos de este sitio pertenecen a Mirú Franco Salón Beauty o a sus respectivos dueños. Las marcas de los productos que vendemos pertenecen a sus fabricantes. No está permitido copiarlos ni usarlos sin autorización.
+
+## Cambios a estos términos {#cambios-a-estos-terminos}
+
+Podemos actualizar estos términos. La versión vigente siempre estará publicada en esta página con su número de versión y su fecha de vigencia. Los pedidos y citas confirmados se rigen por los términos vigentes al momento de confirmarlos.
+
+## Quejas y legislación aplicable {#quejas}
+
+Si tienes una queja, escríbenos primero. Queremos resolverla contigo. Estos términos se rigen por las leyes de los Estados Unidos Mexicanos. Para cualquier controversia, las partes se someten a la Procuraduría Federal del Consumidor (Profeco) en la vía administrativa y a los tribunales competentes de Huejutla de Reyes, Hidalgo.
+
+**Procuraduría Federal del Consumidor (Profeco):** Teléfono del Consumidor [55 5568 8722](tel:+525555688722) (CDMX y zona metropolitana) y [800 468 8722](tel:+528004688722) (resto del país), sitio <a href="https://www.gob.mx/profeco" target="_blank" rel="noopener noreferrer">www.gob.mx/profeco<span class="sr-only"> (se abre en otra pestaña)</span></a>.',
+   '{"diasCambioProducto":"7","diasResguardo":"15","toleranciaLlegadaMinutos":"15","diasGarantia":"7","plazoPagoLineaHoras":"24","plazoAnticipoHoras":"2","minutosAntesPagoSalon":"15","minutosLlegadaAntes":"20","mesesSoloPagoEnLinea":"6","diasPrepararApartado":"3","diaRecordatorioRecoger":"3","diasCancelarNoRecogido":"7"}', true, 'Versión 2.0 publicada en la web el 14 de octubre de 2026, antes del editor de documentos legales. Se sembró tal cual: mismo texto y mismo hash.'),
+  ('aviso-privacidad', '2.0', '<main class="mf-terminos"><div class="mf-terminos__marco layout-gutter-x"><header class="mf-terminos__cabecera"><h1 class="text-elegant-title">Aviso de Privacidad Integral</h1><p class="mf-terminos__marca">Mirú Franco Salón Beauty</p></header><div class="mf-terminos__cuerpo"><nav aria-label="Índice del aviso de privacidad" class="mf-terminos__indice"><p class="mf-terminos__indice-titulo">En esta página</p><ol class="mf-terminos__indice-lista"><li><a href="#responsable"><span class="mf-terminos__num">1.</span> Responsable de tus datos</a></li><li><a href="#datos-que-recabamos"><span class="mf-terminos__num">2.</span> Datos personales que recabamos</a></li><li><a href="#datos-sensibles"><span class="mf-terminos__num">3.</span> Datos personales sensibles</a></li><li><a href="#finalidades"><span class="mf-terminos__num">4.</span> Para qué usamos tus datos</a></li><li><a href="#con-quien-compartimos"><span class="mf-terminos__num">5.</span> Con quién compartimos tus datos</a></li><li><a href="#derechos-arco"><span class="mf-terminos__num">6.</span> Tus derechos ARCO</a></li><li><a href="#conservacion"><span class="mf-terminos__num">7.</span> Cuánto tiempo guardamos tus datos</a></li><li><a href="#cookies"><span class="mf-terminos__num">8.</span> Cookies</a></li><li><a href="#seguridad"><span class="mf-terminos__num">9.</span> Seguridad</a></li><li><a href="#cambios-a-este-aviso"><span class="mf-terminos__num">10.</span> Cambios a este aviso</a></li><li><a href="#autoridad"><span class="mf-terminos__num">11.</span> Autoridad</a></li></ol></nav><details class="mf-terminos__plegable"><summary><span>Índice de secciones</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down mf-terminos__chevron" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></summary><nav aria-label="Índice del aviso de privacidad"><ol class="mf-terminos__indice-lista"><li><a href="#responsable"><span class="mf-terminos__num">1.</span> Responsable de tus datos</a></li><li><a href="#datos-que-recabamos"><span class="mf-terminos__num">2.</span> Datos personales que recabamos</a></li><li><a href="#datos-sensibles"><span class="mf-terminos__num">3.</span> Datos personales sensibles</a></li><li><a href="#finalidades"><span class="mf-terminos__num">4.</span> Para qué usamos tus datos</a></li><li><a href="#con-quien-compartimos"><span class="mf-terminos__num">5.</span> Con quién compartimos tus datos</a></li><li><a href="#derechos-arco"><span class="mf-terminos__num">6.</span> Tus derechos ARCO</a></li><li><a href="#conservacion"><span class="mf-terminos__num">7.</span> Cuánto tiempo guardamos tus datos</a></li><li><a href="#cookies"><span class="mf-terminos__num">8.</span> Cookies</a></li><li><a href="#seguridad"><span class="mf-terminos__num">9.</span> Seguridad</a></li><li><a href="#cambios-a-este-aviso"><span class="mf-terminos__num">10.</span> Cambios a este aviso</a></li><li><a href="#autoridad"><span class="mf-terminos__num">11.</span> Autoridad</a></li></ol></nav></details><article class="mf-legal mf-terminos__texto"><p class="mb-8 flex items-start gap-2 text-sm font-medium" style="color:var(--menu-texto-principal)"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-file-check-corner mt-1 shrink-0" aria-hidden="true" style="color:var(--logo-branding)"><path d="M10.5 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v6"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="m14 20 2 2 4-4"></path></svg><span>Versión 2.0. Vigente desde el <time dateTime="2026-10-14">14 de octubre de 2026</time>.</span></p><section id="responsable" aria-labelledby="responsable-titulo" class="mf-terminos__seccion"><h2 id="responsable-titulo"><span class="mf-terminos__num">1.</span> Responsable de tus datos</h2><p><strong>Mildred Rubí Franco Martínez</strong>, con nombre comercial <strong>Mirú Franco Salón Beauty</strong>, con domicilio en Segunda Cerrada de Allende No. 15, Col. Juárez, Huejutla de Reyes, Hidalgo, C.P. 43000, es responsable del tratamiento de tus datos personales, de acuerdo con la Ley Federal de Protección de Datos Personales en Posesión de los Particulares, publicada en el Diario Oficial de la Federación el 20 de marzo de 2025.</p><p><strong>Persona designada de datos personales:</strong> Mildred Rubí Franco Martínez. Ella atiende tus solicitudes sobre tus datos: derechos ARCO, revocación del consentimiento y limitación de su uso.</p><p>Contacto para temas de privacidad: <strong><a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a></strong>, o por WhatsApp al <a href="tel:+527711867645">771 186 7645</a>.</p></section><section id="datos-que-recabamos" aria-labelledby="datos-que-recabamos-titulo" class="mf-terminos__seccion"><h2 id="datos-que-recabamos-titulo"><span class="mf-terminos__num">2.</span> Datos personales que recabamos</h2><p>Los obtenemos cuando creas tu cuenta, agendas una cita, compras en la tienda en línea, nos escribes o acudes al salón.</p><ul><li><strong>Identificación y contacto:</strong> nombre, correo electrónico, teléfono y foto de perfil. La fecha de nacimiento es opcional: solo la guardamos si nos la das. Si entras con Google, recibimos tu nombre, correo y foto de esa cuenta.</li><li><strong>Seguridad de tu cuenta:</strong> contraseña (guardada cifrada, nadie puede leerla), pregunta y respuesta de seguridad, y registros de inicio de sesión.</li><li><strong>Perfil capilar (opcional):</strong> tipo de cabello, color natural, color actual y productos que has usado. Solo lo guardamos si nos lo das.</li><li><strong>Historial con nosotras:</strong> citas, servicios realizados, pedidos, pagos, valoraciones, quejas y seguimientos posteriores al servicio.</li><li><strong>Facturación:</strong> RFC, razón social y demás datos fiscales, solo si pides factura.</li><li><strong>Preferencias:</strong> si deseas recibir promociones y por qué medio quieres recibir avisos.</li></ul><p><strong>Datos de tu tarjeta:</strong> nunca recibimos ni guardamos el número completo ni el código de seguridad de tu tarjeta. Los pagos en línea los procesa directamente Mercado Pago. Si guardas una tarjeta para pagar más rápido, conservamos solo lo necesario para reconocerla (marca, banco, tipo, terminación y vencimiento) y la referencia que nos da Mercado Pago.</p></section><section id="datos-sensibles" aria-labelledby="datos-sensibles-titulo" class="mf-terminos__seccion"><h2 id="datos-sensibles-titulo"><span class="mf-terminos__num">3.</span> Datos personales sensibles</h2><p>Para cuidar tu salud y la seguridad de los tratamientos podemos pedirte información sobre <strong>alergias, sensibilidad en la piel o cuero cabelludo y embarazo</strong>. Estos datos son sensibles.</p><p>Solo los tratamos con tu <strong>consentimiento expreso</strong>, como pide el artículo 8 de la ley, que nos das al marcar la casilla correspondiente cuando los registras. Los usamos únicamente para decidir si un tratamiento es seguro para ti. Puedes negarte a darlos, pero entonces no podremos realizar tratamientos químicos que requieran esa valoración. Puedes revocar este consentimiento cuando quieras, como se explica en la sección 6.</p></section><section id="finalidades" aria-labelledby="finalidades-titulo" class="mf-terminos__seccion"><h2 id="finalidades-titulo"><span class="mf-terminos__num">4.</span> Para qué usamos tus datos</h2><h3>Finalidades necesarias para darte el servicio</h3><p>Son indispensables para la relación que tienes con nosotras, por eso no requieren tu consentimiento. La excepción son tus datos de salud: solo los usamos con tu consentimiento expreso (sección 3).</p><ol><li>Crear y administrar tu cuenta y mantenerla segura.</li><li>Agendar, confirmar, reprogramar y darle seguimiento a tus citas.</li><li>Valorar tu cabello y elegir el tratamiento adecuado.</li><li>Procesar tus pedidos, pagos, apartados, cambios y reembolsos, y avisarte cuando tu pedido esté listo para recoger.</li><li>Emitir tus facturas cuando las pidas.</li><li>Atender tus dudas, quejas y la garantía de nuestros servicios.</li><li>Enviarte avisos sobre tus citas y pedidos.</li><li>Cumplir obligaciones legales y fiscales.</li></ol><h3>Finalidades adicionales (requieren tu consentimiento y puedes negarte)</h3><ol><li>Enviarte promociones, novedades y descuentos.</li><li>Mostrarte recomendaciones de productos y servicios según lo que has comprado o agendado.</li><li>Pedirte tu opinión sobre nuestros servicios y productos.</li><li>Publicar fotos o videos de tu resultado en nuestra galería y redes sociales, solo con tu autorización en cada caso.</li></ol><p>Para dejar de recibir promociones, desactiva «Recibir promociones» en «Mis datos y privacidad» de tu perfil. Para retirar tu autorización de fotos, revócala en esa misma sección. Para negarte a cualquier otra de estas finalidades, escríbenos al correo de privacidad. Negarte no afecta los servicios que nos pidas.</p><p>Para limitar el uso o la divulgación de tus datos en general, escríbenos al correo de privacidad con tu solicitud. La atendemos en los mismos plazos de la sección 6.</p></section><section id="con-quien-compartimos" aria-labelledby="con-quien-compartimos-titulo" class="mf-terminos__seccion"><h2 id="con-quien-compartimos-titulo"><span class="mf-terminos__num">5.</span> Con quién compartimos tus datos</h2><p><strong>No vendemos ni rentamos tus datos.</strong></p><p>Para operar el sitio usamos proveedores que tratan tus datos solo por cuenta nuestra y bajo nuestras instrucciones:</p><ul><li>alojamiento del sitio y de la base de datos;</li><li>almacenamiento de imágenes;</li><li>envío de correos y notificaciones;</li><li>procesamiento de pagos (Mercado Pago);</li><li>inicio de sesión con Google, si lo eliges;</li><li>nuestra contadora, para emitir facturas.</li></ul><p>Solo entregaremos tus datos a autoridades cuando una ley o una orden de autoridad competente lo exija. Para esto no necesitamos tu consentimiento.</p></section><section id="derechos-arco" aria-labelledby="derechos-arco-titulo" class="mf-terminos__seccion"><h2 id="derechos-arco-titulo"><span class="mf-terminos__num">6.</span> Tus derechos ARCO</h2><p>Tienes derecho a:</p><ul><li><strong>Acceder</strong> a tus datos;</li><li><strong>Rectificarlos</strong> si son inexactos;</li><li><strong>Cancelarlos</strong> cuando ya no sean necesarios;</li><li><strong>Oponerte</strong> a su uso para fines específicos.</li></ul><p>También puedes <strong>revocar</strong> el consentimiento que nos diste, salvo cuando una obligación legal nos impida hacerlo.</p><p>Puedes ejercerlos desde «Mis datos y privacidad» en tu perfil: ahí puedes descargar tus datos, pedir una rectificación o la cancelación de tu cuenta y revocar tus consentimientos.</p><p>Si prefieres el correo, escribe a <strong><a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a></strong> con:</p><ol><li>tu nombre completo y el correo con el que tienes tu cuenta;</li><li>una identificación oficial, o la de tu representante legal con el documento que lo acredite;</li><li>una descripción clara del derecho que quieres ejercer y de los datos de que se trata;</li><li>en caso de rectificación, el dato correcto y, si aplica, un documento que lo respalde.</li></ol><p>Te responderemos en un máximo de <strong>20 días</strong> (hábiles, conforme a la ley del procedimiento administrativo) desde que recibamos tu solicitud. Si tu solicitud procede, la haremos efectiva dentro de los <strong>15 días</strong> siguientes a nuestra respuesta, contados de la misma forma. Cada plazo puede ampliarse una sola vez por un periodo igual cuando el caso lo justifique; si eso pasa, te lo avisaremos.</p><p>Ejercer tus derechos es gratuito.</p><p><strong>Para revocar tu consentimiento</strong>, hazlo en «Mis datos y privacidad» de tu perfil, donde se aplica de inmediato, o envía tu solicitud a <a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a> con los datos de la lista anterior. Por correo te responderemos en los mismos plazos.</p><p>Algunos datos también los puedes corregir directamente desde tu perfil.</p></section><section id="conservacion" aria-labelledby="conservacion-titulo" class="mf-terminos__seccion"><h2 id="conservacion-titulo"><span class="mf-terminos__num">7.</span> Cuánto tiempo guardamos tus datos</h2><ul><li>Los datos de tu cuenta, mientras esté activa.</li><li>Los datos de pagos y facturas, al menos 5 años (artículo 30 del Código Fiscal de la Federación).</li><li>Tus datos sensibles se borran cuando lo pidas o cuando cierres tu cuenta.</li></ul><p>Después de esos plazos los eliminamos o los dejamos anónimos.</p><p><strong>Si cancelas tu cuenta</strong>, borramos o anonimizamos tus datos de identificación y contacto, tus datos de salud y de tu cabello, tus direcciones, tus tarjetas guardadas, las notas sobre ti en pedidos, cotizaciones, ventas y seguimientos, y tus sesiones y avisos; conservamos, ya sin tu nombre, lo que la ley nos obliga a guardar (pedidos, pagos, facturas y ventas, por 5 años) y el historial de tus citas, quejas y valoraciones, junto con la constancia de tus consentimientos y de tu solicitud.</p></section><section id="cookies" aria-labelledby="cookies-titulo" class="mf-terminos__seccion"><h2 id="cookies-titulo"><span class="mf-terminos__num">8.</span> Cookies</h2><p>Usamos solo cookies estrictamente necesarias: la cookie de sesión mf_session, que mantiene tu sesión iniciada y protege tu cuenta, y datos guardados en tu navegador, como tu carrito o el modo claro u oscuro. No usamos cookies de analítica ni de publicidad. Sin ellas el sitio no funciona correctamente. Puedes borrarlas desde tu navegador, pero tendrás que volver a iniciar sesión.</p><p>Conoce la lista completa, para qué sirve cada una, cuánto dura y cómo deshabilitarlas en nuestra <a href="/politica-de-cookies">Política de Cookies</a>.</p></section><section id="seguridad" aria-labelledby="seguridad-titulo" class="mf-terminos__seccion"><h2 id="seguridad-titulo"><span class="mf-terminos__num">9.</span> Seguridad</h2><p>Protegemos tus datos con:</p><ul><li>conexiones cifradas;</li><li>contraseñas guardadas cifradas;</li><li>acceso restringido para el personal según su función;</li><li>registros de seguridad.</li></ul><p>Si ocurre una vulneración que afecte tus derechos de forma significativa, te lo informaremos.</p></section><section id="cambios-a-este-aviso" aria-labelledby="cambios-a-este-aviso-titulo" class="mf-terminos__seccion"><h2 id="cambios-a-este-aviso-titulo"><span class="mf-terminos__num">10.</span> Cambios a este aviso</h2><p>Si este aviso cambia, publicaremos la nueva versión en esta página con su número de versión y su fecha de vigencia. Si el cambio afecta las finalidades o requiere un nuevo consentimiento, te lo avisaremos por correo o al iniciar sesión.</p></section><section id="autoridad" aria-labelledby="autoridad-titulo" class="mf-terminos__seccion"><h2 id="autoridad-titulo"><span class="mf-terminos__num">11.</span> Autoridad</h2><p>La autoridad en materia de protección de datos personales es la <strong>Secretaría Anticorrupción y Buen Gobierno</strong>. Si consideras que tu derecho a la protección de datos personales fue vulnerado, o no estás conforme con la respuesta que te dimos a una solicitud, puedes presentar ante ella una solicitud de protección de datos dentro de los 15 días siguientes a la fecha en que recibas nuestra respuesta (artículo 40 de la ley).</p></section></article></div></div></main>',
+   '## Responsable de tus datos {#responsable}
+
+**Mildred Rubí Franco Martínez**, con nombre comercial **Mirú Franco Salón Beauty**, con domicilio en Segunda Cerrada de Allende No. 15, Col. Juárez, Huejutla de Reyes, Hidalgo, C.P. 43000, es responsable del tratamiento de tus datos personales, de acuerdo con la Ley Federal de Protección de Datos Personales en Posesión de los Particulares, publicada en el Diario Oficial de la Federación el 20 de marzo de 2025.
+
+**Persona designada de datos personales:** Mildred Rubí Franco Martínez. Ella atiende tus solicitudes sobre tus datos: derechos ARCO, revocación del consentimiento y limitación de su uso.
+
+Contacto para temas de privacidad: **[mildredfranco24@gmail.com](mailto:mildredfranco24@gmail.com)**, o por WhatsApp al [771 186 7645](tel:+527711867645).
+
+## Datos personales que recabamos {#datos-que-recabamos}
+
+Los obtenemos cuando creas tu cuenta, agendas una cita, compras en la tienda en línea, nos escribes o acudes al salón.
+
+- **Identificación y contacto:** nombre, correo electrónico, teléfono y foto de perfil. La fecha de nacimiento es opcional: solo la guardamos si nos la das. Si entras con Google, recibimos tu nombre, correo y foto de esa cuenta.
+- **Seguridad de tu cuenta:** contraseña (guardada cifrada, nadie puede leerla), pregunta y respuesta de seguridad, y registros de inicio de sesión.
+- **Perfil capilar (opcional):** tipo de cabello, color natural, color actual y productos que has usado. Solo lo guardamos si nos lo das.
+- **Historial con nosotras:** citas, servicios realizados, pedidos, pagos, valoraciones, quejas y seguimientos posteriores al servicio.
+- **Facturación:** RFC, razón social y demás datos fiscales, solo si pides factura.
+- **Preferencias:** si deseas recibir promociones y por qué medio quieres recibir avisos.
+
+**Datos de tu tarjeta:** nunca recibimos ni guardamos el número completo ni el código de seguridad de tu tarjeta. Los pagos en línea los procesa directamente Mercado Pago. Si guardas una tarjeta para pagar más rápido, conservamos solo lo necesario para reconocerla (marca, banco, tipo, terminación y vencimiento) y la referencia que nos da Mercado Pago.
+
+## Datos personales sensibles {#datos-sensibles}
+
+Para cuidar tu salud y la seguridad de los tratamientos podemos pedirte información sobre **alergias, sensibilidad en la piel o cuero cabelludo y embarazo**. Estos datos son sensibles.
+
+Solo los tratamos con tu **consentimiento expreso**, como pide el artículo 8 de la ley, que nos das al marcar la casilla correspondiente cuando los registras. Los usamos únicamente para decidir si un tratamiento es seguro para ti. Puedes negarte a darlos, pero entonces no podremos realizar tratamientos químicos que requieran esa valoración. Puedes revocar este consentimiento cuando quieras, como se explica en la sección 6.
+
+## Para qué usamos tus datos {#finalidades}
+
+### Finalidades necesarias para darte el servicio
+
+Son indispensables para la relación que tienes con nosotras, por eso no requieren tu consentimiento. La excepción son tus datos de salud: solo los usamos con tu consentimiento expreso (sección 3).
+
+1. Crear y administrar tu cuenta y mantenerla segura.
+2. Agendar, confirmar, reprogramar y darle seguimiento a tus citas.
+3. Valorar tu cabello y elegir el tratamiento adecuado.
+4. Procesar tus pedidos, pagos, apartados, cambios y reembolsos, y avisarte cuando tu pedido esté listo para recoger.
+5. Emitir tus facturas cuando las pidas.
+6. Atender tus dudas, quejas y la garantía de nuestros servicios.
+7. Enviarte avisos sobre tus citas y pedidos.
+8. Cumplir obligaciones legales y fiscales.
+
+### Finalidades adicionales (requieren tu consentimiento y puedes negarte)
+
+1. Enviarte promociones, novedades y descuentos.
+2. Mostrarte recomendaciones de productos y servicios según lo que has comprado o agendado.
+3. Pedirte tu opinión sobre nuestros servicios y productos.
+4. Publicar fotos o videos de tu resultado en nuestra galería y redes sociales, solo con tu autorización en cada caso.
+
+Para dejar de recibir promociones, desactiva «Recibir promociones» en «Mis datos y privacidad» de tu perfil. Para retirar tu autorización de fotos, revócala en esa misma sección. Para negarte a cualquier otra de estas finalidades, escríbenos al correo de privacidad. Negarte no afecta los servicios que nos pidas.
+
+Para limitar el uso o la divulgación de tus datos en general, escríbenos al correo de privacidad con tu solicitud. La atendemos en los mismos plazos de la sección 6.
+
+## Con quién compartimos tus datos {#con-quien-compartimos}
+
+**No vendemos ni rentamos tus datos.**
+
+Para operar el sitio usamos proveedores que tratan tus datos solo por cuenta nuestra y bajo nuestras instrucciones:
+
+- alojamiento del sitio y de la base de datos;
+- almacenamiento de imágenes;
+- envío de correos y notificaciones;
+- procesamiento de pagos (Mercado Pago);
+- inicio de sesión con Google, si lo eliges;
+- nuestra contadora, para emitir facturas.
+
+Solo entregaremos tus datos a autoridades cuando una ley o una orden de autoridad competente lo exija. Para esto no necesitamos tu consentimiento.
+
+## Tus derechos ARCO {#derechos-arco}
+
+Tienes derecho a:
+
+- **Acceder** a tus datos;
+- **Rectificarlos** si son inexactos;
+- **Cancelarlos** cuando ya no sean necesarios;
+- **Oponerte** a su uso para fines específicos.
+
+También puedes **revocar** el consentimiento que nos diste, salvo cuando una obligación legal nos impida hacerlo.
+
+Puedes ejercerlos desde «Mis datos y privacidad» en tu perfil: ahí puedes descargar tus datos, pedir una rectificación o la cancelación de tu cuenta y revocar tus consentimientos.
+
+Si prefieres el correo, escribe a **[mildredfranco24@gmail.com](mailto:mildredfranco24@gmail.com)** con:
+
+1. tu nombre completo y el correo con el que tienes tu cuenta;
+2. una identificación oficial, o la de tu representante legal con el documento que lo acredite;
+3. una descripción clara del derecho que quieres ejercer y de los datos de que se trata;
+4. en caso de rectificación, el dato correcto y, si aplica, un documento que lo respalde.
+
+Te responderemos en un máximo de **20 días** (hábiles, conforme a la ley del procedimiento administrativo) desde que recibamos tu solicitud. Si tu solicitud procede, la haremos efectiva dentro de los **15 días** siguientes a nuestra respuesta, contados de la misma forma. Cada plazo puede ampliarse una sola vez por un periodo igual cuando el caso lo justifique; si eso pasa, te lo avisaremos.
+
+Ejercer tus derechos es gratuito.
+
+**Para revocar tu consentimiento**, hazlo en «Mis datos y privacidad» de tu perfil, donde se aplica de inmediato, o envía tu solicitud a [mildredfranco24@gmail.com](mailto:mildredfranco24@gmail.com) con los datos de la lista anterior. Por correo te responderemos en los mismos plazos.
+
+Algunos datos también los puedes corregir directamente desde tu perfil.
+
+## Cuánto tiempo guardamos tus datos {#conservacion}
+
+- Los datos de tu cuenta, mientras esté activa.
+- Los datos de pagos y facturas, al menos 5 años (artículo 30 del Código Fiscal de la Federación).
+- Tus datos sensibles se borran cuando lo pidas o cuando cierres tu cuenta.
+
+Después de esos plazos los eliminamos o los dejamos anónimos.
+
+**Si cancelas tu cuenta**, borramos o anonimizamos tus datos de identificación y contacto, tus datos de salud y de tu cabello, tus direcciones, tus tarjetas guardadas, las notas sobre ti en pedidos, cotizaciones, ventas y seguimientos, y tus sesiones y avisos; conservamos, ya sin tu nombre, lo que la ley nos obliga a guardar (pedidos, pagos, facturas y ventas, por 5 años) y el historial de tus citas, quejas y valoraciones, junto con la constancia de tus consentimientos y de tu solicitud.
+
+## Cookies {#cookies}
+
+Usamos solo cookies estrictamente necesarias: la cookie de sesión mf_session, que mantiene tu sesión iniciada y protege tu cuenta, y datos guardados en tu navegador, como tu carrito o el modo claro u oscuro. No usamos cookies de analítica ni de publicidad. Sin ellas el sitio no funciona correctamente. Puedes borrarlas desde tu navegador, pero tendrás que volver a iniciar sesión.
+
+Conoce la lista completa, para qué sirve cada una, cuánto dura y cómo deshabilitarlas en nuestra [Política de Cookies](/politica-de-cookies).
+
+## Seguridad {#seguridad}
+
+Protegemos tus datos con:
+
+- conexiones cifradas;
+- contraseñas guardadas cifradas;
+- acceso restringido para el personal según su función;
+- registros de seguridad.
+
+Si ocurre una vulneración que afecte tus derechos de forma significativa, te lo informaremos.
+
+## Cambios a este aviso {#cambios-a-este-aviso}
+
+Si este aviso cambia, publicaremos la nueva versión en esta página con su número de versión y su fecha de vigencia. Si el cambio afecta las finalidades o requiere un nuevo consentimiento, te lo avisaremos por correo o al iniciar sesión.
+
+## Autoridad {#autoridad}
+
+La autoridad en materia de protección de datos personales es la **Secretaría Anticorrupción y Buen Gobierno**. Si consideras que tu derecho a la protección de datos personales fue vulnerado, o no estás conforme con la respuesta que te dimos a una solicitud, puedes presentar ante ella una solicitud de protección de datos dentro de los 15 días siguientes a la fecha en que recibas nuestra respuesta (artículo 40 de la ley).',
+   '{}', true, 'Versión 2.0 publicada en la web el 14 de octubre de 2026, antes del editor de documentos legales. Se sembró tal cual: mismo texto y mismo hash.'),
+  ('cookies', '1.1', '<main class="mf-terminos"><div class="mf-terminos__marco layout-gutter-x"><header class="mf-terminos__cabecera"><h1 class="text-elegant-title">Política de Cookies</h1><p class="mf-terminos__marca">Mirú Franco Salón Beauty</p></header><div class="mf-terminos__cuerpo"><nav aria-label="Índice de la política de cookies" class="mf-terminos__indice"><p class="mf-terminos__indice-titulo">En esta página</p><ol class="mf-terminos__indice-lista"><li><a href="#que-son"><span class="mf-terminos__num">1.</span> Qué son las cookies</a></li><li><a href="#cookies-que-usamos"><span class="mf-terminos__num">2.</span> Cookies que usamos</a></li><li><a href="#preferencias-en-tu-navegador"><span class="mf-terminos__num">3.</span> Datos que guardamos en tu navegador</a></li><li><a href="#lo-que-no-usamos"><span class="mf-terminos__num">4.</span> Lo que no usamos</a></li><li><a href="#servicios-de-terceros"><span class="mf-terminos__num">5.</span> Servicios de terceros</a></li><li><a href="#como-deshabilitarlas"><span class="mf-terminos__num">6.</span> Cómo deshabilitarlas</a></li><li><a href="#cambios-a-esta-politica"><span class="mf-terminos__num">7.</span> Cambios a esta política</a></li><li><a href="#contacto"><span class="mf-terminos__num">8.</span> Contacto</a></li></ol></nav><details class="mf-terminos__plegable"><summary><span>Índice de secciones</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down mf-terminos__chevron" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></summary><nav aria-label="Índice de la política de cookies"><ol class="mf-terminos__indice-lista"><li><a href="#que-son"><span class="mf-terminos__num">1.</span> Qué son las cookies</a></li><li><a href="#cookies-que-usamos"><span class="mf-terminos__num">2.</span> Cookies que usamos</a></li><li><a href="#preferencias-en-tu-navegador"><span class="mf-terminos__num">3.</span> Datos que guardamos en tu navegador</a></li><li><a href="#lo-que-no-usamos"><span class="mf-terminos__num">4.</span> Lo que no usamos</a></li><li><a href="#servicios-de-terceros"><span class="mf-terminos__num">5.</span> Servicios de terceros</a></li><li><a href="#como-deshabilitarlas"><span class="mf-terminos__num">6.</span> Cómo deshabilitarlas</a></li><li><a href="#cambios-a-esta-politica"><span class="mf-terminos__num">7.</span> Cambios a esta política</a></li><li><a href="#contacto"><span class="mf-terminos__num">8.</span> Contacto</a></li></ol></nav></details><article class="mf-legal mf-terminos__texto"><p class="mb-8 flex items-start gap-2 text-sm font-medium" style="color:var(--menu-texto-principal)"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-file-check-corner mt-1 shrink-0" aria-hidden="true" style="color:var(--logo-branding)"><path d="M10.5 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v6"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="m14 20 2 2 4-4"></path></svg><span>Versión 1.1. Vigente desde el <time dateTime="2026-10-16">16 de octubre de 2026</time>.</span></p><p class="mf-terminos__intro">En www.mirufranco.com usamos solo las cookies estrictamente necesarias para que el sitio funcione. Aquí te contamos cuáles son, qué otros datos guarda tu navegador, para qué sirven, cuánto duran y cómo puedes deshabilitarlos. Esta política complementa nuestro <a href="/aviso-de-privacidad">Aviso de Privacidad</a>.</p><section id="que-son" aria-labelledby="que-son-titulo" class="mf-terminos__seccion"><h2 id="que-son-titulo"><span class="mf-terminos__num">1.</span> Qué son las cookies</h2><p>Las cookies son pequeños archivos que un sitio guarda en tu navegador para reconocerte entre una página y otra, por ejemplo, para que no tengas que iniciar sesión cada vez que cambias de pantalla.</p></section><section id="cookies-que-usamos" aria-labelledby="cookies-que-usamos-titulo" class="mf-terminos__seccion"><h2 id="cookies-que-usamos-titulo"><span class="mf-terminos__num">2.</span> Cookies que usamos</h2><p>Hoy usamos dos cookies, propias y estrictamente necesarias:</p><ul><li><span><code>mf_session</code></span>. <strong>Para qué sirve:</strong> mantener tu sesión iniciada y proteger tu cuenta. Solo se crea cuando inicias sesión y no se puede leer desde otros sitios ni desde el código de la página. <strong>Cuánto dura:</strong> como máximo 24 horas. Se borra al cerrar sesión.</li><li><span><code>mf_registro_google</code></span>. <strong>Para qué sirve:</strong> proteger tu alta cuando te registras con Google: comprueba que terminas el registro en el mismo navegador donde entraste con Google, para que nadie pueda abrir tu cuenta desde otro equipo con un enlace. No se puede leer desde otros sitios ni desde el código de la página. <strong>Cuánto dura:</strong> 15 minutos como máximo. Se borra al terminar tu registro.</li></ul><p>Sin estas cookies no podrías entrar a tu cuenta, registrarte con Google, agendar citas ni comprar en la tienda en línea.</p></section><section id="preferencias-en-tu-navegador" aria-labelledby="preferencias-en-tu-navegador-titulo" class="mf-terminos__seccion"><h2 id="preferencias-en-tu-navegador-titulo"><span class="mf-terminos__num">3.</span> Datos que guardamos en tu navegador</h2><p>Además, el sitio guarda algunos datos en tu navegador que no son cookies, pero funcionan de forma parecida. No se mandan solos a nuestro servidor como las cookies: solo los usa el propio sitio para funcionar como esperas. Esta es la lista completa.</p><h3>En el almacenamiento local de tu navegador (localStorage)</h3><p>Se quedan en tu navegador hasta que se borran, aunque cierres la pestaña.</p><ul><li><span><code>theme</code></span>. <strong>Para qué sirve:</strong> recordar si elegiste el modo claro u oscuro. <strong>Cuánto dura:</strong> hasta que lo cambies o borres los datos del sitio.</li><li><span><code>miru-cart</code></span>. <strong>Para qué sirve:</strong> guardar los productos de tu carrito mientras compras. <strong>Cuánto dura:</strong> hasta que completes tu compra, vacíes el carrito o borres los datos del sitio.</li><li><span><code>user</code></span>. <strong>Para qué sirve:</strong> mostrar tu nombre y tu foto en el menú y abrir las pantallas de tu cuenta. Solo guarda tu identificador, tu nombre, tu correo, tu rol, tu foto y tus permisos; nunca tu teléfono, tu fecha de nacimiento ni tus datos de salud. <strong>Cuánto dura:</strong> hasta que cierres sesión o tu sesión venza.</li><li><span><code>lastLoginTime</code></span>. <strong>Para qué sirve:</strong> anotar cuándo iniciaste sesión, para no confundir una respuesta del servidor justo al entrar con una sesión vencida. <strong>Cuánto dura:</strong> hasta que cierres sesión o tu sesión venza.</li><li><span><code>sessionRenovarAntesDe</code></span>. <strong>Para qué sirve:</strong> anotar hasta cuándo se puede renovar tu sesión, para renovarla a tiempo sin pedirte que vuelvas a entrar. <strong>Cuánto dura:</strong> hasta que cierres sesión o tu sesión venza.</li><li><span><code>manualLogout</code></span>. <strong>Para qué sirve:</strong> saber que cerraste sesión por tu cuenta, para no mostrarte el aviso de sesión vencida. <strong>Cuánto dura:</strong> unos segundos. Se borra en cuanto termina de cerrarse tu sesión.</li><li><span><code>mf-aviso-cookies</code></span>. <strong>Para qué sirve:</strong> recordar que ya viste el aviso de cookies y de qué versión de esta política. <strong>Cuánto dura:</strong> hasta que borres los datos del sitio. Si publicamos una versión nueva de esta política, el aviso vuelve a aparecer.</li><li><span><code>resetPasswordToken</code></span><span>, <code>resetPasswordEmail</code></span><span> y <code>resetPasswordExpires</code></span>. <strong>Para qué sirve:</strong> terminar el cambio de tu contraseña cuando la olvidaste. Guardan el código temporal, tu correo y la hora en que vence ese código. <strong>Cuánto dura:</strong> el código vale 10 minutos. Se borran al cambiar tu contraseña o cuando el sitio detecta que ya vencieron.</li></ul><h3>En el almacenamiento de la pestaña (sessionStorage)</h3><p>Se borran solos al cerrar la pestaña.</p><ul><li><span><code>miru:regreso-tras-login</code></span>. <strong>Para qué sirve:</strong> llevarte de vuelta a la página en la que estabas después de entrar con Google. <strong>Cuánto dura:</strong> se borra al regresar de Google o al cerrar la pestaña.</li><li><span><code>resetToken</code></span>. <strong>Para qué sirve:</strong> guardar el código temporal para cambiar tu contraseña en esta pestaña. <strong>Cuánto dura:</strong> se borra al usarlo o al cerrar la pestaña.</li><li><span><code>lastResetEmail</code></span>. <strong>Para qué sirve:</strong> guardar el correo con el que acabas de cambiar tu contraseña. <strong>Cuánto dura:</strong> se borra al cerrar la pestaña.</li></ul><h3>Solo en el panel del personal del salón</h3><p>Estos datos solo se guardan en el navegador del personal que usa el panel de administración.</p><ul><li><span><code>base-datos-historial-exportaciones</code></span><span> y <code>base-datos-historial-backups</code></span>. <strong>Para qué sirve:</strong> mostrar el historial de las últimas exportaciones y respaldos de la base de datos hechos desde ese navegador. <strong>Cuánto dura:</strong> hasta que se borren los datos del sitio. Solo se guardan los más recientes.</li><li><span><code>backup-miru-auto-enabled</code></span><span>, <code>backup-miru-auto-time</code></span><span>, <code>backup-miru-auto-second</code></span><span>, <code>backup-miru-auto-frequency</code></span><span>, <code>backup-miru-auto-weekday</code></span><span>, <code>backup-miru-auto-monthday</code></span><span> y <code>backup-miru-auto-last-run-key</code></span>. <strong>Para qué sirve:</strong> recordar las preferencias del respaldo automático: si está activo, con qué frecuencia y a qué hora corre, y la última vez que corrió. <strong>Cuánto dura:</strong> hasta que se cambien o se borren los datos del sitio.</li></ul><p>Si tu navegador todavía tiene datos de versiones anteriores del sitio (token, authToken, sessionRefreshedAt o base-datos-ultima-exportacion), el sitio los borra al leerlos.</p></section><section id="lo-que-no-usamos" aria-labelledby="lo-que-no-usamos-titulo" class="mf-terminos__seccion"><h2 id="lo-que-no-usamos-titulo"><span class="mf-terminos__num">4.</span> Lo que no usamos</h2><p><strong>No usamos cookies de analítica ni de publicidad.</strong> No medimos tu navegación con herramientas de terceros ni te mostramos anuncios basados en lo que visitas.</p></section><section id="servicios-de-terceros" aria-labelledby="servicios-de-terceros-titulo" class="mf-terminos__seccion"><h2 id="servicios-de-terceros-titulo"><span class="mf-terminos__num">5.</span> Servicios de terceros</h2><p>Si eliges pagar con Mercado Pago o entrar con tu cuenta de Google, pasas a sus sitios. Allí usan sus propias cookies, según sus propias políticas.</p></section><section id="como-deshabilitarlas" aria-labelledby="como-deshabilitarlas-titulo" class="mf-terminos__seccion"><h2 id="como-deshabilitarlas-titulo"><span class="mf-terminos__num">6.</span> Cómo deshabilitarlas</h2><p>Puedes borrar o bloquear las cookies y los datos guardados desde la configuración de tu navegador, normalmente en el apartado de privacidad o de datos de sitios (Chrome, Safari, Firefox y Edge lo permiten).</p><p>Si las deshabilitas, el sitio seguirá mostrándose, pero no podrás iniciar sesión, tu carrito se vaciará y tendrás que volver a elegir el modo claro u oscuro.</p></section><section id="cambios-a-esta-politica" aria-labelledby="cambios-a-esta-politica-titulo" class="mf-terminos__seccion"><h2 id="cambios-a-esta-politica-titulo"><span class="mf-terminos__num">7.</span> Cambios a esta política</h2><p>Si empezamos a usar otras cookies, por ejemplo de analítica, actualizaremos esta política con su nuevo número de versión y su fecha de vigencia y, cuando la ley lo pida, te pediremos tu consentimiento antes de usarlas.</p></section><section id="contacto" aria-labelledby="contacto-titulo" class="mf-terminos__seccion"><h2 id="contacto-titulo"><span class="mf-terminos__num">8.</span> Contacto</h2><p>Si tienes dudas sobre esta política, escríbenos a <a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a>.</p></section></article></div></div></main>',
+   'En www.mirufranco.com usamos solo las cookies estrictamente necesarias para que el sitio funcione. Aquí te contamos cuáles son, qué otros datos guarda tu navegador, para qué sirven, cuánto duran y cómo puedes deshabilitarlos. Esta política complementa nuestro [Aviso de Privacidad](/aviso-de-privacidad).
+
+## Qué son las cookies {#que-son}
+
+Las cookies son pequeños archivos que un sitio guarda en tu navegador para reconocerte entre una página y otra, por ejemplo, para que no tengas que iniciar sesión cada vez que cambias de pantalla.
+
+## Cookies que usamos {#cookies-que-usamos}
+
+Hoy usamos dos cookies, propias y estrictamente necesarias:
+
+- <span>`mf_session`</span>. **Para qué sirve:** mantener tu sesión iniciada y proteger tu cuenta. Solo se crea cuando inicias sesión y no se puede leer desde otros sitios ni desde el código de la página. **Cuánto dura:** como máximo 24 horas. Se borra al cerrar sesión.
+- <span>`mf_registro_google`</span>. **Para qué sirve:** proteger tu alta cuando te registras con Google: comprueba que terminas el registro en el mismo navegador donde entraste con Google, para que nadie pueda abrir tu cuenta desde otro equipo con un enlace. No se puede leer desde otros sitios ni desde el código de la página. **Cuánto dura:** 15 minutos como máximo. Se borra al terminar tu registro.
+
+Sin estas cookies no podrías entrar a tu cuenta, registrarte con Google, agendar citas ni comprar en la tienda en línea.
+
+## Datos que guardamos en tu navegador {#preferencias-en-tu-navegador}
+
+Además, el sitio guarda algunos datos en tu navegador que no son cookies, pero funcionan de forma parecida. No se mandan solos a nuestro servidor como las cookies: solo los usa el propio sitio para funcionar como esperas. Esta es la lista completa.
+
+### En el almacenamiento local de tu navegador (localStorage)
+
+Se quedan en tu navegador hasta que se borran, aunque cierres la pestaña.
+
+- <span>`theme`</span>. **Para qué sirve:** recordar si elegiste el modo claro u oscuro. **Cuánto dura:** hasta que lo cambies o borres los datos del sitio.
+- <span>`miru-cart`</span>. **Para qué sirve:** guardar los productos de tu carrito mientras compras. **Cuánto dura:** hasta que completes tu compra, vacíes el carrito o borres los datos del sitio.
+- <span>`user`</span>. **Para qué sirve:** mostrar tu nombre y tu foto en el menú y abrir las pantallas de tu cuenta. Solo guarda tu identificador, tu nombre, tu correo, tu rol, tu foto y tus permisos; nunca tu teléfono, tu fecha de nacimiento ni tus datos de salud. **Cuánto dura:** hasta que cierres sesión o tu sesión venza.
+- <span>`lastLoginTime`</span>. **Para qué sirve:** anotar cuándo iniciaste sesión, para no confundir una respuesta del servidor justo al entrar con una sesión vencida. **Cuánto dura:** hasta que cierres sesión o tu sesión venza.
+- <span>`sessionRenovarAntesDe`</span>. **Para qué sirve:** anotar hasta cuándo se puede renovar tu sesión, para renovarla a tiempo sin pedirte que vuelvas a entrar. **Cuánto dura:** hasta que cierres sesión o tu sesión venza.
+- <span>`manualLogout`</span>. **Para qué sirve:** saber que cerraste sesión por tu cuenta, para no mostrarte el aviso de sesión vencida. **Cuánto dura:** unos segundos. Se borra en cuanto termina de cerrarse tu sesión.
+- <span>`mf-aviso-cookies`</span>. **Para qué sirve:** recordar que ya viste el aviso de cookies y de qué versión de esta política. **Cuánto dura:** hasta que borres los datos del sitio. Si publicamos una versión nueva de esta política, el aviso vuelve a aparecer.
+- <span>`resetPasswordToken`</span><span>, `resetPasswordEmail`</span><span> y `resetPasswordExpires`</span>. **Para qué sirve:** terminar el cambio de tu contraseña cuando la olvidaste. Guardan el código temporal, tu correo y la hora en que vence ese código. **Cuánto dura:** el código vale 10 minutos. Se borran al cambiar tu contraseña o cuando el sitio detecta que ya vencieron.
+
+### En el almacenamiento de la pestaña (sessionStorage)
+
+Se borran solos al cerrar la pestaña.
+
+- <span>`miru:regreso-tras-login`</span>. **Para qué sirve:** llevarte de vuelta a la página en la que estabas después de entrar con Google. **Cuánto dura:** se borra al regresar de Google o al cerrar la pestaña.
+- <span>`resetToken`</span>. **Para qué sirve:** guardar el código temporal para cambiar tu contraseña en esta pestaña. **Cuánto dura:** se borra al usarlo o al cerrar la pestaña.
+- <span>`lastResetEmail`</span>. **Para qué sirve:** guardar el correo con el que acabas de cambiar tu contraseña. **Cuánto dura:** se borra al cerrar la pestaña.
+
+### Solo en el panel del personal del salón
+
+Estos datos solo se guardan en el navegador del personal que usa el panel de administración.
+
+- <span>`base-datos-historial-exportaciones`</span><span> y `base-datos-historial-backups`</span>. **Para qué sirve:** mostrar el historial de las últimas exportaciones y respaldos de la base de datos hechos desde ese navegador. **Cuánto dura:** hasta que se borren los datos del sitio. Solo se guardan los más recientes.
+- <span>`backup-miru-auto-enabled`</span><span>, `backup-miru-auto-time`</span><span>, `backup-miru-auto-second`</span><span>, `backup-miru-auto-frequency`</span><span>, `backup-miru-auto-weekday`</span><span>, `backup-miru-auto-monthday`</span><span> y `backup-miru-auto-last-run-key`</span>. **Para qué sirve:** recordar las preferencias del respaldo automático: si está activo, con qué frecuencia y a qué hora corre, y la última vez que corrió. **Cuánto dura:** hasta que se cambien o se borren los datos del sitio.
+
+Si tu navegador todavía tiene datos de versiones anteriores del sitio (token, authToken, sessionRefreshedAt o base-datos-ultima-exportacion), el sitio los borra al leerlos.
+
+## Lo que no usamos {#lo-que-no-usamos}
+
+**No usamos cookies de analítica ni de publicidad.** No medimos tu navegación con herramientas de terceros ni te mostramos anuncios basados en lo que visitas.
+
+## Servicios de terceros {#servicios-de-terceros}
+
+Si eliges pagar con Mercado Pago o entrar con tu cuenta de Google, pasas a sus sitios. Allí usan sus propias cookies, según sus propias políticas.
+
+## Cómo deshabilitarlas {#como-deshabilitarlas}
+
+Puedes borrar o bloquear las cookies y los datos guardados desde la configuración de tu navegador, normalmente en el apartado de privacidad o de datos de sitios (Chrome, Safari, Firefox y Edge lo permiten).
+
+Si las deshabilitas, el sitio seguirá mostrándose, pero no podrás iniciar sesión, tu carrito se vaciará y tendrás que volver a elegir el modo claro u oscuro.
+
+## Cambios a esta política {#cambios-a-esta-politica}
+
+Si empezamos a usar otras cookies, por ejemplo de analítica, actualizaremos esta política con su nuevo número de versión y su fecha de vigencia y, cuando la ley lo pida, te pediremos tu consentimiento antes de usarlas.
+
+## Contacto {#contacto}
+
+Si tienes dudas sobre esta política, escríbenos a [mildredfranco24@gmail.com](mailto:mildredfranco24@gmail.com).',
+   '{}', false, 'Versión 1.1 publicada en la web el 16 de octubre de 2026, antes del editor de documentos legales: agrega la cookie estrictamente necesaria mf_registro_google del alta con Google (no pide volver a aceptar). Se sembró tal cual: mismo texto y mismo hash.'),
+  ('reembolsos', '1.0', '<main class="mf-terminos"><div class="mf-terminos__marco layout-gutter-x"><header class="mf-terminos__cabecera"><h1 class="text-elegant-title">Política de Reembolsos, Cambios y Cancelaciones</h1><p class="mf-terminos__marca">Mirú Franco Salón Beauty</p></header><div class="mf-terminos__cuerpo"><nav aria-label="Índice de la política de reembolsos" class="mf-terminos__indice"><p class="mf-terminos__indice-titulo">En esta página</p><ol class="mf-terminos__indice-lista"><li><a href="#revocacion"><span class="mf-terminos__num">1.</span> Tu derecho de revocación</a></li><li><a href="#cambios"><span class="mf-terminos__num">2.</span> Cambios de producto (beneficio adicional)</a></li><li><a href="#reembolsos"><span class="mf-terminos__num">3.</span> Otros casos con reembolso</a></li><li><a href="#cancelacion-de-pedidos"><span class="mf-terminos__num">4.</span> Cancelar un pedido</a></li><li><a href="#como-reembolsamos"><span class="mf-terminos__num">5.</span> Cómo hacemos los reembolsos</a></li><li><a href="#garantia"><span class="mf-terminos__num">6.</span> Garantía de servicios</a></li><li><a href="#anticipos"><span class="mf-terminos__num">7.</span> Anticipos de citas</a></li><li><a href="#quejas"><span class="mf-terminos__num">8.</span> Quejas</a></li></ol></nav><details class="mf-terminos__plegable"><summary><span>Índice de secciones</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down mf-terminos__chevron" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></summary><nav aria-label="Índice de la política de reembolsos"><ol class="mf-terminos__indice-lista"><li><a href="#revocacion"><span class="mf-terminos__num">1.</span> Tu derecho de revocación</a></li><li><a href="#cambios"><span class="mf-terminos__num">2.</span> Cambios de producto (beneficio adicional)</a></li><li><a href="#reembolsos"><span class="mf-terminos__num">3.</span> Otros casos con reembolso</a></li><li><a href="#cancelacion-de-pedidos"><span class="mf-terminos__num">4.</span> Cancelar un pedido</a></li><li><a href="#como-reembolsamos"><span class="mf-terminos__num">5.</span> Cómo hacemos los reembolsos</a></li><li><a href="#garantia"><span class="mf-terminos__num">6.</span> Garantía de servicios</a></li><li><a href="#anticipos"><span class="mf-terminos__num">7.</span> Anticipos de citas</a></li><li><a href="#quejas"><span class="mf-terminos__num">8.</span> Quejas</a></li></ol></nav></details><article class="mf-legal mf-terminos__texto"><p class="mb-8 flex items-start gap-2 text-sm font-medium" style="color:var(--menu-texto-principal)"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-file-check-corner mt-1 shrink-0" aria-hidden="true" style="color:var(--logo-branding)"><path d="M10.5 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v6"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="m14 20 2 2 4-4"></path></svg><span>Versión 1.0. Vigente desde el <time dateTime="2026-10-14">14 de octubre de 2026</time>.</span></p><p class="mf-terminos__intro">Aquí te explicamos cómo revocar una compra, cambiar un producto, cancelar un pedido o una cita y recibir un reembolso. Esta política complementa nuestros <a href="/terminos-y-condiciones">Términos y Condiciones</a> y no limita los derechos que te otorga la Ley Federal de Protección al Consumidor.</p><section id="revocacion" aria-labelledby="revocacion-titulo" class="mf-terminos__seccion"><h2 id="revocacion-titulo"><span class="mf-terminos__num">1.</span> Tu derecho de revocación</h2><p>Conforme al artículo 56 de la Ley Federal de Protección al Consumidor, tienes 5 días hábiles para revocar tu compra en línea sin dar razones. El plazo corre desde la entrega de tu pedido en el salón o, si todavía no se te entrega, desde la compra.</p><ol><li>Para revocar, avísanos por WhatsApp al <a href="tel:+527711867645">771 186 7645</a> o por correo a <a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a>, o entréganos el producto en el salón.</li><li>Si ya recogiste el producto, nos lo devuelves en el salón.</li><li>Te reintegramos el total que pagaste.</li></ol><p>En los servicios, la revocación sigue las reglas de los anticipos de citas de la sección 7: no aplica si, al pagar tu anticipo, faltan 10 días hábiles o menos para tu cita.</p></section><section id="cambios" aria-labelledby="cambios-titulo" class="mf-terminos__seccion"><h2 id="cambios-titulo"><span class="mf-terminos__num">2.</span> Cambios de producto (beneficio adicional)</h2><ol><li>Además de tu derecho de revocación, aceptamos cambios de producto dentro de los 7 días naturales siguientes a que lo recojas, siempre que esté sellado, sin abrir y en las mismas condiciones en que lo recibiste, con su comprobante.</li><li>Por higiene y seguridad, este beneficio de cambio no aplica a productos abiertos o usados, salvo que tengan un defecto de fábrica. Esto no limita tu derecho de revocación.</li><li>El cambio se hace por otro producto. Si el nuevo cuesta más, pagas la diferencia.</li></ol></section><section id="reembolsos" aria-labelledby="reembolsos-titulo" class="mf-terminos__seccion"><h2 id="reembolsos-titulo"><span class="mf-terminos__num">3.</span> Otros casos con reembolso</h2><p>Además de la revocación, también te devolvemos tu dinero cuando:</p><ul><li>el producto tiene un defecto de fábrica o llegó en mal estado;</li><li>te entregamos un producto distinto al que pediste;</li><li>cancelamos tu pedido por falta de existencias o por causas nuestras;</li><li>cancelas un pedido pagado en línea antes de que lo empecemos a preparar.</li></ul><p>Revisa tus productos al recibirlos y repórtanos en ese momento cualquier detalle visible.</p></section><section id="cancelacion-de-pedidos" aria-labelledby="cancelacion-de-pedidos-titulo" class="mf-terminos__seccion"><h2 id="cancelacion-de-pedidos-titulo"><span class="mf-terminos__num">4.</span> Cancelar un pedido</h2><ol><li><strong>Pedido pagado en línea:</strong> si lo cancelas antes de que lo empecemos a preparar, te devolvemos el pago completo.</li><li><strong>Apartado para pagar al recoger:</strong> como todavía no pagas, no hay nada que reembolsar. Si no se prepara en 3 días, o no lo recoges en 7 días desde que está listo, se cancela automáticamente sin costo para ti.</li><li>Los pedidos pagados en línea se guardan 15 días a partir del aviso de &quot;listo para recoger&quot;. Si no puedes pasar en ese plazo, escríbenos para acordar una fecha.</li></ol></section><section id="como-reembolsamos" aria-labelledby="como-reembolsamos-titulo" class="mf-terminos__seccion"><h2 id="como-reembolsamos-titulo"><span class="mf-terminos__num">5.</span> Cómo hacemos los reembolsos</h2><ol><li>Los pagos en línea se reembolsan por Mercado Pago, al mismo medio con el que pagaste. El tiempo en que se refleja depende de tu banco.</li><li>Si pagaste en el salón, te reintegramos el pago en el salón.</li></ol></section><section id="garantia" aria-labelledby="garantia-titulo" class="mf-terminos__seccion"><h2 id="garantia-titulo"><span class="mf-terminos__num">6.</span> Garantía de servicios</h2><p>Si un servicio no te dejó satisfecha, contáctanos dentro de los 7 días siguientes. Revisaremos el caso contigo y, cuando corresponda, haremos un ajuste o corrección sin costo. La garantía aplica cuando se siguieron las indicaciones de cuidado posterior que te dimos.</p></section><section id="anticipos" aria-labelledby="anticipos-titulo" class="mf-terminos__seccion"><h2 id="anticipos-titulo"><span class="mf-terminos__num">7.</span> Anticipos de citas</h2><ol><li>El anticipo aparta tu lugar y se descuenta del total de tu servicio.</li><li>Si al pagar tu anticipo faltan más de 10 días hábiles para tu cita, puedes cancelarla dentro de los 5 días hábiles siguientes a tu pago y te devolvemos el anticipo completo.</li><li>Si al pagar tu anticipo faltan 10 días hábiles o menos para tu cita, al cancelar el anticipo no se devuelve, pero puedes reagendar con aviso previo y tu anticipo se respeta para la nueva fecha.</li><li>Si no llegas a tu cita y no avisas, el anticipo no se devuelve.</li><li>Si nosotras cancelamos tu cita, te devolvemos el anticipo completo.</li></ol></section><section id="quejas" aria-labelledby="quejas-titulo" class="mf-terminos__seccion"><h2 id="quejas-titulo"><span class="mf-terminos__num">8.</span> Quejas</h2><p>Si tienes una queja, escríbenos primero. Queremos resolverla contigo. También puedes acudir a la Procuraduría Federal del Consumidor (Profeco): Teléfono del Consumidor <a href="tel:+525555688722">55 5568 8722</a> (CDMX y zona metropolitana) y <a href="tel:+528004688722">800 468 8722</a> (resto del país), sitio <a href="https://www.gob.mx/profeco" target="_blank" rel="noopener noreferrer">www.gob.mx/profeco<span class="sr-only"> (se abre en otra pestaña)</span></a>.</p></section></article></div></div></main>',
+   'Aquí te explicamos cómo revocar una compra, cambiar un producto, cancelar un pedido o una cita y recibir un reembolso. Esta política complementa nuestros [Términos y Condiciones](/terminos-y-condiciones) y no limita los derechos que te otorga la Ley Federal de Protección al Consumidor.
+
+## Tu derecho de revocación {#revocacion}
+
+Conforme al artículo 56 de la Ley Federal de Protección al Consumidor, tienes 5 días hábiles para revocar tu compra en línea sin dar razones. El plazo corre desde la entrega de tu pedido en el salón o, si todavía no se te entrega, desde la compra.
+
+1. Para revocar, avísanos por WhatsApp al [771 186 7645](tel:+527711867645) o por correo a [mildredfranco24@gmail.com](mailto:mildredfranco24@gmail.com), o entréganos el producto en el salón.
+2. Si ya recogiste el producto, nos lo devuelves en el salón.
+3. Te reintegramos el total que pagaste.
+
+En los servicios, la revocación sigue las reglas de los anticipos de citas de la sección 7: no aplica si, al pagar tu anticipo, faltan 10 días hábiles o menos para tu cita.
+
+## Cambios de producto (beneficio adicional) {#cambios}
+
+1. Además de tu derecho de revocación, aceptamos cambios de producto dentro de los {diasCambioProducto} días naturales siguientes a que lo recojas, siempre que esté sellado, sin abrir y en las mismas condiciones en que lo recibiste, con su comprobante.
+2. Por higiene y seguridad, este beneficio de cambio no aplica a productos abiertos o usados, salvo que tengan un defecto de fábrica. Esto no limita tu derecho de revocación.
+3. El cambio se hace por otro producto. Si el nuevo cuesta más, pagas la diferencia.
+
+## Otros casos con reembolso {#reembolsos}
+
+Además de la revocación, también te devolvemos tu dinero cuando:
+
+- el producto tiene un defecto de fábrica o llegó en mal estado;
+- te entregamos un producto distinto al que pediste;
+- cancelamos tu pedido por falta de existencias o por causas nuestras;
+- cancelas un pedido pagado en línea antes de que lo empecemos a preparar.
+
+Revisa tus productos al recibirlos y repórtanos en ese momento cualquier detalle visible.
+
+## Cancelar un pedido {#cancelacion-de-pedidos}
+
+1. **Pedido pagado en línea:** si lo cancelas antes de que lo empecemos a preparar, te devolvemos el pago completo.
+2. **Apartado para pagar al recoger:** como todavía no pagas, no hay nada que reembolsar. Si no se prepara en {diasPrepararApartado} días, o no lo recoges en {diasCancelarNoRecogido} días desde que está listo, se cancela automáticamente sin costo para ti.
+3. Los pedidos pagados en línea se guardan {diasResguardo} días a partir del aviso de "listo para recoger". Si no puedes pasar en ese plazo, escríbenos para acordar una fecha.
+
+## Cómo hacemos los reembolsos {#como-reembolsamos}
+
+1. Los pagos en línea se reembolsan por Mercado Pago, al mismo medio con el que pagaste. El tiempo en que se refleja depende de tu banco.
+2. Si pagaste en el salón, te reintegramos el pago en el salón.
+
+## Garantía de servicios {#garantia}
+
+Si un servicio no te dejó satisfecha, contáctanos dentro de los {diasGarantia} días siguientes. Revisaremos el caso contigo y, cuando corresponda, haremos un ajuste o corrección sin costo. La garantía aplica cuando se siguieron las indicaciones de cuidado posterior que te dimos.
+
+## Anticipos de citas {#anticipos}
+
+1. El anticipo aparta tu lugar y se descuenta del total de tu servicio.
+2. Si al pagar tu anticipo faltan más de 10 días hábiles para tu cita, puedes cancelarla dentro de los 5 días hábiles siguientes a tu pago y te devolvemos el anticipo completo.
+3. Si al pagar tu anticipo faltan 10 días hábiles o menos para tu cita, al cancelar el anticipo no se devuelve, pero puedes reagendar con aviso previo y tu anticipo se respeta para la nueva fecha.
+4. Si no llegas a tu cita y no avisas, el anticipo no se devuelve.
+5. Si nosotras cancelamos tu cita, te devolvemos el anticipo completo.
+
+## Quejas {#quejas}
+
+Si tienes una queja, escríbenos primero. Queremos resolverla contigo. También puedes acudir a la Procuraduría Federal del Consumidor (Profeco): Teléfono del Consumidor [55 5568 8722](tel:+525555688722) (CDMX y zona metropolitana) y [800 468 8722](tel:+528004688722) (resto del país), sitio <a href="https://www.gob.mx/profeco" target="_blank" rel="noopener noreferrer">www.gob.mx/profeco<span class="sr-only"> (se abre en otra pestaña)</span></a>.',
+   '{"diasCambioProducto":"7","diasResguardo":"15","diasGarantia":"7","diasPrepararApartado":"3","diasCancelarNoRecogido":"7"}', true, 'Versión 1.0 publicada en la web el 14 de octubre de 2026, antes del editor de documentos legales. Se sembró tal cual: mismo texto y mismo hash.'),
+  ('anticipos', '1.0', '<main class="mf-terminos"><div class="mf-terminos__marco layout-gutter-x"><header class="mf-terminos__cabecera"><h1 class="text-elegant-title">Política de Reembolsos, Cambios y Cancelaciones</h1><p class="mf-terminos__marca">Mirú Franco Salón Beauty</p></header><div class="mf-terminos__cuerpo"><nav aria-label="Índice de la política de reembolsos" class="mf-terminos__indice"><p class="mf-terminos__indice-titulo">En esta página</p><ol class="mf-terminos__indice-lista"><li><a href="#revocacion"><span class="mf-terminos__num">1.</span> Tu derecho de revocación</a></li><li><a href="#cambios"><span class="mf-terminos__num">2.</span> Cambios de producto (beneficio adicional)</a></li><li><a href="#reembolsos"><span class="mf-terminos__num">3.</span> Otros casos con reembolso</a></li><li><a href="#cancelacion-de-pedidos"><span class="mf-terminos__num">4.</span> Cancelar un pedido</a></li><li><a href="#como-reembolsamos"><span class="mf-terminos__num">5.</span> Cómo hacemos los reembolsos</a></li><li><a href="#garantia"><span class="mf-terminos__num">6.</span> Garantía de servicios</a></li><li><a href="#anticipos"><span class="mf-terminos__num">7.</span> Anticipos de citas</a></li><li><a href="#quejas"><span class="mf-terminos__num">8.</span> Quejas</a></li></ol></nav><details class="mf-terminos__plegable"><summary><span>Índice de secciones</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down mf-terminos__chevron" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></summary><nav aria-label="Índice de la política de reembolsos"><ol class="mf-terminos__indice-lista"><li><a href="#revocacion"><span class="mf-terminos__num">1.</span> Tu derecho de revocación</a></li><li><a href="#cambios"><span class="mf-terminos__num">2.</span> Cambios de producto (beneficio adicional)</a></li><li><a href="#reembolsos"><span class="mf-terminos__num">3.</span> Otros casos con reembolso</a></li><li><a href="#cancelacion-de-pedidos"><span class="mf-terminos__num">4.</span> Cancelar un pedido</a></li><li><a href="#como-reembolsamos"><span class="mf-terminos__num">5.</span> Cómo hacemos los reembolsos</a></li><li><a href="#garantia"><span class="mf-terminos__num">6.</span> Garantía de servicios</a></li><li><a href="#anticipos"><span class="mf-terminos__num">7.</span> Anticipos de citas</a></li><li><a href="#quejas"><span class="mf-terminos__num">8.</span> Quejas</a></li></ol></nav></details><article class="mf-legal mf-terminos__texto"><p class="mb-8 flex items-start gap-2 text-sm font-medium" style="color:var(--menu-texto-principal)"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-file-check-corner mt-1 shrink-0" aria-hidden="true" style="color:var(--logo-branding)"><path d="M10.5 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v6"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="m14 20 2 2 4-4"></path></svg><span>Versión 1.0. Vigente desde el <time dateTime="2026-10-14">14 de octubre de 2026</time>.</span></p><p class="mf-terminos__intro">Aquí te explicamos cómo revocar una compra, cambiar un producto, cancelar un pedido o una cita y recibir un reembolso. Esta política complementa nuestros <a href="/terminos-y-condiciones">Términos y Condiciones</a> y no limita los derechos que te otorga la Ley Federal de Protección al Consumidor.</p><section id="revocacion" aria-labelledby="revocacion-titulo" class="mf-terminos__seccion"><h2 id="revocacion-titulo"><span class="mf-terminos__num">1.</span> Tu derecho de revocación</h2><p>Conforme al artículo 56 de la Ley Federal de Protección al Consumidor, tienes 5 días hábiles para revocar tu compra en línea sin dar razones. El plazo corre desde la entrega de tu pedido en el salón o, si todavía no se te entrega, desde la compra.</p><ol><li>Para revocar, avísanos por WhatsApp al <a href="tel:+527711867645">771 186 7645</a> o por correo a <a href="mailto:mildredfranco24@gmail.com">mildredfranco24@gmail.com</a>, o entréganos el producto en el salón.</li><li>Si ya recogiste el producto, nos lo devuelves en el salón.</li><li>Te reintegramos el total que pagaste.</li></ol><p>En los servicios, la revocación sigue las reglas de los anticipos de citas de la sección 7: no aplica si, al pagar tu anticipo, faltan 10 días hábiles o menos para tu cita.</p></section><section id="cambios" aria-labelledby="cambios-titulo" class="mf-terminos__seccion"><h2 id="cambios-titulo"><span class="mf-terminos__num">2.</span> Cambios de producto (beneficio adicional)</h2><ol><li>Además de tu derecho de revocación, aceptamos cambios de producto dentro de los 7 días naturales siguientes a que lo recojas, siempre que esté sellado, sin abrir y en las mismas condiciones en que lo recibiste, con su comprobante.</li><li>Por higiene y seguridad, este beneficio de cambio no aplica a productos abiertos o usados, salvo que tengan un defecto de fábrica. Esto no limita tu derecho de revocación.</li><li>El cambio se hace por otro producto. Si el nuevo cuesta más, pagas la diferencia.</li></ol></section><section id="reembolsos" aria-labelledby="reembolsos-titulo" class="mf-terminos__seccion"><h2 id="reembolsos-titulo"><span class="mf-terminos__num">3.</span> Otros casos con reembolso</h2><p>Además de la revocación, también te devolvemos tu dinero cuando:</p><ul><li>el producto tiene un defecto de fábrica o llegó en mal estado;</li><li>te entregamos un producto distinto al que pediste;</li><li>cancelamos tu pedido por falta de existencias o por causas nuestras;</li><li>cancelas un pedido pagado en línea antes de que lo empecemos a preparar.</li></ul><p>Revisa tus productos al recibirlos y repórtanos en ese momento cualquier detalle visible.</p></section><section id="cancelacion-de-pedidos" aria-labelledby="cancelacion-de-pedidos-titulo" class="mf-terminos__seccion"><h2 id="cancelacion-de-pedidos-titulo"><span class="mf-terminos__num">4.</span> Cancelar un pedido</h2><ol><li><strong>Pedido pagado en línea:</strong> si lo cancelas antes de que lo empecemos a preparar, te devolvemos el pago completo.</li><li><strong>Apartado para pagar al recoger:</strong> como todavía no pagas, no hay nada que reembolsar. Si no se prepara en 3 días, o no lo recoges en 7 días desde que está listo, se cancela automáticamente sin costo para ti.</li><li>Los pedidos pagados en línea se guardan 15 días a partir del aviso de &quot;listo para recoger&quot;. Si no puedes pasar en ese plazo, escríbenos para acordar una fecha.</li></ol></section><section id="como-reembolsamos" aria-labelledby="como-reembolsamos-titulo" class="mf-terminos__seccion"><h2 id="como-reembolsamos-titulo"><span class="mf-terminos__num">5.</span> Cómo hacemos los reembolsos</h2><ol><li>Los pagos en línea se reembolsan por Mercado Pago, al mismo medio con el que pagaste. El tiempo en que se refleja depende de tu banco.</li><li>Si pagaste en el salón, te reintegramos el pago en el salón.</li></ol></section><section id="garantia" aria-labelledby="garantia-titulo" class="mf-terminos__seccion"><h2 id="garantia-titulo"><span class="mf-terminos__num">6.</span> Garantía de servicios</h2><p>Si un servicio no te dejó satisfecha, contáctanos dentro de los 7 días siguientes. Revisaremos el caso contigo y, cuando corresponda, haremos un ajuste o corrección sin costo. La garantía aplica cuando se siguieron las indicaciones de cuidado posterior que te dimos.</p></section><section id="anticipos" aria-labelledby="anticipos-titulo" class="mf-terminos__seccion"><h2 id="anticipos-titulo"><span class="mf-terminos__num">7.</span> Anticipos de citas</h2><ol><li>El anticipo aparta tu lugar y se descuenta del total de tu servicio.</li><li>Si al pagar tu anticipo faltan más de 10 días hábiles para tu cita, puedes cancelarla dentro de los 5 días hábiles siguientes a tu pago y te devolvemos el anticipo completo.</li><li>Si al pagar tu anticipo faltan 10 días hábiles o menos para tu cita, al cancelar el anticipo no se devuelve, pero puedes reagendar con aviso previo y tu anticipo se respeta para la nueva fecha.</li><li>Si no llegas a tu cita y no avisas, el anticipo no se devuelve.</li><li>Si nosotras cancelamos tu cita, te devolvemos el anticipo completo.</li></ol></section><section id="quejas" aria-labelledby="quejas-titulo" class="mf-terminos__seccion"><h2 id="quejas-titulo"><span class="mf-terminos__num">8.</span> Quejas</h2><p>Si tienes una queja, escríbenos primero. Queremos resolverla contigo. También puedes acudir a la Procuraduría Federal del Consumidor (Profeco): Teléfono del Consumidor <a href="tel:+525555688722">55 5568 8722</a> (CDMX y zona metropolitana) y <a href="tel:+528004688722">800 468 8722</a> (resto del país), sitio <a href="https://www.gob.mx/profeco" target="_blank" rel="noopener noreferrer">www.gob.mx/profeco<span class="sr-only"> (se abre en otra pestaña)</span></a>.</p></section></article></div></div></main>',
+   'Aquí te explicamos cómo revocar una compra, cambiar un producto, cancelar un pedido o una cita y recibir un reembolso. Esta política complementa nuestros [Términos y Condiciones](/terminos-y-condiciones) y no limita los derechos que te otorga la Ley Federal de Protección al Consumidor.
+
+## Tu derecho de revocación {#revocacion}
+
+Conforme al artículo 56 de la Ley Federal de Protección al Consumidor, tienes 5 días hábiles para revocar tu compra en línea sin dar razones. El plazo corre desde la entrega de tu pedido en el salón o, si todavía no se te entrega, desde la compra.
+
+1. Para revocar, avísanos por WhatsApp al [771 186 7645](tel:+527711867645) o por correo a [mildredfranco24@gmail.com](mailto:mildredfranco24@gmail.com), o entréganos el producto en el salón.
+2. Si ya recogiste el producto, nos lo devuelves en el salón.
+3. Te reintegramos el total que pagaste.
+
+En los servicios, la revocación sigue las reglas de los anticipos de citas de la sección 7: no aplica si, al pagar tu anticipo, faltan 10 días hábiles o menos para tu cita.
+
+## Cambios de producto (beneficio adicional) {#cambios}
+
+1. Además de tu derecho de revocación, aceptamos cambios de producto dentro de los {diasCambioProducto} días naturales siguientes a que lo recojas, siempre que esté sellado, sin abrir y en las mismas condiciones en que lo recibiste, con su comprobante.
+2. Por higiene y seguridad, este beneficio de cambio no aplica a productos abiertos o usados, salvo que tengan un defecto de fábrica. Esto no limita tu derecho de revocación.
+3. El cambio se hace por otro producto. Si el nuevo cuesta más, pagas la diferencia.
+
+## Otros casos con reembolso {#reembolsos}
+
+Además de la revocación, también te devolvemos tu dinero cuando:
+
+- el producto tiene un defecto de fábrica o llegó en mal estado;
+- te entregamos un producto distinto al que pediste;
+- cancelamos tu pedido por falta de existencias o por causas nuestras;
+- cancelas un pedido pagado en línea antes de que lo empecemos a preparar.
+
+Revisa tus productos al recibirlos y repórtanos en ese momento cualquier detalle visible.
+
+## Cancelar un pedido {#cancelacion-de-pedidos}
+
+1. **Pedido pagado en línea:** si lo cancelas antes de que lo empecemos a preparar, te devolvemos el pago completo.
+2. **Apartado para pagar al recoger:** como todavía no pagas, no hay nada que reembolsar. Si no se prepara en {diasPrepararApartado} días, o no lo recoges en {diasCancelarNoRecogido} días desde que está listo, se cancela automáticamente sin costo para ti.
+3. Los pedidos pagados en línea se guardan {diasResguardo} días a partir del aviso de "listo para recoger". Si no puedes pasar en ese plazo, escríbenos para acordar una fecha.
+
+## Cómo hacemos los reembolsos {#como-reembolsamos}
+
+1. Los pagos en línea se reembolsan por Mercado Pago, al mismo medio con el que pagaste. El tiempo en que se refleja depende de tu banco.
+2. Si pagaste en el salón, te reintegramos el pago en el salón.
+
+## Garantía de servicios {#garantia}
+
+Si un servicio no te dejó satisfecha, contáctanos dentro de los {diasGarantia} días siguientes. Revisaremos el caso contigo y, cuando corresponda, haremos un ajuste o corrección sin costo. La garantía aplica cuando se siguieron las indicaciones de cuidado posterior que te dimos.
+
+## Anticipos de citas {#anticipos}
+
+1. El anticipo aparta tu lugar y se descuenta del total de tu servicio.
+2. Si al pagar tu anticipo faltan más de 10 días hábiles para tu cita, puedes cancelarla dentro de los 5 días hábiles siguientes a tu pago y te devolvemos el anticipo completo.
+3. Si al pagar tu anticipo faltan 10 días hábiles o menos para tu cita, al cancelar el anticipo no se devuelve, pero puedes reagendar con aviso previo y tu anticipo se respeta para la nueva fecha.
+4. Si no llegas a tu cita y no avisas, el anticipo no se devuelve.
+5. Si nosotras cancelamos tu cita, te devolvemos el anticipo completo.
+
+## Quejas {#quejas}
+
+Si tienes una queja, escríbenos primero. Queremos resolverla contigo. También puedes acudir a la Procuraduría Federal del Consumidor (Profeco): Teléfono del Consumidor [55 5568 8722](tel:+525555688722) (CDMX y zona metropolitana) y [800 468 8722](tel:+528004688722) (resto del país), sitio <a href="https://www.gob.mx/profeco" target="_blank" rel="noopener noreferrer">www.gob.mx/profeco<span class="sr-only"> (se abre en otra pestaña)</span></a>.',
+   '{"diasCambioProducto":"7","diasResguardo":"15","diasGarantia":"7","diasPrepararApartado":"3","diasCancelarNoRecogido":"7"}', true, 'Versión 1.0 publicada en la web el 14 de octubre de 2026 (sección "anticipos" de la Política de reembolsos), antes del editor de documentos legales. Se sembró tal cual: mismo texto y mismo hash.')
+) AS s("slug", "version", "html", "plantilla", "variables", "requiere_aceptacion", "motivo")
+JOIN "versiones_documentos_legales" v ON v."slug" = s."slug" AND v."version" = s."version"
+ON CONFLICT ("version_id") DO NOTHING;
+
+-- Comprobación: las 5 versiones vigentes quedaron sembradas y el SHA-256 del texto visible de cada html (sin
+-- etiquetas, con &quot; &#x27; &lt; &gt; y &amp; decodificados y los espacios colapsados, la regla de la web) es el
+-- hash_texto de su versión. Si no, la migración falla.
+DO $$
+DECLARE
+  faltan TEXT;
+  distintos TEXT;
+BEGIN
+  SELECT string_agg(e."slug" || ' ' || e."version", ', ') INTO faltan
+  FROM (VALUES ('terminos', '2.0'), ('aviso-privacidad', '2.0'), ('cookies', '1.1'), ('reembolsos', '1.0'), ('anticipos', '1.0')) AS e("slug", "version")
+  WHERE NOT EXISTS (
+    SELECT 1 FROM "contenidos_documentos_legales" c WHERE c."slug" = e."slug" AND c."version" = e."version"
+  );
+  IF faltan IS NOT NULL THEN
+    RAISE EXCEPTION 'No se sembró el texto de: % (falta su fila en versiones_documentos_legales).', faltan;
+  END IF;
+
+  SELECT string_agg(c."slug" || ' ' || c."version", ', ') INTO distintos
+  FROM "contenidos_documentos_legales" c
+  JOIN "versiones_documentos_legales" v ON v."id" = c."version_id"
+  WHERE encode(sha256(convert_to(btrim(regexp_replace(
+          replace(replace(replace(replace(replace(regexp_replace(c."html", '<[^>]+>', '', 'g'),
+            '&quot;', '"'), '&#x27;', ''''), '&lt;', '<'), '&gt;', '>'), '&amp;', '&'),
+          '\s+', ' ', 'g')), 'UTF8')), 'hex') <> v."hash_texto";
+  IF distintos IS NOT NULL THEN
+    RAISE EXCEPTION 'El hash del texto sembrado no coincide con versiones_documentos_legales en: %.', distintos;
+  END IF;
+END;
+$$;
+
+-- -----------------------------------------------------------------------------------------------------
+-- 3. 20261017140000_textos_sitio
+-- -----------------------------------------------------------------------------------------------------
+-- Textos del sitio administrables (Admin > Textos del sitio). Catálogo en src/textos-sitio/catalogo.ts.
+-- Semilla: una fila por clave con el texto de hoy, así nada cambia al desplegar. Lo que ya estuviera guardado se
+-- conserva (ON CONFLICT DO NOTHING). actualizado_por_id en NULL: la semilla no cuenta como cambio de la dueña.
+-- Sin llave foránea a usuarios (el modelo de usuarios no se toca en este bloque): el nombre se busca aparte.
+
+CREATE TABLE IF NOT EXISTS "textos_sitio" (
+  "clave" TEXT NOT NULL,
+  "valor" TEXT NOT NULL,
+  "actualizado_en" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "actualizado_por_id" TEXT,
+  CONSTRAINT "textos_sitio_pkey" PRIMARY KEY ("clave")
+);
+
+CREATE TABLE IF NOT EXISTS "historial_textos_sitio" (
+  "id" SERIAL NOT NULL,
+  "clave" TEXT NOT NULL,
+  "valor_anterior" TEXT,
+  "valor_nuevo" TEXT NOT NULL,
+  "restaurado" BOOLEAN NOT NULL DEFAULT false,
+  "creado_en" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "actualizado_por_id" TEXT,
+  CONSTRAINT "historial_textos_sitio_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "historial_textos_sitio_clave_creado_en_idx" ON "historial_textos_sitio"("clave", "creado_en");
+
+INSERT INTO "textos_sitio" ("clave", "valor") VALUES
+  ('citas.crear.sinDatosTitulo', 'Aún no has elegido un servicio y horario'),
+  ('citas.crear.sinDatosTexto', 'Elige el servicio que quieres, luego el especialista, el día y la hora. Después vuelves aquí para confirmar.'),
+  ('citas.crear.tituloConfirmar', 'Confirma tu cita'),
+  ('citas.crear.anticipoDescuentoSaldo', 'Se descuenta del total: el día de tu cita pagas {saldo} en el salón.'),
+  ('citas.crear.anticipoDescuento', 'Se descuenta del total el día de tu cita.'),
+  ('citas.crear.botonConfirmar', 'Confirmar cita'),
+  ('citas.crear.botonConfirmarLinea', 'Confirmar y pagar anticipo'),
+  ('citas.crear.botonConfirmarSalon', 'Confirmar y pagar en el salón'),
+  ('citas.formaPago.anticipoEtiqueta', 'Anticipo para apartar tu cita'),
+  ('citas.formaPago.saldoEtiqueta', 'Pagas en el salón el día de tu cita'),
+  ('citas.formaPago.pregunta', '¿Cómo quieres pagar el anticipo?'),
+  ('citas.formaPago.opcionLinea', 'Pagar anticipo en línea'),
+  ('citas.formaPago.opcionSalon', 'Pagar anticipo en el salón'),
+  ('citas.formaPago.plazoLinea', 'Con Mercado Pago. Tienes {plazoAnticipo} para pagarlo, sin pasar de {minutosAntesPagoSalon} minutos antes de tu cita; si no, el horario se libera.'),
+  ('citas.formaPago.llegadaSalon', 'Llega entre {minutosLlegadaAntes} y {minutosAntesPagoSalon} minutos antes para pagarlo.'),
+  ('citas.formaPago.plazoSalon', 'Si a {minutosAntesPagoSalon} minutos de tu cita no se ha pagado, la cita se cancela.'),
+  ('citas.formaPago.noAsistePierde', 'Si no llegas a tu cita y no avisas, el anticipo no se devuelve.'),
+  ('citas.formaPago.noAsisteRevisa', 'Si no llegas a tu cita, el salón revisa la devolución de tu anticipo.'),
+  ('citas.formaPago.soloLineaDespuesFalta', 'Durante {mesesSoloLinea}, tus próximas citas se apartan pagando el anticipo en línea.'),
+  ('citas.formaPago.avisoCancelar', 'Para reagendar desde tu cuenta avisa con al menos {horasAviso} de anticipación; con menos aviso, reagenda con el salón.'),
+  ('citas.formaPago.metodosSalon', 'En el salón puedes pagar con {metodosSalon}.'),
+  ('citas.formaPago.sinAnticipoPrecio', 'Pagas {precio} en el salón el día de tu cita.'),
+  ('citas.formaPago.sinAnticipo', 'Pagas tu servicio en el salón el día de tu cita.'),
+  ('citas.confirmacion.titulo', 'Tu cita ha sido agendada exitosamente'),
+  ('citas.recordatorio', 'Antes de tu cita te mandaremos un recordatorio en tu cuenta y, si lo tienes activado, por correo.'),
+  ('citas.lista.vacia', 'No tienes citas agendadas'),
+  ('citas.lista.sinResultados', 'No hay citas que coincidan con tu búsqueda'),
+  ('citas.pagoSalon.saldo', 'El día de tu cita pagas en el salón {saldo} (el total menos tu anticipo).'),
+  ('citas.pagoSalon.saldoSinPrecio', 'El día de tu cita pagas en el salón el total menos tu anticipo.'),
+  ('citas.cancelar.sinAnticipo', 'Como no has pagado anticipo, cancelar no tiene costo. Si solo necesitas otro horario, te recomendamos reprogramarla.'),
+  ('citas.cancelar.avisoReagendar', 'Para reagendar desde tu cuenta avisa con al menos {horasAviso} de anticipación.'),
+  ('citas.cancelar.anticipoSinDatos', 'Si tu cita está a más de {diasExcepcion} días hábiles de la fecha en que pagaste tu anticipo de {anticipo} y cancelas dentro de los {diasReembolso} días hábiles siguientes a tu pago, te lo devolvemos completo; en otro caso no se devuelve.'),
+  ('citas.cancelar.anticipoReembolsable', 'Si cancelas ahora, te devolvemos completo tu anticipo de {anticipo} por el mismo medio con el que lo pagaste: tu cita está a más de {diasExcepcion} días hábiles de tu pago y cancelas dentro de los {diasReembolso} días hábiles siguientes.'),
+  ('citas.cancelar.anticipoHasta', 'Tienes hasta el {fechaLimite}.'),
+  ('citas.cancelar.anticipoPlazoTerminado', 'Tu anticipo de {anticipo} ya no se devuelve si cancelas: el plazo para cancelar con reembolso terminó el {fechaLimite}.'),
+  ('citas.cancelar.anticipoNoReembolsable', 'Tu anticipo de {anticipo} no se devuelve si cancelas, porque tu cita está a {diasExcepcion} días hábiles o menos de la fecha en que lo pagaste.'),
+  ('citas.cancelar.reprogramar', 'Si reprogramas tu cita con aviso, tu anticipo se respeta para la nueva fecha.'),
+  ('citas.cancelar.toast', 'Tu cita quedó cancelada.'),
+  ('citas.cancelar.toastReembolso', 'Tu cita quedó cancelada. Te devolvemos tu anticipo completo por el mismo medio con el que lo pagaste.'),
+  ('anticipos.sinAnticipo', 'Sin anticipo'),
+  ('anticipos.botonPagar', 'Pagar anticipo'),
+  ('anticipos.botonMercadoPago', 'Pagar anticipo con Mercado Pago'),
+  ('anticipos.botonSalon', 'Pagar en el salón'),
+  ('anticipos.enlacePolitica', 'Leer la Política de anticipos y cancelación'),
+  ('anticipos.pendiente', 'Págalo {formasPago}. Si no se paga en {plazoAnticipo}, el horario se libera.'),
+  ('anticipos.plazoLinea', 'Tienes {plazoAnticipo} para pagarlo en línea{limite}; si no, el horario se libera.'),
+  ('anticipos.salonSeLibera', 'Si no lo pagas a tiempo, el horario se libera.'),
+  ('anticipos.pagado', 'Se descuenta del total el día de tu cita.'),
+  ('anticipos.enRevision', 'El salón está revisando tu anticipo; te avisaremos en tu cuenta.'),
+  ('anticipos.liberada', 'No recibimos el anticipo a tiempo y el horario se liberó.'),
+  ('anticipos.retenido', 'La cita no se atendió y el anticipo se retuvo, como indican los términos.'),
+  ('anticipos.devuelto', 'Te devolvimos el anticipo.'),
+  ('checkout.recogerTitulo', 'Recoges tu pedido en el salón'),
+  ('checkout.recogerTexto', 'Lo preparamos y te lo apartamos en el mostrador.'),
+  ('checkout.recogerAviso', '{tiempoPreparacion}. Te avisamos en la app y por correo cuando puedas pasar por él.'),
+  ('checkout.opcionLineaTitulo', 'Pagar en línea'),
+  ('checkout.opcionLineaTexto', 'Con tarjeta en la página segura de Mercado Pago.'),
+  ('checkout.opcionSalonTitulo', 'Pagar al recoger en el salón'),
+  ('checkout.opcionSalonTexto', 'Te apartamos el pedido y lo pagas en el mostrador cuando pases por él.'),
+  ('checkout.ambasRecoges', 'En los dos casos recoges tu pedido en el salón.'),
+  ('checkout.soloRecoges', 'Recoges tu pedido en el salón.'),
+  ('checkout.avisoSalon', 'Tu pedido queda apartado. Pagas {total} en el mostrador cuando pases por él{metodosSalon}.'),
+  ('checkout.avisoLinea', 'Al confirmar te llevamos a Mercado Pago para pagar {total}. Tu tarjeta la escribes allá: este sitio no la ve ni la guarda. Tienes {plazoPagoLineaHoras} horas para completar el pago.'),
+  ('checkout.botonLinea', 'Ir a pagar con Mercado Pago'),
+  ('checkout.botonSalon', 'Apartar mi pedido'),
+  ('tienda.confirmacionTitulo', '¡Gracias por tu compra!'),
+  ('tienda.confirmacionApartado', 'Te apartamos tu pedido. Te avisamos en la app y por correo cuando esté listo para recogerlo y pagarlo en el salón.'),
+  ('tienda.confirmacionRegistrado', 'Tu pedido quedó registrado. Te avisamos en la app y por correo cuando esté listo para recoger en el salón.'),
+  ('tienda.pagoRecibidoTexto', 'Tu pedido quedó pagado. Te avisamos en la app y por correo cuando esté listo para recoger en el salón.'),
+  ('tienda.pagoEnProcesoTexto', 'Mercado Pago aún no lo confirma. Te avisamos en la app y por correo en cuanto se acredite.'),
+  ('pedidos.lista.vacia', 'No tienes pedidos realizados'),
+  ('pedidos.lista.sinResultados', 'Ningún pedido coincide con la búsqueda'),
+  ('pedidos.estado.apartado', 'Tu pedido está apartado. Lo preparamos y te avisamos cuando puedas pasar a pagarlo y recogerlo.'),
+  ('pedidos.estado.faltaPago', 'Falta completar tu pago en Mercado Pago. Tienes {plazoPago} horas desde que hiciste el pedido.'),
+  ('pedidos.estado.confirmandoPago', 'Estamos confirmando tu pago. Después lo preparamos y te avisamos.'),
+  ('pedidos.estado.pagado', 'Pago recibido. Lo preparamos y te avisamos cuando esté listo para recoger.'),
+  ('pedidos.estado.preparando', 'Estamos preparando tu pedido. Te avisamos en la app y por correo cuando esté listo.'),
+  ('pedidos.estado.listoPagar', 'Tu pedido está listo. Pasa por él al salón y págalo en el mostrador{metodosSalon}.'),
+  ('pedidos.estado.listo', 'Tu pedido está listo. Pasa por él al salón.'),
+  ('pedidos.estado.entregado', 'Recogiste tu pedido en el salón.'),
+  ('pedidos.cancelarORevocar', 'Las dos te devuelven lo que pagaste. «Cancelar pedido» solo se puede antes de que empecemos a prepararlo; «Revocar compra» es tu derecho por ley durante {diasRevocacion} días hábiles y sigue disponible aunque ya lo hayamos preparado o lo hayas recogido.'),
+  ('pedidos.revocacion.pendiente', 'Revocaste tu compra. Entrega tu pedido en el salón: al recibirlo te reembolsamos{monto} por el mismo medio con el que pagaste.'),
+  ('pedidos.revocacion.aprobada', 'Revocaste tu compra: recibimos tu pedido y te reembolsamos{monto} por el mismo medio con el que pagaste.'),
+  ('pedidos.revocacion.rechazada', 'Revocaste tu compra, pero el salón rechazó la revocación. Si tienes dudas, comunícate con el salón.'),
+  ('pedidos.sinValoraciones', 'Aún no hay reseñas registradas para productos de este pedido.'),
+  ('pedidos.sinDevoluciones', 'No hay solicitudes para este pedido.'),
+  ('garantias.subtitulo', 'Si algo de tu servicio no salió como esperabas, tienes {diasGarantia} días para reportarlo. También puedes escribirnos cualquier duda o sugerencia.'),
+  ('garantias.vacia', 'Aún no tienes casos registrados.'),
+  ('garantias.formularioTexto', 'Cuéntanos qué pasó y te responderemos en tu cuenta.'),
+  ('garantias.toastRegistrado', 'Recibimos tu caso. Te responderemos en tu cuenta.'),
+  ('devoluciones.subtitulo', 'Solicitudes registradas en el sistema según tus pedidos'),
+  ('devoluciones.vacia', 'No hay devoluciones registradas.'),
+  ('devoluciones.requisito', 'Necesitas un pedido entregado, o uno cancelado que ya hayas pagado.'),
+  ('devoluciones.toastRegistrada', 'Solicitud registrada.'),
+  ('correos.pieAutomatico', 'Este es un correo automático, por favor no respondas.'),
+  ('correos.activacion.asunto', 'Código de activación - {nombreSalon}'),
+  ('correos.activacion.titulo', 'Bienvenido a {nombreSalon}'),
+  ('correos.activacion.cuerpo', 'Tu código de verificación es:'),
+  ('correos.activacion.nota', 'Ingresa este código en la aplicación para activar tu cuenta.
+
+Este código expira en 2 minutos.
+
+Si no solicitaste este código, ignora este mensaje.'),
+  ('correos.recuperar.asunto', 'Recuperar Contraseña - {nombreSalon}'),
+  ('correos.recuperar.titulo', 'Solicitud de Recuperación de Contraseña'),
+  ('correos.recuperar.cuerpo', 'Recibimos una solicitud para restablecer la contraseña de tu cuenta. Si fuiste tú, haz clic en el botón de abajo para crear una nueva contraseña.'),
+  ('correos.recuperar.boton', 'Restablecer Contraseña'),
+  ('correos.recuperar.importante', 'Este enlace expira en {minutos} minutos
+Solo puede ser usado una vez
+Si no solicitaste este cambio, ignora este mensaje'),
+  ('correos.recuperar.enlaceAlterno', 'Si el botón no funciona, copia y pega este enlace en tu navegador:'),
+  ('correos.codigoPassword.asunto', 'Código para cambiar tu contraseña - {nombreSalon}'),
+  ('correos.codigoPassword.titulo', 'Cambio de contraseña'),
+  ('correos.codigoPassword.cuerpo', 'Para cambiar la contraseña de tu cuenta de {nombreSalon}, ingresa este código:'),
+  ('correos.codigoPassword.nota', 'Este código vence en {minutos} minutos y solo sirve una vez.
+
+Si no fuiste tú, ignora este correo y cambia tu contraseña.'),
+  ('correos.codigoCorreo.asunto', 'Código para cambiar tu correo - {nombreSalon}'),
+  ('correos.codigoCorreo.titulo', 'Cambio de correo'),
+  ('correos.codigoCorreo.cuerpo', 'Para usar este correo en tu cuenta de {nombreSalon}, ingresa este código:'),
+  ('correos.codigoCorreo.nota', 'Este código vence en {minutos} minutos y solo sirve una vez.
+
+Si no fuiste tú, ignora este correo: tu cuenta no cambia.'),
+  ('correos.correoActual.asunto', 'Confirma el cambio de tu correo - {nombreSalon}'),
+  ('correos.correoActual.titulo', 'Confirma el cambio de tu correo'),
+  ('correos.correoActual.cuerpo', 'Pidieron cambiar el correo de tu cuenta de {nombreSalon} a {correoNuevo}. Si fuiste tú, ingresa este código junto con el que llegó a tu nuevo correo:'),
+  ('correos.correoActual.nota', 'Este código vence en {minutos} minutos y solo sirve una vez.
+
+Si no fuiste tú, no compartas este código con nadie: sin él tu correo no cambia. Te recomendamos cerrar sesión en los dispositivos que no reconozcas.'),
+  ('correos.passwordCambiada.asunto', 'Tu contraseña cambió - {nombreSalon}'),
+  ('correos.passwordCambiada.titulo', 'Tu contraseña cambió'),
+  ('correos.passwordCambiada.cuerpo', 'La contraseña de tu cuenta de {nombreSalon} se cambió el {fechaHora} (hora del centro de México).
+
+Por seguridad cerramos todas tus sesiones: inicia sesión de nuevo con tu nueva contraseña.'),
+  ('correos.passwordCambiada.nota', 'Si no fuiste tú, recupera tu cuenta ahora desde {enlaceRecuperar} y elige una contraseña nueva.'),
+  ('correos.passwordCambiada.textoEnlace', '¿Olvidaste tu contraseña?'),
+  ('correos.correoCambiado.asunto', 'Tu correo cambió - {nombreSalon}'),
+  ('correos.correoCambiado.titulo', 'Tu correo cambió'),
+  ('correos.correoCambiado.cuerpo', 'El correo de tu cuenta de {nombreSalon} se cambió el {fechaHora} (hora del centro de México). Desde ahora, este correo ya no sirve para entrar ni para recuperar tu cuenta.'),
+  ('correos.correoCambiado.nota', 'Si no fuiste tú, comunícate con el salón lo antes posible para recuperar tu cuenta.'),
+  ('correos.preguntaCambiada.asunto', 'Tu pregunta de seguridad cambió - {nombreSalon}'),
+  ('correos.preguntaCambiada.titulo', 'Tu pregunta de seguridad cambió'),
+  ('correos.preguntaCambiada.cuerpo', 'La pregunta de seguridad de tu cuenta de {nombreSalon} se cambió el {fechaHora} (hora del centro de México).'),
+  ('correos.preguntaCambiada.nota', 'Si no fuiste tú, cambia tu contraseña desde tu perfil y comunícate con el salón lo antes posible.'),
+  ('correos.arcoRespuesta.asunto', 'Respuesta a tu solicitud {folio} - {nombreSalon}'),
+  ('correos.arcoRespuesta.titulo', 'Respuesta a tu solicitud de derechos ARCO'),
+  ('correos.arcoRespuesta.nota', 'También puedes ver tus solicitudes en tu perfil, en la sección de privacidad.'),
+  ('correos.arcoCancelacion.asunto', 'Cancelamos tu cuenta - {nombreSalon}'),
+  ('correos.arcoCancelacion.titulo', 'Cancelamos tu cuenta'),
+  ('correos.arcoCancelacion.cuerpo', 'Atendimos tu solicitud de cancelación con folio {folio} el {fecha} (hora del centro de México).
+
+Anonimizamos tus datos personales: tu nombre, correo, teléfono, direcciones, datos de salud y de tu cabello, tarjetas guardadas y notas ya no están en tu cuenta, y ya no puedes iniciar sesión con ella.
+
+Por obligación legal conservamos tus pedidos, pagos, facturas y ventas durante 5 años (artículo 30 del Código Fiscal de la Federación), y también tus citas, quejas y valoraciones sin tu nombre, la constancia de tus consentimientos y tus solicitudes ARCO.'),
+  ('correos.arcoCancelacion.nota', 'Si no pediste esta cancelación, comunícate con el salón lo antes posible.'),
+  ('avisos.citaCreada.titulo', 'Cita agendada'),
+  ('avisos.citaCreada.mensaje', 'Tu cita de {servicio} quedó agendada para el {fecha}'),
+  ('avisos.citaAsignada.titulo', 'Nueva cita asignada'),
+  ('avisos.citaAsignada.mensaje', 'Se te asignó una cita de {servicio} para el {fecha}'),
+  ('avisos.citaRecordatorio.titulo', 'Recordatorio de cita'),
+  ('avisos.citaRecordatorio.mensaje', 'Tu cita de {servicio} es el {fecha}'),
+  ('avisos.citaCancelada.titulo', 'Cita cancelada'),
+  ('avisos.citaCancelada.mensajeClienta', 'Tu cita fue cancelada. Motivo: {motivo}'),
+  ('avisos.citaCancelada.mensajeEspecialista', 'La cita que tenías asignada fue cancelada. Motivo: {motivo}'),
+  ('avisos.citaReprogramada.titulo', 'Cita reprogramada'),
+  ('avisos.citaReprogramada.mensajeClienta', 'Tu cita de {servicio} fue reprogramada para el {fecha}'),
+  ('avisos.citaReprogramada.mensajeEspecialista', 'La cita de {servicio} que tenías asignada fue reprogramada para el {fecha}'),
+  ('avisos.citaNueva.titulo', 'Cita nueva'),
+  ('avisos.citaNueva.mensaje', 'Nueva cita de {servicio} para el {fecha}'),
+  ('avisos.anticipoPagadoPersonal.titulo', 'Anticipo pagado'),
+  ('avisos.anticipoPagadoPersonal.mensaje', 'Se recibió el anticipo de la cita #{cita}: quedó confirmada.'),
+  ('avisos.anticipoRecibido.titulo', 'Anticipo recibido'),
+  ('avisos.anticipoRecibido.mensaje', 'Recibimos tu anticipo: tu cita quedó confirmada.'),
+  ('avisos.anticipoRevision.titulo', 'Anticipo por revisar'),
+  ('avisos.anticipoRevision.canceladaPorClienta', 'La clienta canceló la cita #{cita} con anticipo pagado: decidir si se reembolsa o se retiene'),
+  ('avisos.anticipoRevision.montoDistinto', 'Anticipo con un monto distinto en la cita #{cita}: revisar devolución'),
+  ('avisos.anticipoRevision.citaLiberada', 'Anticipo pagado de una cita que ya se liberó o canceló (#{cita}): revisar devolución'),
+  ('avisos.anticipoPorDevolver.titulo', 'Anticipo por devolver'),
+  ('avisos.anticipoPorDevolver.salon', 'La clienta canceló a tiempo la cita #{cita}: devuélvele el anticipo que pagó en el salón.'),
+  ('avisos.anticipoPorDevolver.fallo', 'La clienta canceló a tiempo la cita #{cita} y el reembolso automático del anticipo no salió: reembólsalo a mano.'),
+  ('avisos.venta.titulo', 'Tu ticket de compra'),
+  ('avisos.venta.mensaje', 'Folio {folio} · Total {monto} · {fecha}'),
+  ('avisos.pedidoRecibido.titulo', 'Pedido recibido'),
+  ('avisos.pedidoRecibido.mensaje', 'Recibimos tu pedido #{pedido}, pendiente de pago'),
+  ('avisos.pedidoConfirmado.titulo', 'Pedido confirmado'),
+  ('avisos.pedidoConfirmado.mensaje', 'Tu pedido #{pedido} fue confirmado: pago recibido'),
+  ('avisos.pedidoListo.titulo', 'Tu pedido está listo para recoger'),
+  ('avisos.pedidoListo.mensaje', 'Tu pedido #{pedido} está listo para recoger en el salón'),
+  ('avisos.pedidoEntregado.titulo', 'Pedido entregado en el salón'),
+  ('avisos.pedidoEntregado.mensaje', 'Tu pedido #{pedido} fue entregado en el salón'),
+  ('avisos.pedidoCancelado.titulo', 'Pedido cancelado'),
+  ('avisos.pedidoCancelado.mensaje', 'Tu pedido #{pedido} fue cancelado'),
+  ('avisos.pedidoVencido.sinPreparar', 'Tu apartado #{pedido} se canceló porque no se preparó en {diasPrepararApartado} días. Puedes volver a pedirlo en la tienda.'),
+  ('avisos.pedidoVencido.noRecogido', 'Cancelamos tu apartado #{pedido} porque no se recogió en {diasCancelarNoRecogido} días.'),
+  ('avisos.pedidoVencido.pagoVencido', 'Tu pedido #{pedido} se canceló porque el pago no se completó en {plazoPagoLineaHoras} horas.'),
+  ('avisos.recordatorioRecoger.titulo', 'Tu pedido te espera en el salón'),
+  ('avisos.recordatorioRecoger.mensaje', 'Recuerda pasar por tu pedido #{pedido}. Si no lo recoges en {diasRestantesRecoger} días más, se cancelará.'),
+  ('avisos.pedidoNuevo.titulo', 'Pedido nuevo'),
+  ('avisos.pedidoNuevo.pagado', 'El pedido #{pedido} ya está pagado: prepáralo para recoger en el salón.'),
+  ('avisos.pedidoNuevo.apartado', 'Nuevo apartado #{pedido}: se paga al recogerlo en el salón.'),
+  ('avisos.pagoRevision.titulo', 'Pago por revisar'),
+  ('avisos.pagoRevision.montoDistinto', 'Pago con un monto distinto al del pedido #{pedido}: revisar devolución'),
+  ('avisos.pagoRevision.pedidoCancelado', 'Pago recibido de un pedido cancelado #{pedido}: revisar devolución'),
+  ('avisos.pagoRevision.yaPagado', 'Pago recibido de un pedido que ya estaba pagado #{pedido}: revisar devolución'),
+  ('avisos.canceladoPagado.tituloReembolsado', 'Pedido pagado cancelado'),
+  ('avisos.canceladoPagado.tituloRevision', 'Reembolso por revisar'),
+  ('avisos.canceladoPagado.reembolsado', '{clienta} canceló el pedido #{pedido} ya pagado ({monto}): el reembolso en Mercado Pago ya salió'),
+  ('avisos.canceladoPagado.revision', '{clienta} canceló el pedido #{pedido} ya pagado ({monto}): el reembolso quedó en revisión, reembolsar a mano'),
+  ('avisos.revocacion.titulo', 'Revocación por recibir'),
+  ('avisos.revocacion.mensaje', 'La clienta revocó la compra del pedido #{pedido}: recibe el producto en el salón y reembolsa.'),
+  ('avisos.reembolso.tituloHecho', 'Reembolso realizado'),
+  ('avisos.reembolso.tituloProceso', 'Reembolso en proceso'),
+  ('avisos.reembolso.cancelacionHecho', 'Te reembolsamos {monto} del pedido #{pedido}. Puede tardar unos días en verse en tu cuenta.'),
+  ('avisos.reembolso.cancelacionProceso', 'Estamos procesando el reembolso de {monto} del pedido #{pedido}.'),
+  ('avisos.reembolso.pedido', 'Te reembolsamos {monto} del pedido #{pedido}.'),
+  ('avisos.reembolso.anticipo', 'Te reembolsamos {monto} del anticipo de tu cita #{cita}.'),
+  ('avisos.arcoNueva.titulo', 'Solicitud ARCO nueva'),
+  ('avisos.arcoNueva.mensaje', 'Nueva solicitud de {tipoArco} con folio {folio}.'),
+  ('avisos.arcoRespuesta.titulo', 'Respuesta a tu solicitud ARCO'),
+  ('avisos.arcoRespuesta.mensaje', 'Tu solicitud con folio {folio} {estadoArco}.')
+ON CONFLICT ("clave") DO NOTHING;
+
+-- -----------------------------------------------------------------------------------------------------
+-- 4. 20261017150000_permisos_operacion_sitio
+-- -----------------------------------------------------------------------------------------------------
+-- Operaciones > Horario y días inhábiles (horario:editar) y Operaciones > Equipo en el sitio (equipo:publico).
+-- Semilla: solo la estilista (el admin ya tiene '*'). El admin puede dárselos a otros roles en Permisos por rol.
+-- Agrega las claves sin quitar ninguna de las que ya tiene el rol.
+INSERT INTO "permisos_rol" ("rol", "claves") VALUES ('estilista', ARRAY['horario:editar', 'equipo:publico'])
+ON CONFLICT ("rol") DO UPDATE SET "claves" = (
+  SELECT array_agg(DISTINCT c) FROM unnest("permisos_rol"."claves" || ARRAY['horario:editar', 'equipo:publico']) AS c
+);
+
+COMMIT;
+
+-- Recuerda: después del COMMIT, los cuatro npx prisma migrate resolve --applied de arriba.

@@ -38,6 +38,8 @@ export interface PedidoParaPolitica {
   entregadoEn: Date | null;
   /** Si en algún momento llegó a 'listo_recoger'. */
   llegoAListo?: boolean;
+  /** Días para cambios guardados en el pedido al crearlo (reglasDePedido); sin dato, los de hoy. */
+  diasCambioProducto?: number;
 }
 
 /** Días naturales (en México) entre la entrega y hoy. */
@@ -60,8 +62,9 @@ export function validarPoliticaDevolucion(
     if (s.pedidoItemId == null) return 'Elige el artículo del pedido';
   }
   if (s.tipo === 'cambio') {
-    if (diasDesde(s.pedido.entregadoEn as Date, ahora) > DIAS_CAMBIO_PRODUCTO) {
-      return `El cambio solo procede dentro de los ${DIAS_CAMBIO_PRODUCTO} días naturales siguientes a recogerlo`;
+    const diasCambio = s.pedido.diasCambioProducto ?? DIAS_CAMBIO_PRODUCTO;
+    if (diasDesde(s.pedido.entregadoEn as Date, ahora) > diasCambio) {
+      return `El cambio solo procede dentro de los ${diasCambio} días naturales siguientes a recogerlo`;
     }
     if (s.causa === 'sellado_sin_abrir' && !s.sellado) return 'Confirma que el producto está sellado y sin abrir';
     return null;

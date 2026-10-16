@@ -1,7 +1,9 @@
-import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Patch, Post, Put, UseGuards, UseInterceptors } from '@nestjs/common';
+import { RevalidarWebInterceptor } from '../common/services/revalidacion-web';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Permisos, PermisosGuard } from '../common/guards/permisos.guard';
 import { ContenidoService, PERMISO_CONTENIDO } from './contenido.service';
+import { PERMISO_EQUIPO_PUBLICO } from '../configuracion-sitio/configuracion-sitio.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import {
   ActualizarPerfilPublicoDto,
@@ -41,6 +43,7 @@ export class ContenidoPublicoController {
 /** Admin > Contenido: promociones, preguntas frecuentes y equipo (configuracion:editar, solo admin). */
 @Controller('contenido/admin')
 @UseGuards(JwtAuthGuard, PermisosGuard)
+@UseInterceptors(RevalidarWebInterceptor)
 @Permisos(PERMISO_CONTENIDO)
 export class ContenidoAdminController {
   constructor(private readonly contenido: ContenidoService) {}
@@ -96,16 +99,19 @@ export class ContenidoAdminController {
   }
 
   @Get('equipo')
+  @Permisos(PERMISO_CONTENIDO, PERMISO_EQUIPO_PUBLICO)
   listarEquipo() {
     return this.contenido.listarEquipo();
   }
 
   @Put('equipo/orden')
+  @Permisos(PERMISO_CONTENIDO, PERMISO_EQUIPO_PUBLICO)
   ordenarEquipo(@Body() dto: OrdenContenidoDto) {
     return this.contenido.ordenarEquipo(dto.ids);
   }
 
   @Patch('equipo/:id')
+  @Permisos(PERMISO_CONTENIDO, PERMISO_EQUIPO_PUBLICO)
   actualizarPerfil(@Param('id', ParseIntPipe) id: number, @Body() dto: ActualizarPerfilPublicoDto, @CurrentUser() usuario: { id: string }) {
     return this.contenido.actualizarPerfilPublico(id, dto, usuario?.id);
   }

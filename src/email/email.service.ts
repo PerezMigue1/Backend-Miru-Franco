@@ -3,15 +3,31 @@ import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 import { escaparHtml } from '../common/utils/security.util';
 import { ConfiguracionSitioService } from '../configuracion-sitio/configuracion-sitio.service';
+import {
+  MARCADOR_SALON,
+  correoActivacion,
+  correoCancelacionCuentaArco,
+  correoCodigoCorreo,
+  correoCodigoCorreoActual,
+  correoCodigoPassword,
+  correoCorreoCambiado,
+  correoPasswordCambiada,
+  correoRecuperarPassword,
+  correoRespuestaArco,
+  type Correo,
+} from './plantillas-correo';
 
 /** Nombre registrado del salón (Términos y Aviso): se usa si la configuración no responde. */
 const NOMBRE_SALON_REGISTRADO = 'Mirú Franco Salón Beauty';
-const MARCADOR_SALON = '{{salon}}';
 /** El nombre en el remitente ("Nombre <correo>"): sin signos de dirección ni saltos de línea, nunca otra dirección. */
 const nombreParaRemitente = (nombre: string) => nombre.replace(/[<>"@,;\\\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim() || NOMBRE_SALON_REGISTRADO;
 
 type ParametrosCorreo = { to: string; from: string; subject: string; html: string };
 
+/**
+ * Envío de correos con Resend. El asunto y los textos de cada correo salen del catálogo de Textos del sitio
+ * (plantillas-correo.ts); el diseño HTML se queda en el código. El nombre del salón sale de Configuración del sitio.
+ */
 @Injectable()
 export class EmailService {
   // Sin destinatario en los logs: el correo de la clienta es dato personal.
@@ -30,34 +46,25 @@ export class EmailService {
     }
   }
 
-  async sendOTPEmail(correo: string, codigoOTP: string): Promise<void> {
+  /** Remitente con el marcador del salón (o RESEND_FROM_NAME si existe); null si Resend no está configurado. */
+  private remitente(): string | null {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
+    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || MARCADOR_SALON;
+    if (!apiKey || !fromEmail || !this.resend) return null;
+    return `${fromName} <${fromEmail}>`;
+  }
 
-    if (!apiKey || !fromEmail || !this.resend) {
-      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
-    }
+  private noConfigurado(): Error {
+    return new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
+  }
 
+  async sendOTPEmail(correo: string, codigoOTP: string): Promise<void> {
+    const from = this.remitente();
+    if (!from) throw this.noConfigurado();
     try {
-      const { error } = await this.enviarConMarca({
-        to: correo,
-        from: `${fromName} <${fromEmail}>`,
-        subject: 'Código de activación - {{salon}}',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Bienvenido a {{salon}}</h2>
-            <p>Tu código de verificación es:</p>
-            <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
-              <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${codigoOTP}</h1>
-            </div>
-            <p style="color: #666;">Ingresa este código en la aplicación para activar tu cuenta.</p>
-            <p style="color: #666; font-size: 12px;">Este código expira en 2 minutos.</p>
-            <p style="color: #666; font-size: 12px;">Si no solicitaste este código, ignora este mensaje.</p>
-          </div>
-        `,
-      });
-
+      const { asunto, html } = correoActivacion(codigoOTP);
+      const { error } = await this.enviarConMarca({ to: correo, from, subject: asunto, html });
       if (error) throw error;
       this.logger.log('Correo de activación enviado');
     } catch (err: any) {
@@ -67,71 +74,11 @@ export class EmailService {
   }
 
   async sendPasswordResetEmail(correo: string, resetLink: string, expiresInMinutes: number = 10): Promise<void> {
-    const apiKey = this.configService.get<string>('RESEND_API_KEY');
-    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
-
-    if (!apiKey || !fromEmail || !this.resend) {
-      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
-    }
-
+    const from = this.remitente();
+    if (!from) throw this.noConfigurado();
     try {
-      const { error } = await this.enviarConMarca({
-        to: correo,
-        from: `${fromName} <${fromEmail}>`,
-        subject: 'Recuperar Contraseña - {{salon}}',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h2 style="color: #710014; margin: 0;">{{salon}}</h2>
-            </div>
-            
-            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-              <h3 style="color: #161616; margin-top: 0;">Solicitud de Recuperación de Contraseña</h3>
-              <p style="color: #495057; line-height: 1.6;">
-                Recibimos una solicitud para restablecer la contraseña de tu cuenta. 
-                Si fuiste tú, haz clic en el botón de abajo para crear una nueva contraseña.
-              </p>
-            </div>
-
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${resetLink}" 
-                 style="display: inline-block; background-color: #710014; color: white; 
-                        padding: 14px 28px; text-decoration: none; border-radius: 6px; 
-                        font-weight: bold; font-size: 16px;">
-                Restablecer Contraseña
-              </a>
-            </div>
-
-            <div style="background-color: #fff3cd; padding: 15px; border-radius: 6px; border-left: 4px solid #ffc107; margin: 20px 0;">
-              <p style="color: #856404; margin: 0; font-size: 14px;">
-                <strong>⚠️ Importante:</strong>
-              </p>
-              <ul style="color: #856404; margin: 10px 0 0 0; padding-left: 20px; font-size: 14px;">
-                <li>Este enlace expira en ${expiresInMinutes} minutos</li>
-                <li>Solo puede ser usado una vez</li>
-                <li>Si no solicitaste este cambio, ignora este mensaje</li>
-              </ul>
-            </div>
-
-            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;">
-              <p style="color: #6c757d; font-size: 12px; margin: 0;">
-                Si el botón no funciona, copia y pega este enlace en tu navegador:
-              </p>
-              <p style="color: #6c757d; font-size: 12px; word-break: break-all; margin: 5px 0 0 0;">
-                ${resetLink}
-              </p>
-            </div>
-
-            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6;">
-              <p style="color: #6c757d; font-size: 12px; margin: 0;">
-                Este es un correo automático, por favor no respondas.
-              </p>
-            </div>
-          </div>
-        `,
-      });
-
+      const { asunto, html } = correoRecuperarPassword(resetLink, expiresInMinutes);
+      const { error } = await this.enviarConMarca({ to: correo, from, subject: asunto, html });
       if (error) throw error;
       this.logger.log('Correo de recuperación de contraseña enviado');
     } catch (err: any) {
@@ -140,49 +87,14 @@ export class EmailService {
     }
   }
 
-  /**
-   * Código para cambiar la contraseña desde el perfil. El código solo va en el HTML: nunca en los logs.
-   */
+  /** Código para cambiar la contraseña desde el perfil. El código solo va en el HTML: nunca en los logs. */
   async sendCodigoCambioPasswordEmail(correo: string, codigo: string, vigenciaMinutos: number): Promise<void> {
-    await this.enviarCorreoCuenta(
-      correo,
-      'Código para cambiar tu contraseña - {{salon}}',
-      `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Cambio de contraseña</h2>
-            <p>Para cambiar la contraseña de tu cuenta de {{salon}}, ingresa este código:</p>
-            <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
-              <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${codigo}</h1>
-            </div>
-            <p style="color: #666; font-size: 12px;">Este código vence en ${vigenciaMinutos} minutos y solo sirve una vez.</p>
-            <p style="color: #666; font-size: 12px;">Si no fuiste tú, ignora este correo y cambia tu contraseña.</p>
-          </div>
-        `,
-      'código de cambio de contraseña',
-    );
+    await this.enviarCorreoCuenta(correo, correoCodigoPassword(codigo, vigenciaMinutos), 'código de cambio de contraseña');
   }
 
-  /**
-   * Código para confirmar el correo nuevo de la cuenta (se envía al correo nuevo). El código solo va
-   * en el HTML: nunca en los logs.
-   */
+  /** Código para confirmar el correo nuevo de la cuenta (se envía al correo nuevo). El código nunca va en los logs. */
   async sendCodigoCambioCorreoEmail(correoNuevo: string, codigo: string, vigenciaMinutos: number): Promise<void> {
-    await this.enviarCorreoCuenta(
-      correoNuevo,
-      'Código para cambiar tu correo - {{salon}}',
-      `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Cambio de correo</h2>
-            <p>Para usar este correo en tu cuenta de {{salon}}, ingresa este código:</p>
-            <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
-              <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${escaparHtml(codigo)}</h1>
-            </div>
-            <p style="color: #666; font-size: 12px;">Este código vence en ${vigenciaMinutos} minutos y solo sirve una vez.</p>
-            <p style="color: #666; font-size: 12px;">Si no fuiste tú, ignora este correo: tu cuenta no cambia.</p>
-          </div>
-        `,
-      'código de cambio de correo',
-    );
+    await this.enviarCorreoCuenta(correoNuevo, correoCodigoCorreo(codigo, vigenciaMinutos), 'código de cambio de correo');
   }
 
   /**
@@ -190,55 +102,21 @@ export class EmailService {
    * a qué correo se quiere cambiar, para que lo reconozca o lo ignore.
    */
   async sendCodigoCorreoActualEmail(correoActual: string, codigo: string, correoNuevo: string, vigenciaMinutos: number): Promise<void> {
-    await this.enviarCorreoCuenta(
-      correoActual,
-      'Confirma el cambio de tu correo - {{salon}}',
-      `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Confirma el cambio de tu correo</h2>
-            <p>Pidieron cambiar el correo de tu cuenta de {{salon}} a <strong>${escaparHtml(correoNuevo)}</strong>. Si fuiste tú, ingresa este código junto con el que llegó a tu nuevo correo:</p>
-            <div style="background-color: #f2f1ed; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
-              <h1 style="color: #161616; font-size: 32px; letter-spacing: 8px; margin: 0;">${escaparHtml(codigo)}</h1>
-            </div>
-            <p style="color: #666; font-size: 12px;">Este código vence en ${vigenciaMinutos} minutos y solo sirve una vez.</p>
-            <p style="color: #666; font-size: 12px;">Si no fuiste tú, no compartas este código con nadie: sin él tu correo no cambia. Te recomendamos cerrar sesión en los dispositivos que no reconozcas.</p>
-          </div>
-        `,
-      'código de cambio de correo al correo actual',
-    );
+    await this.enviarCorreoCuenta(correoActual, correoCodigoCorreoActual(codigo, correoNuevo, vigenciaMinutos), 'código de cambio de correo al correo actual');
   }
 
   /** Aviso después de cambiar la contraseña: fecha y hora, y cómo recuperar la cuenta. Sin datos sensibles. */
   async sendAvisoPasswordCambiadaEmail(correo: string, fechaHora: string): Promise<void> {
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'https://www.mirufranco.com';
-    const recuperar = `${frontendUrl}/forgot-password`;
-    await this.enviarCorreoCuenta(
-      correo,
-      'Tu contraseña cambió - {{salon}}',
-      `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Tu contraseña cambió</h2>
-            <p>La contraseña de tu cuenta de {{salon}} se cambió el ${escaparHtml(fechaHora)} (hora del centro de México).</p>
-            <p>Por seguridad cerramos todas tus sesiones: inicia sesión de nuevo con tu nueva contraseña.</p>
-            <p style="color: #666;">Si no fuiste tú, recupera tu cuenta ahora desde <a href="${recuperar}" style="color: #710014;">¿Olvidaste tu contraseña?</a> y elige una contraseña nueva.</p>
-          </div>
-        `,
-      'aviso de cambio de contraseña',
-    );
+    await this.enviarCorreoCuenta(correo, correoPasswordCambiada(fechaHora, `${frontendUrl}/forgot-password`), 'aviso de cambio de contraseña');
   }
 
   /** Envío de los correos de la cuenta: el log de error no lleva destinatario ni contenido. */
-  private async enviarCorreoCuenta(to: string, subject: string, html: string, tipo: string): Promise<void> {
-    const apiKey = this.configService.get<string>('RESEND_API_KEY');
-    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
-
-    if (!apiKey || !fromEmail || !this.resend) {
-      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
-    }
-
+  private async enviarCorreoCuenta(to: string, correo: Correo, tipo: string): Promise<void> {
+    const from = this.remitente();
+    if (!from) throw this.noConfigurado();
     try {
-      const { error } = await this.enviarConMarca({ to, from: `${fromName} <${fromEmail}>`, subject, html });
+      const { error } = await this.enviarConMarca({ to, from, subject: correo.asunto, html: correo.html });
       if (error) throw error;
       this.logger.log(`Correo enviado: ${tipo}`);
     } catch (err: any) {
@@ -248,29 +126,14 @@ export class EmailService {
   }
 
   /**
-   * Envío genérico para el canal `email` del motor de notificaciones (Etapa 3):
-   * a diferencia de los dos métodos de arriba, no trae plantilla propia — el
-   * HTML ya viene armado (ver `EmailDispatcher`). Mismo cliente/remitente
-   * (`RESEND_API_KEY`/`RESEND_FROM_*`) y mismo criterio de error que los otros
-   * dos: loguear el detalle y relanzar un Error fijo en español.
+   * Envío genérico para el canal `email` del motor de notificaciones: el HTML ya viene armado (EmailDispatcher con
+   * htmlAviso, o el aviso de pregunta de seguridad). Mismo remitente y mismo criterio de error que los demás.
    */
   async sendNotificationEmail(to: string, subject: string, html: string): Promise<void> {
-    const apiKey = this.configService.get<string>('RESEND_API_KEY');
-    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
-    const fromName = this.configService.get<string>('RESEND_FROM_NAME') || '{{salon}}';
-
-    if (!apiKey || !fromEmail || !this.resend) {
-      throw new Error('Resend no está configurado. Por favor configura RESEND_API_KEY y RESEND_FROM_EMAIL.');
-    }
-
+    const from = this.remitente();
+    if (!from) throw this.noConfigurado();
     try {
-      const { error } = await this.enviarConMarca({
-        to,
-        from: `${fromName} <${fromEmail}>`,
-        subject,
-        html,
-      });
-
+      const { error } = await this.enviarConMarca({ to, from, subject, html });
       if (error) throw error;
       this.logger.log('Correo de notificación enviado');
     } catch (err: any) {
@@ -283,34 +146,8 @@ export class EmailService {
    * ARCO: aviso a la titular cuando el salón responde, atiende o rechaza su solicitud (folio, tipo, estado y la
    * respuesta). El log no lleva destinatario ni contenido (ver enviarCorreoCuenta).
    */
-  async sendRespuestaArcoEmail(
-    correo: string,
-    datos: { folio: string; tipo: string; estado: string; respuesta: string },
-  ): Promise<void> {
-    const tipos: Record<string, string> = {
-      acceso: 'Acceso a tus datos',
-      rectificacion: 'Rectificación',
-      cancelacion: 'Cancelación',
-      oposicion: 'Oposición',
-      revocacion: 'Revocación del consentimiento',
-    };
-    const estados: Record<string, string> = { respondida: 'Respondida', atendida: 'Atendida', rechazada: 'Rechazada', en_proceso: 'En proceso' };
-    const respuesta = escaparHtml(datos.respuesta).replace(/\r?\n/g, '<br>');
-    await this.enviarCorreoCuenta(
-      correo,
-      `Respuesta a tu solicitud ${datos.folio} - {{salon}}`,
-      `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Respuesta a tu solicitud de derechos ARCO</h2>
-            <p><strong>Folio:</strong> ${escaparHtml(datos.folio)}</p>
-            <p><strong>Tipo:</strong> ${escaparHtml(tipos[datos.tipo] ?? datos.tipo)}</p>
-            <p><strong>Estado:</strong> ${escaparHtml(estados[datos.estado] ?? datos.estado)}</p>
-            <div style="background-color: #f2f1ed; padding: 16px; margin: 20px 0; border-radius: 8px;">${respuesta}</div>
-            <p style="color: #666; font-size: 12px;">También puedes ver tus solicitudes en tu perfil, en la sección de privacidad.</p>
-          </div>
-        `,
-      'respuesta ARCO',
-    );
+  async sendRespuestaArcoEmail(correo: string, datos: { folio: string; tipo: string; estado: string; respuesta: string }): Promise<void> {
+    await this.enviarCorreoCuenta(correo, correoRespuestaArco(datos), 'respuesta ARCO');
   }
 
   /**
@@ -318,40 +155,12 @@ export class EmailService {
    * (después de anonimizar la cuenta ya no tiene correo). Nombra lo que se conserva por obligación legal.
    */
   async sendCancelacionCuentaArcoEmail(correo: string, datos: { folio: string; fecha: Date }): Promise<void> {
-    const fecha = new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', dateStyle: 'long', timeStyle: 'short' }).format(datos.fecha);
-    await this.enviarCorreoCuenta(
-      correo,
-      'Cancelamos tu cuenta - {{salon}}',
-      `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Cancelamos tu cuenta</h2>
-            <p>Atendimos tu solicitud de cancelación con folio <strong>${escaparHtml(datos.folio)}</strong> el ${escaparHtml(fecha)} (hora del centro de México).</p>
-            <p>Anonimizamos tus datos personales: tu nombre, correo, teléfono, direcciones, datos de salud y de tu cabello, tarjetas guardadas y notas ya no están en tu cuenta, y ya no puedes iniciar sesión con ella.</p>
-            <p>Por obligación legal conservamos tus pedidos, pagos, facturas y ventas durante 5 años (artículo 30 del Código Fiscal de la Federación), y también tus citas, quejas y valoraciones sin tu nombre, la constancia de tus consentimientos y tus solicitudes ARCO.</p>
-            <p style="color: #666; font-size: 12px;">Si no pediste esta cancelación, comunícate con el salón lo antes posible.</p>
-          </div>
-        `,
-      'cancelación ARCO',
-    );
+    await this.enviarCorreoCuenta(correo, correoCancelacionCuentaArco(datos), 'cancelación ARCO');
   }
 
-  /**
-   * Cambio de correo de la cuenta: aviso al correo ANTERIOR con la fecha y hora. No lleva el correo nuevo. El log no
-   * lleva destinatario ni contenido (ver enviarCorreoCuenta).
-   */
+  /** Cambio de correo de la cuenta: aviso al correo ANTERIOR con la fecha y hora. No lleva el correo nuevo. */
   async sendAvisoCorreoCambiadoEmail(correoAnterior: string, fechaHora: string): Promise<void> {
-    await this.enviarCorreoCuenta(
-      correoAnterior,
-      'Tu correo cambió - {{salon}}',
-      `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #710014;">Tu correo cambió</h2>
-            <p>El correo de tu cuenta de {{salon}} se cambió el ${escaparHtml(fechaHora)} (hora del centro de México). Desde ahora, este correo ya no sirve para entrar ni para recuperar tu cuenta.</p>
-            <p style="color: #666;">Si no fuiste tú, comunícate con el salón lo antes posible para recuperar tu cuenta.</p>
-          </div>
-        `,
-      'aviso de cambio de correo',
-    );
+    await this.enviarCorreoCuenta(correoAnterior, correoCorreoCambiado(fechaHora), 'aviso de cambio de correo');
   }
 
   /** Nombre y contacto del salón desde Configuración del sitio (con caché); sin ella, el nombre registrado. */

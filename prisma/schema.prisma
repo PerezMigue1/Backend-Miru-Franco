@@ -223,6 +223,8 @@ model Pedido {
   direccionTextoCompleta String?      @map("direccion_texto_completa") @db.Text
   notasCliente           String?      @map("notas_cliente") @db.Text
   metodoPago             String?      @map("metodo_pago")
+  /// Reglas de negocio con que se creó (plazos de pago, apartado, cambios, revocación). null: anterior a esta ronda.
+  reglas                 Json?
   referenciaPago         String?      @map("referencia_pago")
   pagadoEn               DateTime?    @map("pagado_en")
   creadoEn               DateTime     @default(now()) @map("creado_en")
@@ -941,6 +943,8 @@ model Cita {
   anticipoPagadoEn  DateTime?  @map("anticipo_pagado_en")
   /// La clienta eligió pagar el anticipo en el salón: el plazo es 15 min antes del inicio.
   anticipoEnSalon   Boolean    @default(false) @map("anticipo_en_salon")
+  /// Reglas de negocio con que se creó (plazos del anticipo, aviso para cancelar...). null: anterior a esta ronda.
+  reglas            Json?
   creadoEn          DateTime   @default(now()) @map("creado_en")
   actualizadoEn     DateTime   @updatedAt @map("actualizado_en")
 
@@ -1281,8 +1285,51 @@ model VersionDocumentoLegal {
   vigenteDesde DateTime @map("vigente_desde") @db.Date
   creadoEn     DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
 
+  /// Texto publicado de esta versión (migración 20261017130000_documentos_legales).
+  contenido ContenidoDocumentoLegal?
+
   @@unique([slug, version])
   @@map("versiones_documentos_legales")
+}
+
+/// Texto publicado de cada versión de un documento legal, 1 a 1 con versiones_documentos_legales. SOLO INSERCIÓN
+/// (triggers con rechazar_cambios_solo_insercion): una versión publicada nunca se edita; cambiar el texto es
+/// publicar otra versión (Admin > Documentos legales).
+model ContenidoDocumentoLegal {
+  id                 Int      @id @default(autoincrement())
+  versionId          Int      @unique @map("version_id")
+  slug               String
+  version            String
+  /// <main> publicado, ya limpio (lista blanca). SHA-256 de su texto visible = versiones_documentos_legales.hash_texto.
+  html               String
+  /// Formato sencillo del editor con las variables de reglas como {nombre}.
+  plantilla          String
+  /// Variables de reglas que usa el texto, con el valor que tenían al publicar ({"diasGarantia": "7"}).
+  variables          Json     @default("{}")
+  /// true: cambio importante, se pide volver a aceptar. false: corrección menor.
+  requiereAceptacion Boolean  @default(true) @map("requiere_aceptacion")
+  motivo             String
+  /// Quién publicó (NULL en lo sembrado de las páginas de la web). Sin llave foránea: la tabla no admite UPDATE.
+  publicadoPorId     String?  @map("publicado_por_id")
+  creadoEn           DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+
+  versionDocumento VersionDocumentoLegal @relation(fields: [versionId], references: [id], onDelete: Restrict)
+
+  @@index([slug])
+  @@map("contenidos_documentos_legales")
+}
+
+/// Borrador editable de un documento legal (uno por documento; reembolsos incluye anticipos). Publicarlo lo borra.
+model BorradorDocumentoLegal {
+  slug             String   @id
+  /// Formato sencillo con {variables}.
+  plantilla        String
+  /// Versión de la que se preparó (solo informativo).
+  basadoEnVersion  String?  @map("basado_en_version")
+  actualizadoEn    DateTime @default(now()) @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+  actualizadoPorId String?  @map("actualizado_por_id")
+
+  @@map("borradores_documentos_legales")
 }
 
 /// Solicitud de derechos ARCO. Plazos en días hábiles (common/utils/dias-habiles.util.ts): respuesta a
@@ -1476,4 +1523,30 @@ model PreguntaFrecuente {
 
   @@index([visible, orden])
   @@map("preguntas_frecuentes")
+}
+
+/// Textos del sitio administrables (Admin > Textos del sitio): una fila por clave del catálogo (src/textos-sitio/catalogo.ts).
+/// Sin fila, el sitio usa el valor por defecto del catálogo. Sin relación a usuarios: el nombre se busca aparte.
+model TextoSitio {
+  clave            String   @id
+  valor            String   @db.Text
+  actualizadoEn    DateTime @default(now()) @updatedAt @map("actualizado_en") @db.Timestamptz(6)
+  actualizadoPorId String?  @map("actualizado_por_id")
+
+  @@map("textos_sitio")
+}
+
+/// Cada cambio de un texto del sitio (también al restaurar el original): valor anterior, nuevo, quién y cuándo. Solo inserción.
+model HistorialTextoSitio {
+  id               Int      @id @default(autoincrement())
+  clave            String
+  valorAnterior    String?  @map("valor_anterior") @db.Text
+  valorNuevo       String   @map("valor_nuevo") @db.Text
+  /// El cambio fue "Restaurar texto original".
+  restaurado       Boolean  @default(false)
+  creadoEn         DateTime @default(now()) @map("creado_en") @db.Timestamptz(6)
+  actualizadoPorId String?  @map("actualizado_por_id")
+
+  @@index([clave, creadoEn])
+  @@map("historial_textos_sitio")
 }

@@ -1,33 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from '../../email/email.service';
+import { htmlAviso } from '../../email/plantillas-correo';
 import { CanalDispatcher, EnvioConNotificacion, ResultadoEnvio } from './canal-dispatcher.interface';
-import { escaparHtml } from '../../common/utils/security.util';
-
-/**
- * Plantilla mínima genérica a partir de `notificacion.titulo`/`mensaje` —
- * mismos colores/tipografía que las plantillas de `EmailService` (Etapa 2)
- * para que el correo se sienta de la misma marca, sin ser una copia de esas
- * plantillas (que tienen su propio contenido fijo, no aplican aquí).
- */
-function armarHtml(titulo: string, mensaje: string): string {
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <div style="text-align: center; margin-bottom: 30px;">
-        <h2 style="color: #710014; margin: 0;">Miru Franco Salón Beauty</h2>
-      </div>
-      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px;">
-        <h3 style="color: #161616; margin-top: 0;">${escaparHtml(titulo)}</h3>
-        <p style="color: #495057; line-height: 1.6; white-space: pre-line;">${escaparHtml(mensaje)}</p>
-      </div>
-      <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6;">
-        <p style="color: #6c757d; font-size: 12px; margin: 0;">
-          Este es un correo automático, por favor no respondas.
-        </p>
-      </div>
-    </div>
-  `;
-}
 
 @Injectable()
 export class EmailDispatcher implements CanalDispatcher {
@@ -43,16 +18,18 @@ export class EmailDispatcher implements CanalDispatcher {
     });
     // `Usuario.email` es obligatorio en el schema; si `usuario` viene null aquí
     // es porque el usuario ya no existe (debería ser imposible por el cascade
-    // de `Notificacion`, ver schema) — dejar que falle y lo reintente el
+    // de `Notificacion`, ver schema): dejar que falle y lo reintente el
     // barrido en vez de enmascararlo como enviado.
     if (!usuario) {
       throw new Error(`Usuario ${envio.notificacion.usuarioId} no encontrado`);
     }
 
+    // Asunto y cuerpo: el título y el mensaje del aviso (salen del catálogo de Textos del sitio). El diseño, el nombre
+    // del salón (Configuración del sitio) y el pie automático los pone htmlAviso.
     await this.emailService.sendNotificationEmail(
       usuario.email,
       envio.notificacion.titulo,
-      armarHtml(envio.notificacion.titulo, envio.notificacion.mensaje),
+      htmlAviso(envio.notificacion.titulo, envio.notificacion.mensaje),
     );
 
     await this.prisma.notificacionEnvio.update({

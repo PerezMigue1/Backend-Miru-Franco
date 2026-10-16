@@ -11,6 +11,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPago, EstadoPedido, Prisma } from '@prisma/client';
 import { EVENTO_REEMBOLSO_REALIZADO } from '../../notificaciones/eventos';
 import { PrismaService } from '../../prisma/prisma.service';
+import { reglasDePedido } from '../../configuracion-sitio/reglas-negocio';
 import { esCobroEnEfectivoDelSalon, registrarSalidaEfectivo, TX_HOLGADA } from '../../pos/salidas-caja';
 import { incrementarStockPorLineas } from '../common/pedido-inventario.util';
 import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
@@ -232,6 +233,7 @@ export class DevolucionesService {
         pagadoEn: true,
         metodoPago: true,
         total: true,
+        reglas: true,
         historialEstado: {
           where: { estadoNuevo: { in: ['listo_recoger', 'entregado'] } },
           select: { estadoNuevo: true, creadoEn: true },
@@ -273,6 +275,7 @@ export class DevolucionesService {
         metodoPago: pedido.metodoPago,
         entregadoEn: entrega?.creadoEn ?? null,
         llegoAListo: pedido.historialEstado.some((h) => h.estadoNuevo === 'listo_recoger'),
+        diasCambioProducto: reglasDePedido(pedido.reglas).diasCambioProducto,
       },
     });
     if (error) throw new BadRequestException(error);

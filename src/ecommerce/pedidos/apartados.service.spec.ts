@@ -19,6 +19,7 @@ type PedidoPrueba = {
   metodoPago: string;
   creadoEn: Date;
   listoDesde?: Date;
+  reglas?: Record<string, unknown> | null;
 };
 
 /**
@@ -58,6 +59,7 @@ function montar(pedidos: PedidoPrueba[], notificacionesPrevias: { entidadId: str
             estado: p.estado,
             creadoEn: p.creadoEn,
             historialEstado: p.listoDesde ? [{ creadoEn: p.listoDesde }] : [],
+            reglas: p.reglas ?? null,
           }));
       }),
     },
@@ -261,5 +263,47 @@ describe('Apartados y pedidos en línea vencidos (barrida)', () => {
     ]);
     await servicio.barrer(AHORA);
     expect(pedidos.map((p) => p.estado)).toEqual(['pendiente_pago', 'cancelado']);
+  });
+});
+
+describe('Barrida con las reglas guardadas en cada pedido', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../../configuracion-sitio/reglas-negocio');
+  const desdeOriginal = process.env.APARTADOS_DESDE;
+  beforeEach(() => { process.env.APARTADOS_DESDE = '2026-10-01T00:00:00.000-06:00'; });
+  afterEach(() => { process.env.APARTADOS_DESDE = desdeOriginal; establecerReglasNegocio(null); });
+
+  it('un apartado creado con 5 días para prepararlo no se cancela al día 4; uno sin reglas guardadas (3 días) sí', async () => {
+    const { servicio, pedidos } = montar([apartado({ id: 1, reglas: { diasPrepararApartado: 5 } }), apartado({ id: 2 })]);
+    const r: any = await servicio.barrer(AHORA);
+    expect(r.cancelados).toEqual([2]);
+    expect(pedidos[0].estado).toBe('pendiente_pago');
+  });
+
+  it('el pago en línea vence con el plazo guardado en el pedido (48 h), no con el vigente', async () => {
+    establecerReglasNegocio({ tienda: { plazoPagoLineaHoras: 2 } });
+    const { servicio } = montar([apartado({ id: 3, metodoPago: 'mercado_pago', creadoEn: hace(30 * HORA), reglas: { plazoPagoLineaHoras: 48 } }), apartado({ id: 4, metodoPago: 'mercado_pago', creadoEn: hace(30 * HORA) })]);
+    const r: any = await servicio.barrer(AHORA);
+    expect(r.cancelados).toEqual([4]);
+  });
+
+  it('recordatorio y cancelación de un apartado listo con los días guardados (5 y 10)', async () => {
+    const reglas = { diaRecordatorioRecoger: 5, diasCancelarNoRecogido: 10 };
+    const { servicio } = montar([
+      apartado({ id: 5, estado: EstadoPedido.listo_recoger, listoDesde: hace(4 * DIA), reglas }),
+      apartado({ id: 6, estado: EstadoPedido.listo_recoger, listoDesde: hace(6 * DIA), reglas }),
+      apartado({ id: 7, estado: EstadoPedido.listo_recoger, listoDesde: hace(8 * DIA), reglas }),
+    ]);
+    const r: any = await servicio.barrer(AHORA);
+    expect(r.recordatorios).toEqual([6, 7]);
+    expect(r.cancelados).toEqual([]);
+  });
+
+  it('la fecha de inicio de la barrida sale de la regla; APARTADOS_DESDE queda de respaldo', async () => {
+    delete process.env.APARTADOS_DESDE;
+    establecerReglasNegocio({ tienda: { apartadosDesde: '2026-10-01' } });
+    const { servicio } = montar([apartado({ id: 8 })]);
+    const r: any = await servicio.barrer(AHORA);
+    expect(r.cancelados).toEqual([8]);
   });
 });

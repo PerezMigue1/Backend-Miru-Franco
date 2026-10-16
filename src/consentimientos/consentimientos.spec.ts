@@ -68,6 +68,10 @@ function prismaFalso(opciones: { versionesExtra?: any[] } = {}) {
     filas,
     versionDocumentoLegal: {
       findFirst: jest.fn(async ({ where, orderBy }: any) => ordenar(versiones.filter((v) => coincide(v, where)), orderBy)[0] ?? null),
+      // Con su contenido (requiereAceptacion): las versiones sin texto en la base cuentan como cambio importante.
+      findMany: jest.fn(async ({ where, orderBy }: any) =>
+        ordenar(versiones.filter((v) => coincide(v, where)), orderBy).map((v) => ({ ...v, contenido: v.contenido ?? null })),
+      ),
     },
     consentimiento: {
       create: jest.fn(async ({ data }: any) => {
@@ -421,6 +425,55 @@ describe('ConsentimientosService.pendientes', () => {
     // Ya en vigor (2 de noviembre en México), la 3.0 sí se pide
     const despues = (await servicio.pendientes('u-1', new Date('2026-11-02T18:00:00.000Z'))).data.find((p: any) => p.tipo === 'terminos');
     expect(despues).toMatchObject({ version: '3.0', versionAceptada: '2.0' });
+  });
+});
+
+describe('ConsentimientosService.pendientes: correcciones menores', () => {
+  const AHORA = new Date('2026-10-20T18:00:00.000Z');
+  const HASH_21 = 'd'.repeat(64);
+  const HASH_22 = 'e'.repeat(64);
+  const menor = { contenido: { requiereAceptacion: false } };
+  const importante = { contenido: { requiereAceptacion: true } };
+
+  it('aceptó la 2.0 y la vigente 2.1 es una corrección menor: no se le vuelve a pedir', async () => {
+    const { servicio } = montar({ versionesExtra: [{ id: 10, slug: 'terminos', version: '2.1', hashTexto: HASH_21, vigenteDesde: dia('2026-10-18'), ...menor }] });
+    await servicio.registrar({ items: [aceptarTerminos], formulario: 'registro' }, { usuarioId: 'u-1' }, CONTEXTO);
+    expect((await servicio.pendientes('u-1', AHORA)).data.map((p: any) => p.tipo)).not.toContain('terminos');
+  });
+
+  it('si después de la menor hay una importante, sí se pide (con la versión vigente)', async () => {
+    const { servicio } = montar({
+      versionesExtra: [
+        { id: 10, slug: 'terminos', version: '2.1', hashTexto: HASH_21, vigenteDesde: dia('2026-10-18'), ...menor },
+        { id: 11, slug: 'terminos', version: '2.2', hashTexto: HASH_22, vigenteDesde: dia('2026-10-19'), ...importante },
+      ],
+    });
+    await servicio.registrar({ items: [aceptarTerminos], formulario: 'registro' }, { usuarioId: 'u-1' }, CONTEXTO);
+    const terminos = (await servicio.pendientes('u-1', AHORA)).data.find((p: any) => p.tipo === 'terminos');
+    expect(terminos).toMatchObject({ version: '2.2', hash: HASH_22, versionAceptada: '2.0' });
+  });
+
+  it('una versión importante (o sin texto en la base) se pide aunque la anterior fuera menor', async () => {
+    const { servicio } = montar({ versionesExtra: [{ id: 10, slug: 'terminos', version: '2.1', hashTexto: HASH_21, vigenteDesde: dia('2026-10-18'), ...importante }] });
+    await servicio.registrar({ items: [aceptarTerminos], formulario: 'registro' }, { usuarioId: 'u-1' }, CONTEXTO);
+    expect((await servicio.pendientes('u-1', AHORA)).data.find((p: any) => p.tipo === 'terminos')).toMatchObject({ version: '2.1' });
+  });
+
+  it('una menor no cubre a quien revocó ni a quien aceptó con un hash que no es el publicado', async () => {
+    const { servicio, prisma } = montar({ versionesExtra: [{ id: 10, slug: 'terminos', version: '2.1', hashTexto: HASH_21, vigenteDesde: dia('2026-10-18'), ...menor }] });
+    prisma.filas.push({ id: BigInt(80), usuarioId: 'u-2', tipo: 'terminos', accion: 'aceptado', documentoVersion: '2.0', documentoHash: 'f'.repeat(64), registradoPorId: null, creadoEn: new Date() });
+    expect((await servicio.pendientes('u-2', AHORA)).data.map((p: any) => p.tipo)).toContain('terminos');
+    await servicio.registrar({ items: [aceptarTerminos], formulario: 'registro' }, { usuarioId: 'u-3' }, CONTEXTO);
+    await servicio.registrar({ items: [{ tipo: 'terminos', accion: 'revocado' }], formulario: 'perfil' }, { usuarioId: 'u-3' }, CONTEXTO);
+    expect((await servicio.pendientes('u-3', AHORA)).data.map((p: any) => p.tipo)).toContain('terminos');
+  });
+
+  it('se sigue aceptando cualquier versión publicada (slug, versión y hash), como la app móvil', async () => {
+    const { servicio } = montar({ versionesExtra: [{ id: 10, slug: 'terminos', version: '2.1', hashTexto: HASH_21, vigenteDesde: dia('2026-10-18'), ...menor }] });
+    await expect(servicio.registrar({ items: [aceptarTerminos], formulario: 'registro' }, { usuarioId: 'u-1' }, CONTEXTO)).resolves.toMatchObject({ success: true });
+    await expect(
+      servicio.registrar({ items: [{ ...aceptarTerminos, version: '2.1', hash: HASH_21 }], formulario: 'registro' }, { usuarioId: 'u-1' }, CONTEXTO),
+    ).resolves.toMatchObject({ success: true });
   });
 });
 

@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { RevalidarWebInterceptor } from '../common/services/revalidacion-web';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Permisos, PermisosGuard } from '../common/guards/permisos.guard';
@@ -14,6 +15,7 @@ import { GaleriaService, PERMISO_GALERIA_GESTIONAR, PERMISO_GALERIA_LECTURA } fr
  *   estilista, empleado). Solo se registran fotos subidas desde el panel con una firma propia (nunca una URL).
  */
 @Controller('galeria')
+@UseInterceptors(RevalidarWebInterceptor)
 export class GaleriaController {
   constructor(private readonly galeria: GaleriaService) {}
 

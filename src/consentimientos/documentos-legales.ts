@@ -23,6 +23,10 @@ interface ClienteVersiones {
   versionDocumentoLegal: { findFirst: (args: any) => Promise<any> };
 }
 
+interface ClienteHistorialVersiones {
+  versionDocumentoLegal: { findMany: (args: any) => Promise<any[]> };
+}
+
 /** 400 si (slug, versión, hash) no está publicado en versiones_documentos_legales. */
 export async function validarDocumento(cliente: ClienteVersiones, doc: DocumentoAceptado): Promise<void> {
   const fila = await cliente.versionDocumentoLegal.findFirst({
@@ -48,6 +52,30 @@ export async function versionVigente(
     orderBy: [{ vigenteDesde: 'desc' }, { id: 'desc' }],
     select: { slug: true, version: true, hashTexto: true, vigenteDesde: true },
   });
+}
+
+/**
+ * true si la versión que aceptó la persona (versión y hash publicados) sigue valiendo para la vigente: todas las
+ * versiones que entraron en vigor después de la aceptada son correcciones menores (contenidos_documentos_legales
+ * con requiere_aceptacion = false; Admin > Documentos legales). Una versión sin texto en la base (anterior al editor)
+ * cuenta como cambio importante. Si la aceptada no está publicada, false.
+ */
+export async function aceptacionCubreVigente(
+  cliente: ClienteHistorialVersiones,
+  slug: SlugDocumento,
+  aceptada: { version: string | null; hash: string | null },
+  ahora: Date = new Date(),
+): Promise<boolean> {
+  if (!aceptada.version || !aceptada.hash) return false;
+  const hoy = new Date(`${diaEnMexico(ahora)}T00:00:00.000Z`);
+  const versiones = await cliente.versionDocumentoLegal.findMany({
+    where: { slug, vigenteDesde: { lte: hoy } },
+    orderBy: [{ vigenteDesde: 'asc' }, { id: 'asc' }],
+    select: { version: true, hashTexto: true, contenido: { select: { requiereAceptacion: true } } },
+  });
+  const i = versiones.findIndex((v) => v.version === aceptada.version && v.hashTexto === aceptada.hash);
+  if (i < 0) return false;
+  return versiones.slice(i + 1).every((v) => v.contenido?.requiereAceptacion === false);
 }
 
 /**

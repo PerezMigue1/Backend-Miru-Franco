@@ -115,7 +115,10 @@ describe('Configuración pública (sin sesión, con caché)', () => {
     const { servicio, prisma } = montar();
     const a = await servicio.publica();
     expect(a).toMatchObject({ salon: { nombre: 'Mirú Franco Salón Beauty' }, horario: { dias: expect.any(Array) }, anticiposActivos: expect.any(Boolean) });
-    expect(a).not.toHaveProperty('reglas');
+    // Reglas públicas (plazos y métodos de pago), sin campos internos ni datos de transferencia apagada.
+    expect((a as any).reglas.citas.plazoAnticipoHoras).toBe(2);
+    expect((a as any).reglas.tienda.apartadosDesde).toBeUndefined();
+    expect((a as any).reglas.pagos.transferencia).toBeNull();
     await servicio.publica();
     expect(prisma.configuracionSitio.findMany).toHaveBeenCalledTimes(1);
   });
@@ -192,5 +195,62 @@ describe('Cableado del módulo', () => {
     expect(Reflect.getMetadata('imports', AppModule)).toContain(ConfiguracionSitioModule);
     expect(Reflect.getMetadata('controllers', ConfiguracionSitioModule)).toEqual(expect.arrayContaining([ConfiguracionPublicaController, ConfiguracionSitioController]));
     expect(Reflect.getMetadata('providers', ConfiguracionSitioModule)).toContain(ConfiguracionSitioService);
+  });
+});
+
+describe('Reglas de negocio completas (bloque B)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { reglasNegocio, establecerReglasNegocio } = require('./reglas-negocio');
+  afterEach(() => establecerReglasNegocio(null));
+
+  it('guardar reglas valida todo, guarda la sección completa y la aplica al momento en el backend', async () => {
+    const { servicio, historial } = montar();
+    const r = await servicio.guardar('reglas', { citas: { plazoAnticipoHoras: 3 }, tienda: { plazoPagoLineaHoras: 48 } }, 'admin-1');
+    expect(r.valor).toMatchObject({ citas: { plazoAnticipoHoras: 3, minutosAntesPagoSalon: 15 }, tienda: { plazoPagoLineaHoras: 48 }, revocacion: { diasHabiles: 5 } });
+    expect(reglasNegocio().citas.plazoAnticipoHoras).toBe(3);
+    expect(historial).toHaveLength(1);
+  });
+
+  it('un plazo de ley más bajo (revocación de 3 días hábiles) es 400 en español y no guarda nada', async () => {
+    const { servicio, historial } = montar();
+    const error = await servicio.guardar('reglas', { revocacion: { diasHabiles: 3 } }, 'admin-1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect(JSON.stringify((error as BadRequestException).getResponse())).toMatch(/ley pide al menos 5/);
+    expect(historial).toHaveLength(0);
+    expect(reglasNegocio().revocacion.diasHabiles).toBe(5);
+  });
+
+  it('al arrancar y cada minuto se cargan las reglas guardadas', async () => {
+    const { servicio } = montar();
+    await servicio.guardar('reglas', { tienda: { diasResguardoPagado: 20 } }, 'admin-1');
+    establecerReglasNegocio(null);
+    await servicio.refrescarReglas();
+    expect(reglasNegocio().tienda.diasResguardoPagado).toBe(20);
+  });
+
+  it('la configuración pública trae reglas y métodos de pago, sin datos de transferencia si la transferencia está apagada', async () => {
+    const { servicio } = montar();
+    await servicio.guardar('reglas', {
+      pagos: { salon: { efectivo: true, tarjeta: false, transferencia: false }, transferencia: { banco: 'Banco Uno', titular: 'Salón', clabe: '012345678901234567' } },
+    }, 'admin-1');
+    const p: any = await servicio.publica();
+    expect(p.reglas.citas.plazoAnticipoHoras).toBe(2);
+    expect(p.reglas.pagos.metodosSalon).toEqual(['efectivo']);
+    expect(p.reglas.pagos.transferencia).toBeNull();
+    expect(JSON.stringify(p)).not.toContain('012345678901234567');
+  });
+
+  it('con la transferencia activa y sus datos completos, la configuración pública los muestra', async () => {
+    const { servicio } = montar();
+    await servicio.guardar('reglas', { pagos: { salon: { transferencia: true }, transferencia: { banco: 'Banco Uno', titular: 'Salón', clabe: '012345678901234567' } } }, 'admin-1');
+    const p: any = await servicio.publica();
+    expect(p.reglas.pagos.transferencia).toEqual({ banco: 'Banco Uno', titular: 'Salón', clabe: '012345678901234567' });
+  });
+
+  it('el panel recibe las definiciones de cada regla (etiqueta, qué afecta, rango y mínimo legal)', async () => {
+    const { servicio } = montar();
+    const todo = await servicio.obtenerTodo();
+    expect(todo.definicionesReglas.find((d: { ruta: string }) => d.ruta === 'revocacion.diasHabiles')).toMatchObject({ min: 5, minimoLegal: true });
+    expect(todo.reglasVigentes.citas.plazoAnticipoHoras).toBe(2);
   });
 });

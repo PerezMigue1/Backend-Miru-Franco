@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Permisos, PermisosGuard } from '../common/guards/permisos.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { BooleanoEstricto } from '../common/utils/booleano-estricto.util';
-import { PERMISO_POR_USO, USOS_IMAGEN, type UsoImagen } from './imagenes-subidas';
+import { PERMISO_POR_USO, PERMISOS_EXTRA_POR_USO, USOS_IMAGEN, puedeFirmarUso, type UsoImagen } from './imagenes-subidas';
 import { ImagenesSubidasService } from './imagenes-subidas.service';
 
 export class FirmaImagenDto {
@@ -31,10 +31,10 @@ export class ImagenesSubidasController {
   @Post('firma')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermisosGuard, new RateLimitGuard(60, 60000))
-  @Permisos(...new Set(Object.values(PERMISO_POR_USO)))
+  @Permisos(...new Set([...Object.values(PERMISO_POR_USO), ...Object.values(PERMISOS_EXTRA_POR_USO).flat()]))
   firmar(@Body() dto: FirmaImagenDto, @CurrentUser() usuario: { id: string }, @Request() req: { permisosUsuario?: string[] }) {
     const claves = req.permisosUsuario ?? [];
-    if (!claves.includes('*') && !claves.includes(PERMISO_POR_USO[dto.uso])) {
+    if (!puedeFirmarUso(claves, dto.uso)) {
       throw new ForbiddenException('No tienes permiso para subir imágenes de esta sección.');
     }
     return this.subidas.firmar(usuario.id, dto.uso, dto.ilustrativa === true);

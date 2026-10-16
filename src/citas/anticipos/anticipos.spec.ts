@@ -459,7 +459,7 @@ describe('Cancelar, reembolsar, retener y no asistió', () => {
 
   it('no asistió: la cita queda no_asistio y el anticipo retenido', async () => {
     const { citasSrv, citas, pagos } = citasCon(citaConAnticipo({ estado: 'confirmada', anticipoPagadoEn: minutos(-30) }), [pagoSalon()]);
-    await citasSrv.marcarNoAsistio(7);
+    await citasSrv.marcarNoAsistio(7, 'estilista-yo');
     expect(citas[0].estado).toBe('no_asistio');
     expect(pagos[0].estado).toBe('aprobado');
     await expect(citasSrv.marcarNoAsistio(7)).rejects.toBeInstanceOf(BadRequestException);
@@ -1281,5 +1281,125 @@ describe('Anticipos: separación de entornos', () => {
     const { pagosEnLinea, mp } = conWebhook([citaConAnticipo({ creadoEn: minutos(-30) })]);
     mp.obtenerPago.mockResolvedValue(pagoMp({ external_reference: 'cita-7', date_created: minutos(-10).toISOString() }));
     await expect(pagosEnLinea.procesarPago('555')).resolves.toBe('pagado');
+  });
+});
+
+// ---------- Reglas de negocio guardadas en la cita ----------
+describe('Política de cancelación con las reglas guardadas en la cita', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { politicaCancelacionAnticipo, EVENTO_ANTICIPO_REEMBOLSABLE } = require('./anticipos.util');
+  beforeEach(() => jest.useFakeTimers({ now: AHORA }));
+  afterEach(() => jest.useRealTimers());
+  const DIA = 24 * 60 * 60_000;
+  const pagoMp = () => ({ id: 1, citaId: 7, estado: 'aprobado', proveedor: 'mercadopago', referenciaExterna: '555', monto: new Prisma.Decimal(150), metodo: 'mercado_pago', pagadoEn: AHORA });
+
+  it('los días hábiles de la excepción y del reembolso salen de la regla guardada (3 y 5)', () => {
+    const inicio = new Date(AHORA.getTime() + 9 * DIA);
+    expect(politicaCancelacionAnticipo(AHORA, inicio, AHORA)?.reembolsable).toBe(false);
+    const conRegla = politicaCancelacionAnticipo(AHORA, inicio, AHORA, { diasHabilesExcepcionAnticipo: 3, diasHabilesCancelarConReembolso: 5, horasAvisoCancelarReagendar: 0 });
+    expect(conRegla?.reembolsable).toBe(true);
+  });
+
+  it('con aviso mínimo de 48 h, cancelar a menos de 48 h del inicio no devuelve el anticipo', () => {
+    const inicio = new Date(AHORA.getTime() + 30 * DIA);
+    const reglas = { diasHabilesExcepcionAnticipo: 10, diasHabilesCancelarConReembolso: 5, horasAvisoCancelarReagendar: 48 };
+    expect(politicaCancelacionAnticipo(AHORA, inicio, AHORA, reglas)?.reembolsable).toBe(true);
+    expect(politicaCancelacionAnticipo(AHORA, inicio, new Date(inicio.getTime() - 47 * 60 * 60_000), reglas)?.reembolsable).toBe(false);
+  });
+
+  it('cancelar desde el portal usa las reglas de la cita (no las vigentes)', async () => {
+    const inicio = new Date(AHORA.getTime() + 9 * DIA);
+    const { citasSrv, eventos } = citasCon(
+      citaConAnticipo({ estado: 'confirmada', anticipoPagadoEn: AHORA, fechaHoraInicio: inicio, reglas: { diasHabilesExcepcionAnticipo: 3 } }),
+      [pagoMp()],
+    );
+    await citasSrv.cancelar(7, { motivoCancelacion: 'No puedo ir' } as any, yo('cliente'), true);
+    expect(eventos.emit).toHaveBeenCalledWith(EVENTO_ANTICIPO_REEMBOLSABLE, expect.objectContaining({ citaId: 7 }));
+  });
+
+  it('reagendar desde el portal con menos aviso del que pide la cita: 400; el personal sí puede', async () => {
+    const inicio = new Date(AHORA.getTime() + 10 * 60 * 60_000);
+    const cita = citaConAnticipo({ estado: 'confirmada', anticipoPagadoEn: AHORA, fechaHoraInicio: inicio, fechaHoraFin: new Date(inicio.getTime() + 60 * 60_000), reglas: { horasAvisoCancelarReagendar: 24 } });
+    const nuevo = { fechaHoraInicio: '2026-10-30T16:00:00.000Z', fechaHoraFin: '2026-10-30T17:00:00.000Z' };
+    const { citasSrv } = citasCon(cita, [pagoMp()]);
+    await expect(citasSrv.reprogramar(7, nuevo as any, yo('cliente'), true)).rejects.toThrow(/comunícate con el salón/);
+  });
+
+  it('si la regla de la cita dice que no se pierde el anticipo al no llegar, marcar "no asistió" lo deja para reembolso', async () => {
+    const { citasSrv, eventos } = citasCon(citaConAnticipo({ estado: 'confirmada', anticipoPagadoEn: AHORA, reglas: { pierdeAnticipoSiNoAsiste: false } }), [pagoMp()]);
+    await citasSrv.marcarNoAsistio(7, 'estilista-yo');
+    expect(eventos.emit).toHaveBeenCalledWith(EVENTO_ANTICIPO_REEMBOLSABLE, expect.objectContaining({ citaId: 7 }));
+  });
+
+  it('con la regla de hoy (pierde el anticipo), marcar "no asistió" no lo reembolsa', async () => {
+    const { citasSrv, eventos } = citasCon(citaConAnticipo({ estado: 'confirmada', anticipoPagadoEn: AHORA }), [pagoMp()]);
+    await citasSrv.marcarNoAsistio(7, 'estilista-yo');
+    expect(eventos.emit).not.toHaveBeenCalledWith(EVENTO_ANTICIPO_REEMBOLSABLE, expect.anything());
+  });
+});
+
+describe('Preferencia del anticipo con las reglas de pago', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../../configuracion-sitio/reglas-negocio');
+  afterEach(() => establecerReglasNegocio(null));
+
+  it('con el pago en línea de anticipos apagado: 400 en español y no se crea la preferencia', async () => {
+    establecerReglasNegocio({ pagos: { mercadoPagoAnticipos: false } });
+    const { anticipos, mp } = base({ citas: [citaConAnticipo()] });
+    const error = await anticipos.crearPreferencia(7, 'cliente-yo', AHORA).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as Error).message).toMatch(/en el salón/);
+    expect(mp.crearPreferencia).not.toHaveBeenCalled();
+  });
+
+  it('activo (como hoy): la preferencia se crea', async () => {
+    const { anticipos, mp } = base({ citas: [citaConAnticipo()] });
+    await anticipos.crearPreferencia(7, 'cliente-yo', AHORA);
+    expect(mp.crearPreferencia).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Revisión: no asistió sin perder el anticipo, días inhábiles de la cita y pisos de ley', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { politicaCancelacionAnticipo } = require('./anticipos.util');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../../configuracion-sitio/reglas-negocio');
+  afterEach(() => establecerReglasNegocio(null));
+  const DIA = 24 * 60 * 60_000;
+  const pagoMp = () => ({ id: 1, citaId: 7, estado: 'aprobado', proveedor: 'mercadopago', referenciaExterna: '555', monto: new Prisma.Decimal(150), metodo: 'mercado_pago', pagadoEn: AHORA, retenidoEn: null });
+
+  it('no asistió con la regla de no perder el anticipo: el pago en línea se reembolsa solo', async () => {
+    const b = base({ citas: [citaConAnticipo({ estado: 'no_asistio', reglas: { pierdeAnticipoSiNoAsiste: false } })], pagos: [pagoMp()] });
+    await b.anticipos.alCancelarConReembolso({ citaId: 7, solicitanteId: 'estilista-yo', noAsistio: true });
+    expect(b.mp.reembolsarPago).toHaveBeenCalledTimes(1);
+    expect(b.pagos[0].estado).toBe('reembolsado');
+  });
+
+  it('no asistió con la regla de hoy (pierde el anticipo): no se reembolsa', async () => {
+    const b = base({ citas: [citaConAnticipo({ estado: 'no_asistio', reglas: null })], pagos: [pagoMp()] });
+    await expect(b.anticipos.reembolsar(7, 'estilista-yo')).rejects.toBeInstanceOf(ConflictException);
+    expect(b.mp.reembolsarPago).not.toHaveBeenCalled();
+  });
+
+  it('un día inhábil agregado después de crear la cita no le quita el reembolso (usa los días guardados en la cita)', () => {
+    const inicio = new Date(AHORA.getTime() + 16 * DIA);
+    const sinInhabiles = politicaCancelacionAnticipo(AHORA, inicio, AHORA, { diasHabilesExcepcionAnticipo: 10, diasHabilesCancelarConReembolso: 5, diasInhabiles: [] });
+    establecerReglasNegocio({ diasInhabiles: Array.from({ length: 6 }, (_, i) => ({ fecha: new Date(AHORA.getTime() + (i + 1) * DIA).toISOString().slice(0, 10), motivo: '' })) });
+    const conGlobales = politicaCancelacionAnticipo(AHORA, inicio, AHORA, { diasHabilesExcepcionAnticipo: 10, diasHabilesCancelarConReembolso: 5, diasInhabiles: [] });
+    expect(conGlobales).toEqual(sinInhabiles);
+  });
+
+  it('la excepción nunca pasa de 10 días hábiles y el reembolso nunca baja de 5, aunque la regla guardada diga otra cosa', () => {
+    const inicio = new Date(AHORA.getTime() + 20 * DIA);
+    const r = politicaCancelacionAnticipo(AHORA, inicio, AHORA, { diasHabilesExcepcionAnticipo: 60, diasHabilesCancelarConReembolso: 2 });
+    expect(r?.reembolsable).toBe(true);
+    const ley = politicaCancelacionAnticipo(AHORA, inicio, AHORA, { diasHabilesExcepcionAnticipo: 10, diasHabilesCancelarConReembolso: 5 });
+    expect(r?.reembolsableHasta).toEqual(ley?.reembolsableHasta);
+  });
+
+  it('el aviso mínimo para reagendar no quita el reembolso dentro de los 5 días hábiles', () => {
+    const inicio = new Date(AHORA.getTime() + 20 * DIA);
+    const r = politicaCancelacionAnticipo(AHORA, inicio, AHORA, { diasHabilesExcepcionAnticipo: 10, diasHabilesCancelarConReembolso: 5, horasAvisoCancelarReagendar: 999 });
+    expect(r?.reembolsable).toBe(true);
   });
 });

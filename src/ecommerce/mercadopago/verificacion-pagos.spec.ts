@@ -41,11 +41,11 @@ describe('Verificación periódica de pagos pendientes', () => {
     const where = (prisma.pedido.findMany.mock.calls[0] as any)[0].where;
     expect(where).toMatchObject({ estado: 'pendiente_pago', metodoPago: 'mercado_pago' });
     expect(where.creadoEn.lte.toISOString()).toBe('2026-10-15T13:55:00.000Z');
-    // Vigencia del pedido en línea (24 h) más una hora de margen para el pago que se acreditó al final.
-    expect(where.creadoEn.gte.toISOString()).toBe('2026-10-14T13:00:00.000Z');
+    // El plazo más largo que permite el panel (72 h; cada pedido guarda el suyo) más una hora de margen.
+    expect(where.creadoEn.gte.toISOString()).toBe('2026-10-12T13:00:00.000Z');
   });
 
-  it('citas: anticipo sin pagar (también la que cambió a pago en el salón después de abrir Mercado Pago), cita vigente, creada entre hace 25 h y hace 5 minutos', async () => {
+  it('citas: anticipo sin pagar (también la que cambió a pago en el salón después de abrir Mercado Pago), cita vigente, creada entre hace 73 h y hace 5 minutos', async () => {
     delete process.env.ANTICIPOS_DESDE;
     const { servicio, prisma } = montar();
     await servicio.verificar(AHORA);
@@ -54,8 +54,8 @@ describe('Verificación periódica de pagos pendientes', () => {
     expect(where).not.toHaveProperty('anticipoEnSalon');
     expect(where.estado.in).toEqual(['pendiente', 'confirmada', 'reprogramada']);
     expect(where.creadoEn.lte.toISOString()).toBe('2026-10-15T13:55:00.000Z');
-    // El plazo en línea es de 2 h y la preferencia vence con él: 24 h más una de margen acota la consulta.
-    expect(where.creadoEn.gte.toISOString()).toBe('2026-10-14T13:00:00.000Z');
+    // El plazo en línea más largo que permite el panel (72 h) más una de margen acota la consulta.
+    expect(where.creadoEn.gte.toISOString()).toBe('2026-10-12T13:00:00.000Z');
   });
 
   it('citas: nunca antes de que empezaran los anticipos (ANTICIPOS_DESDE)', async () => {

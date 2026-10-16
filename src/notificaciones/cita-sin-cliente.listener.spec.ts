@@ -46,3 +46,24 @@ describe('Avisos de citas sin clienta registrada (sin cita)', () => {
     expect(destinatarios()).toEqual(['cli-1', 'esp-1']);
   });
 });
+
+describe('Recordatorios de cita con las horas de la regla', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { establecerReglasNegocio } = require('../configuracion-sitio/reglas-negocio');
+  afterEach(() => establecerReglasNegocio(null));
+  const recordatorios = (encolar: jest.Mock) =>
+    encolar.mock.calls.map((c: any[]) => c[1]).filter((n: any) => n.tipo === 'cita_recordatorio');
+
+  it('como hoy: 2 recordatorios (24 h y 1 h antes)', async () => {
+    const { listener, encolar } = montar();
+    await listener.onCitaCreada({ citaId: 7, clienteId: 'cli-1', especialistaId: 'esp-1', servicioNombre: 'Corte', fechaHoraInicio: MANANA });
+    expect(recordatorios(encolar)).toHaveLength(2);
+  });
+
+  it('con la regla en 47, 24 y 2 horas: 3 recordatorios', async () => {
+    establecerReglasNegocio({ citas: { recordatoriosHorasAntes: [47, 24, 2] } });
+    const { listener, encolar } = montar();
+    await listener.onCitaCreada({ citaId: 7, clienteId: 'cli-1', especialistaId: 'esp-1', servicioNombre: 'Corte', fechaHoraInicio: MANANA });
+    expect(recordatorios(encolar)).toHaveLength(3);
+  });
+});

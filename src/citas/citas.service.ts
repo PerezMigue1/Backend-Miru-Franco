@@ -27,13 +27,12 @@ import { DisponibilidadCitasDto } from './dto/disponibilidad-citas.dto';
 import { CrearCitaSinCitaDto } from './dto/crear-cita-sin-cita.dto';
 import { PorCobrarDto } from './dto/por-cobrar.dto';
 import { AnticiposCitasService } from './anticipos/anticipos-citas.service';
+import { instantaneaReglasCita, reglasDeCita, reglasNegocio } from '../configuracion-sitio/reglas-negocio';
 import { assertPuedeEscribirCita, puedeEscribirCualquierCita, type Solicitante } from '../common/utils/permisos-citas.util';
 import {
-  ANTES_PAGO_SALON_MS,
   ESTADOS_CITA_VIGENTE,
   EVENTO_ANTICIPO_REEMBOLSABLE,
   MOTIVO_ANTICIPO_NO_PAGADO,
-  PLAZO_ANTICIPO_MS,
   anticipoAplica,
   politicaCancelacionAnticipo,
   requiereAnticipo,
@@ -54,10 +53,8 @@ const OPCIONES_TX_HORARIO = { timeout: 15_000 } as const;
 /** Agendar o mover una cita con anticipo sin pagar pide al menos este margen antes del plazo (15 min antes del inicio). */
 const MARGEN_MINIMO_ANTICIPO_MS = 5 * 60 * 1000;
 /** Una clienta con un "no asistió" o un anticipo en salón sin pagar en estos meses paga el anticipo en línea. */
-const MESES_FALTAS_SIN_SALON = 6;
 const MENSAJE_SIN_TIEMPO_ANTICIPO = 'Ya no da tiempo de pagar el anticipo antes de tu cita.';
 const MENSAJE_CITA_COBRADA = 'La cita ya se cobró; no se puede editar ni reprogramar. Cancela la venta primero.';
-const INTERVALO_SLOT_MINUTOS = 30;
 const OFFSET_MEXICO = '-06:00';
 
 @Injectable()
@@ -399,7 +396,7 @@ export class CitasService {
     const ahora = new Date();
     const slots: { inicio: string; fin: string; horaLocal: string }[] = [];
     const duracionMs = duracionMinutos * 60_000;
-    const intervaloMs = INTERVALO_SLOT_MINUTOS * 60_000;
+    const intervaloMs = reglasNegocio().citas.intervaloHorariosMinutos * 60_000;
 
     for (let inicio = inicioDia.getTime(); inicio + duracionMs <= finDia.getTime(); inicio += intervaloMs) {
       const inicioSlot = new Date(inicio);
@@ -620,21 +617,23 @@ export class CitasService {
 
     // Anticipo: al agendar en línea (portal, o quien no tiene escritura) si el servicio lo pide; desde
     // /operacion solo si el personal lo marca. Se guarda la foto del monto y el plazo para pagarlo:
-    // en línea, PLAZO_ANTICIPO_MS sin pasar de 15 min antes del inicio; en el salón, 15 min antes del inicio.
+    // en línea, el plazo de la regla sin pasar del límite del salón; en el salón, los minutos antes del inicio de la regla.
     const enLinea = propios || !puedeEscribirCualquierCita(solicitante);
     // Misma regla que `anticipoAplica` de GET /servicios (lo que la web anuncia).
     const pideAnticipo = (enLinea || dto.pedirAnticipo === true) && anticipoAplica(servicio);
     // Desde el portal (propios) la clienta tiene límites para no acaparar horarios; el personal no.
     let anticipo: Pick<Prisma.CitaUncheckedCreateInput, 'anticipoRequerido' | 'anticipoVenceEn' | 'anticipoEnSalon'> = {};
+    const reglas = reglasNegocio();
     if (pideAnticipo) {
       const ahora = new Date();
-      const limiteSalon = fechaHoraInicio.getTime() - ANTES_PAGO_SALON_MS;
+      const limiteSalon = fechaHoraInicio.getTime() - reglas.citas.minutosAntesPagoSalon * 60_000;
       const sinMargen = limiteSalon - ahora.getTime() < MARGEN_MINIMO_ANTICIPO_MS;
       if (dto.pagoAnticipo === 'salon') {
+        if (!reglas.citas.permitirAnticipoEnSalon) throw new BadRequestException('El anticipo se paga en línea.');
         if (sinMargen) throw new BadRequestException('Ya no da tiempo de pagar en el salón. Paga el anticipo en línea.');
-        if (propios) {
+        if (propios && reglas.citas.noAsistio.mesesSoloPagoEnLinea > 0) {
           const desde = new Date(ahora);
-          desde.setMonth(desde.getMonth() - MESES_FALTAS_SIN_SALON);
+          desde.setMonth(desde.getMonth() - reglas.citas.noAsistio.mesesSoloPagoEnLinea);
           // Faltas: no asistió, o la barrida liberó una cita con anticipo en salón sin pagar (otras cancelaciones no cuentan).
           const faltas = await this.prisma.cita.count({
             where: {
@@ -647,8 +646,11 @@ export class CitasService {
         }
         anticipo = { anticipoRequerido: servicio.anticipoMonto, anticipoVenceEn: new Date(limiteSalon), anticipoEnSalon: true };
       } else {
+        if (!reglas.pagos.mercadoPagoAnticipos) {
+          throw new BadRequestException('El pago del anticipo en línea no está disponible por ahora. Elige pagarlo en el salón.');
+        }
         if (propios && sinMargen) throw new BadRequestException(MENSAJE_SIN_TIEMPO_ANTICIPO);
-        const vence = Math.min(ahora.getTime() + PLAZO_ANTICIPO_MS, limiteSalon);
+        const vence = Math.min(ahora.getTime() + reglas.citas.plazoAnticipoHoras * 60 * 60_000, limiteSalon);
         anticipo = { anticipoRequerido: servicio.anticipoMonto, anticipoVenceEn: new Date(vence) };
       }
     }
@@ -671,12 +673,15 @@ export class CitasService {
         const porPagar = await tx.cita.count({
           where: { clienteId, anticipoEnSalon: true, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 }, estado: { in: [...ESTADOS_CITA_VIGENTE] } },
         });
-        if (porPagar > 0) {
-          throw new BadRequestException('Ya tienes una cita por pagar en el salón. Paga su anticipo o elige pagar en línea.');
+        if (porPagar >= reglas.citas.maxCitasPorPagarEnSalon) {
+          throw new BadRequestException(reglas.citas.maxCitasPorPagarEnSalon === 1
+            ? 'Ya tienes una cita por pagar en el salón. Paga su anticipo o elige pagar en línea.'
+            : `Ya tienes ${reglas.citas.maxCitasPorPagarEnSalon} citas por pagar en el salón. Paga su anticipo o elige pagar en línea.`);
         }
       }
       return tx.cita.create({
-        data: { clienteId, especialistaId: dto.especialistaId, servicioId: dto.servicioId, fechaHoraInicio, fechaHoraFin, notas, ...anticipo },
+        // La cita guarda las reglas con que se creó: un cambio posterior no la afecta.
+        data: { clienteId, especialistaId: dto.especialistaId, servicioId: dto.servicioId, fechaHoraInicio, fechaHoraFin, notas, ...anticipo, reglas: instantaneaReglasCita(reglas) as unknown as Prisma.InputJsonValue },
         include: this.incluirRelaciones(),
       });
     });
@@ -791,6 +796,11 @@ export class CitasService {
     if (ESTADOS_FINALES.includes(cita.estado as any)) {
       throw new BadRequestException(`No se puede reprogramar una cita en estado '${cita.estado}'`);
     }
+    // Desde el portal, con menos aviso del que pide la regla de la cita, se reagenda con el salón (el personal sí puede).
+    const horasAviso = reglasDeCita(cita.reglas).horasAvisoCancelarReagendar;
+    if (propios && horasAviso > 0 && cita.fechaHoraInicio && cita.fechaHoraInicio.getTime() - Date.now() < horasAviso * 60 * 60_000) {
+      throw new BadRequestException(`Para reagendar con menos de ${horasAviso} horas de anticipación, comunícate con el salón.`);
+    }
 
     const fechaHoraInicio = new Date(dto.fechaHoraInicio);
     const fechaHoraFin    = new Date(dto.fechaHoraFin);
@@ -805,7 +815,8 @@ export class CitasService {
 
     // Desde el portal, una cita con anticipo sin pagar no se mueve a un horario sin tiempo para pagarlo.
     const anticipoSinPagar = requiereAnticipo(cita) && cita.anticipoPagadoEn == null;
-    if (propios && anticipoSinPagar && fechaHoraInicio.getTime() - ANTES_PAGO_SALON_MS - Date.now() < MARGEN_MINIMO_ANTICIPO_MS) {
+    const antesSalonMs = reglasDeCita(cita.reglas).minutosAntesPagoSalon * 60_000;
+    if (propios && anticipoSinPagar && fechaHoraInicio.getTime() - antesSalonMs - Date.now() < MARGEN_MINIMO_ANTICIPO_MS) {
       throw new BadRequestException(MENSAJE_SIN_TIEMPO_ANTICIPO);
     }
     await this.validarHorarioCita(fechaHoraInicio, fechaHoraFin, propios || solicitante.rol === 'cliente', cita.servicio.duracionMinutos);
@@ -818,7 +829,7 @@ export class CitasService {
       if (muevePlazoSalon) {
         await tx.cita.updateMany({
           where: { id, anticipoEnSalon: true, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 } },
-          data: { anticipoVenceEn: new Date(fechaHoraInicio.getTime() - ANTES_PAGO_SALON_MS) },
+          data: { anticipoVenceEn: new Date(fechaHoraInicio.getTime() - antesSalonMs) },
         });
       }
       return this.escribirSiNoCobrada(tx, id, { fechaHoraInicio, fechaHoraFin, estado: 'reprogramada', notas });
@@ -856,13 +867,18 @@ export class CitasService {
     ) {
       throw new ConflictException('El anticipo de esta cita ya no se puede cambiar a pago en el salón.');
     }
-    const limiteSalon = new Date(cita.fechaHoraInicio.getTime() - ANTES_PAGO_SALON_MS);
+    const reglas = reglasNegocio();
+    if (!reglas.citas.permitirAnticipoEnSalon) throw new BadRequestException('El anticipo se paga en línea.');
+    const limiteSalon = new Date(cita.fechaHoraInicio.getTime() - reglasDeCita(cita.reglas).minutosAntesPagoSalon * 60_000);
     if (limiteSalon.getTime() - ahora.getTime() < MARGEN_MINIMO_ANTICIPO_MS) {
       throw new BadRequestException('Ya no da tiempo de pagar en el salón. Paga el anticipo en línea.');
     }
     const desde = new Date(ahora);
-    desde.setMonth(desde.getMonth() - MESES_FALTAS_SIN_SALON);
-    const faltas = await this.prisma.cita.count({
+    desde.setMonth(desde.getMonth() - reglas.citas.noAsistio.mesesSoloPagoEnLinea);
+    // Con el pago en línea de anticipos apagado, el salón es la única forma de pagar esta cita ya agendada: no se le
+    // niega por faltas anteriores (si no, la barrida la liberaría sin que pudiera pagar).
+    const sinPagoEnLinea = !reglas.pagos.mercadoPagoAnticipos;
+    const faltas = sinPagoEnLinea || reglas.citas.noAsistio.mesesSoloPagoEnLinea <= 0 ? 0 : await this.prisma.cita.count({
       where: {
         clienteId: cita.clienteId,
         fechaHoraInicio: { gte: desde },
@@ -877,7 +893,11 @@ export class CitasService {
       const porPagar = await tx.cita.count({
         where: { clienteId: cita.clienteId, id: { not: id }, anticipoEnSalon: true, anticipoPagadoEn: null, anticipoRequerido: { gt: 0 }, estado: { in: [...ESTADOS_CITA_VIGENTE] } },
       });
-      if (porPagar > 0) throw new BadRequestException('Ya tienes una cita por pagar en el salón. Paga su anticipo o paga esta en línea.');
+      if (!sinPagoEnLinea && porPagar >= reglas.citas.maxCitasPorPagarEnSalon) {
+        throw new BadRequestException(reglas.citas.maxCitasPorPagarEnSalon === 1
+          ? 'Ya tienes una cita por pagar en el salón. Paga su anticipo o paga esta en línea.'
+          : `Ya tienes ${reglas.citas.maxCitasPorPagarEnSalon} citas por pagar en el salón. Paga su anticipo o paga esta en línea.`);
+      }
       const cambiada = await tx.cita.updateMany({
         where: { id, anticipoPagadoEn: null, anticipoEnSalon: false },
         data: { anticipoEnSalon: true, anticipoVenceEn: limiteSalon },
@@ -945,7 +965,8 @@ export class CitasService {
         orderBy: { id: 'desc' },
         select: { pagadoEn: true },
       });
-      const politica = politicaCancelacionAnticipo(pagoAprobado?.pagadoEn ?? cita.anticipoPagadoEn, cita.fechaHoraInicio);
+      // Con las reglas que se guardaron en la cita al crearla: un cambio posterior no la afecta.
+      const politica = politicaCancelacionAnticipo(pagoAprobado?.pagadoEn ?? cita.anticipoPagadoEn, cita.fechaHoraInicio, new Date(), reglasDeCita(cita.reglas));
       if (pagoAprobado && politica?.reembolsable) {
         this.eventEmitter.emit(EVENTO_ANTICIPO_REEMBOLSABLE, { citaId: id, solicitanteId: solicitante.id });
       } else {
@@ -964,7 +985,7 @@ export class CitasService {
    * La clienta no llegó: la cita queda 'no_asistio' (libera el horario) y el anticipo pagado se retiene
    * (Términos, sección 6). Solo desde una cita que seguía vigente.
    */
-  async marcarNoAsistio(id: number) {
+  async marcarNoAsistio(id: number, solicitanteId?: string) {
     const r = await this.prisma.cita.updateMany({
       where: { id, estado: { in: ['pendiente', 'confirmada', 'reprogramada'] } },
       data: { estado: 'no_asistio' },
@@ -975,6 +996,11 @@ export class CitasService {
       throw new BadRequestException(`No se puede marcar "no asistió" una cita en estado '${existe.estado}'`);
     }
     const cita = await this.prisma.cita.findUnique({ where: { id }, include: this.incluirRelaciones() });
+    // Si la regla con que se creó la cita dice que no se pierde el anticipo al no llegar, queda para reembolso.
+    if (cita && requiereAnticipo(cita) && !reglasDeCita(cita.reglas).pierdeAnticipoSiNoAsiste) {
+      const pagoAprobado = await this.prisma.pago.findFirst({ where: { citaId: id, estado: 'aprobado', retenidoEn: null }, select: { id: true } });
+      if (pagoAprobado && solicitanteId) this.eventEmitter.emit(EVENTO_ANTICIPO_REEMBOLSABLE, { citaId: id, solicitanteId, noAsistio: true });
+    }
     return { success: true, data: cita };
   }
 

@@ -10,6 +10,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EstadoPago, EstadoPedido, Pago, Pedido, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { instantaneaReglasPedido, metodosSalonActivos, reglasDePedido, reglasNegocio } from '../../configuracion-sitio/reglas-negocio';
 import { TX_HOLGADA } from '../../pos/salidas-caja';
 import { EcommerceAccessService } from '../common/ecommerce-access.service';
 import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
@@ -47,6 +48,7 @@ import {
   transicionPermitida,
   METODOS_COBRO_SALON,
   MetodoCobroSalon,
+  METODO_PAGO_EN_SALON,
 } from './flujo-pedido';
 
 /** Mismo proveedor con el que el webhook registra el pago aprobado (pagos-en-linea.service.ts). */
@@ -71,7 +73,7 @@ function motivoRevocacion(motivo?: string | null): string {
 type ExtraRevocacion = { historialEstado?: { estadoNuevo: EstadoPedido; creadoEn: Date }[]; devoluciones?: { id: number }[] };
 
 /** Datos del plazo de revocación: la primera entrega (o el primer 'enviado' heredado) del historial, si hay. */
-function datosPlazo(pedido: { estado: EstadoPedido; pagadoEn: Date | null }, historial: ExtraRevocacion['historialEstado'], yaRevocado: boolean) {
+function datosPlazo(pedido: { estado: EstadoPedido; pagadoEn: Date | null; reglas?: unknown }, historial: ExtraRevocacion['historialEstado'], yaRevocado: boolean) {
   const primera = (estado: EstadoPedido) => historial?.find((h) => h.estadoNuevo === estado)?.creadoEn ?? null;
   return {
     estado: pedido.estado,
@@ -79,6 +81,9 @@ function datosPlazo(pedido: { estado: EstadoPedido; pagadoEn: Date | null }, his
     entregadoEn: primera(EstadoPedido.entregado),
     enviadoEn: primera(EstadoPedido.enviado),
     yaRevocado,
+    // Los días hábiles con que se creó el pedido (un cambio de regla no afecta a los pedidos ya hechos).
+    diasHabiles: reglasDePedido(pedido.reglas).diasHabilesRevocacion,
+    diasInhabiles: reglasDePedido(pedido.reglas).diasInhabiles,
   };
 }
 
@@ -444,7 +449,15 @@ export class PedidosService {
         throw new BadRequestException(`Un pedido nuevo empieza como '${EstadoPedido.pendiente_pago}'`);
       }
       if (!dto.metodoPago || !METODOS_PAGO_CLIENTA.includes(dto.metodoPago)) {
-        throw new BadRequestException(`Elige cómo pagar el pedido: ${METODOS_PAGO_CLIENTA.join(' o ')}`);
+        throw new BadRequestException('Elige cómo pagar el pedido: en línea o al recoger en el salón.');
+      }
+      // Solo las formas de pago activas en Configuración del sitio > Reglas.
+      const reglas = reglasNegocio();
+      if (dto.metodoPago === METODO_PAGO_MERCADOPAGO && !reglas.pagos.mercadoPagoTienda) {
+        throw new BadRequestException('El pago en línea no está disponible por ahora. Elige pagar al recoger en el salón.');
+      }
+      if (dto.metodoPago === METODO_PAGO_EN_SALON && metodosSalonActivos(reglas).length === 0) {
+        throw new BadRequestException('El pago al recoger no está disponible por ahora. Elige pagar en línea.');
       }
     }
     const estado = dto.estado ?? EstadoPedido.borrador;
@@ -479,6 +492,8 @@ export class PedidosService {
           moneda,
           notasCliente: dto.notasCliente ?? null,
           metodoPago: dto.metodoPago ?? null,
+          // Las reglas con que se crea: plazos de pago, apartado, resguardo, cambios y revocación.
+          reglas: instantaneaReglasPedido() as unknown as Prisma.InputJsonValue,
           // La referencia del pago en línea la pone el webhook; la clienta no la fija.
           referenciaPago: esPersonal ? dto.referenciaPago ?? null : null,
           items: {

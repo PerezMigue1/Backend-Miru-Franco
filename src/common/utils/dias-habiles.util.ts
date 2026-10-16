@@ -1,4 +1,5 @@
 import { diaEnMexico, rangoDiaMexico, sumarDias } from './zona-mexico';
+import { reglasNegocio } from '../../configuracion-sitio/reglas-negocio';
 
 /**
  * Días hábiles del salón para los plazos legales: revocación de compra (art. 56 de la Ley Federal de
@@ -43,9 +44,22 @@ function esFestivoDia(dia: string): boolean {
   return false;
 }
 
-function esHabilDia(dia: string): boolean {
-  return partesDia(dia).diaSemana !== 0 && !esFestivoDia(dia);
+/**
+ * Días inhábiles extra del salón (Configuración del sitio > Reglas): se suman a los de ley, nunca los quitan.
+ * `inhabiles`: undefined usa los vigentes; una lista usa esa (la guardada en la cita o el pedido al crearlo, así un
+ * cambio posterior no mueve un plazo que ya corre); [] cuenta solo domingos y festivos de ley (ARCO).
+ */
+export type InhabilesSalon = readonly string[] | undefined;
+function esInhabilDelSalon(dia: string, inhabiles: InhabilesSalon): boolean {
+  return inhabiles ? inhabiles.includes(dia) : reglasNegocio().diasInhabiles.some((d) => d.fecha === dia);
 }
+
+function esHabilDia(dia: string, inhabiles?: InhabilesSalon): boolean {
+  return partesDia(dia).diaSemana !== 0 && !esFestivoDia(dia) && !esInhabilDelSalon(dia, inhabiles);
+}
+
+/** Solo los días de ley (domingos y festivos del art. 74 LFT): para plazos legales como los de ARCO. */
+export const SOLO_DIAS_DE_LEY: readonly string[] = Object.freeze([]);
 
 /** Día de calendario en México de una fecha válida ('YYYY-MM-DD'); RangeError si la fecha es inválida. */
 function diaValido(fecha: Date): string {
@@ -68,12 +82,12 @@ export function esDiaHabil(fecha: Date): boolean {
  * cuenta. Ej.: revocación = sumarDiasHabiles(entrega, 5); ARCO = sumarDiasHabiles(recepcion, 20).
  * Un plazo sigue vigente mientras `ahora <= vencimiento`. `n` debe ser un entero positivo.
  */
-export function sumarDiasHabiles(desde: Date, n: number): Date {
+export function sumarDiasHabiles(desde: Date, n: number, inhabiles?: InhabilesSalon): Date {
   if (!Number.isInteger(n) || n < 1) throw new RangeError('n debe ser un entero positivo');
   let dia = diaValido(desde);
   for (let contados = 0; contados < n; ) {
     dia = sumarDias(dia, 1);
-    if (esHabilDia(dia)) contados++;
+    if (esHabilDia(dia, inhabiles)) contados++;
   }
   return rangoDiaMexico(dia).hasta;
 }
@@ -83,13 +97,13 @@ export function sumarDiasHabiles(desde: Date, n: number): Date {
  * cae el mismo día o antes. Es el inverso de sumarDiasHabiles: diasHabilesEntre(d, sumarDiasHabiles(d, n)) === n.
  * Excepción de los 10 días hábiles: diasHabilesEntre(pagoOOrden, inicioCita) <= 10.
  */
-export function diasHabilesEntre(desde: Date, hasta: Date): number {
+export function diasHabilesEntre(desde: Date, hasta: Date, inhabiles?: InhabilesSalon): number {
   let dia = diaValido(desde);
   const fin = diaValido(hasta);
   let habiles = 0;
   while (dia < fin) {
     dia = sumarDias(dia, 1);
-    if (esHabilDia(dia)) habiles++;
+    if (esHabilDia(dia, inhabiles)) habiles++;
   }
   return habiles;
 }
